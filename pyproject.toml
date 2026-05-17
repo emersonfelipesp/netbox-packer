@@ -7,7 +7,7 @@ include = ["netbox_packer*"]
 
 [project]
 name = "netbox-packer"
-version = "0.0.1"
+version = "0.0.1rc1"
 description = "NetBox plugin for HashiCorp Packer image-build inventory through proxbox-api"
 readme = "README.md"
 requires-python = ">=3.12"
