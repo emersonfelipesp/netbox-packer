@@ -26,32 +26,77 @@ def _get_plugin_setting(key, default=None):
     return plugin_cfg.get(key, default)
 
 
-def select_build_node(template):
+def select_build_node(template, skip_affinity_check=False):
     """
     Select the best build node for a template from its PackerBuildTarget list.
 
-    Resolution order: enabled targets sorted by priority (ascending);
-    falls back to template.proxmox_node if no targets are configured.
+    Resolution order: enabled targets sorted by priority (ascending).
+    A target is skipped when:
+    - It is at MAX_CONCURRENT_BUILDS_PER_NODE active builds, OR
+    - NodeAffinityValidator reports hard errors for the target node (unless
+      skip_affinity_check=True is passed).
 
-    Returns (proxmox_endpoint, proxmox_node) tuple or (None, template.proxmox_node).
+    Falls back to (template.proxmox_endpoint, template.proxmox_node) when no
+    PackerBuildTarget records exist.
+
+    Returns (proxmox_endpoint, proxmox_node) tuple.
     """
     from .models import PackerBuild
+    from .validators import NodeAffinityValidator
 
     max_concurrent = _get_plugin_setting("MAX_CONCURRENT_BUILDS_PER_NODE", 2)
-    targets = template.build_targets.filter(enabled=True).select_related(
-        "proxmox_endpoint"
-    ).order_by("priority")
+    targets = list(
+        template.build_targets.filter(enabled=True)
+        .select_related("proxmox_endpoint")
+        .order_by("priority")
+    )
+
+    if not targets:
+        # No multi-cluster targets — fall back to template primary node
+        return template.proxmox_endpoint, template.proxmox_node
 
     for target in targets:
+        # Capacity check
         active_count = PackerBuild.objects.filter(
             selected_node=target.proxmox_node,
             status__in=("queued", "running"),
         ).count()
         if active_count >= max_concurrent:
+            logger.debug(
+                "select_build_node: skipping '%s' — at capacity (%d/%d)",
+                target.proxmox_node, active_count, max_concurrent,
+            )
             continue
+
+        # Affinity check (skip gracefully on Proxmox connectivity issues)
+        if not skip_affinity_check:
+            # Temporarily override template fields with target's endpoint/node
+            _orig_endpoint = template.proxmox_endpoint
+            _orig_node = template.proxmox_node
+            template.proxmox_endpoint = target.proxmox_endpoint
+            template.proxmox_node = target.proxmox_node
+            try:
+                validator = NodeAffinityValidator(template)
+                is_valid, errors, warnings = validator.validate()
+            finally:
+                template.proxmox_endpoint = _orig_endpoint
+                template.proxmox_node = _orig_node
+
+            if not is_valid:
+                logger.debug(
+                    "select_build_node: skipping '%s' — affinity check failed: %s",
+                    target.proxmox_node, errors,
+                )
+                continue
+
         return target.proxmox_endpoint, target.proxmox_node
 
-    # No targets configured — fall back to template primary node
+    # All targets exhausted — fall back to template primary node
+    logger.warning(
+        "select_build_node: no suitable target found for template '%s'; "
+        "falling back to primary node '%s'",
+        template.name, template.proxmox_node,
+    )
     return template.proxmox_endpoint, template.proxmox_node
 
 
