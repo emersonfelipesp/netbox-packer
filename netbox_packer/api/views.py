@@ -29,8 +29,21 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
 
     @action(detail=True, methods=["post"])
     def build(self, request, pk=None):
-        """Queue a new build for this template."""
+        """Queue a new build for this template, with optional node affinity pre-check."""
+        from ..validators import NodeAffinityValidator
+
         template = self.get_object()
+        skip_validation = request.data.get("skip_node_validation", False)
+
+        if not skip_validation:
+            validator = NodeAffinityValidator(template)
+            is_valid, errors, warnings = validator.validate()
+            if not is_valid:
+                return Response(
+                    {"errors": errors, "warnings": warnings},
+                    status=http_status.HTTP_409_CONFLICT,
+                )
+
         build = models.PackerBuild.objects.create(
             template=template,
             triggered_by=str(request.user),
@@ -53,14 +66,19 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
 
     @action(detail=True, methods=["get"], url_path="validate-node")
     def validate_node(self, request, pk=None):
-        """Basic validation — returns warnings if endpoint or node is missing."""
+        """Run node affinity validation for this template."""
+        from ..validators import NodeAffinityValidator
+
         template = self.get_object()
-        errors = []
-        if not template.proxmox_endpoint_id:
-            errors.append("No Proxmox endpoint configured")
-        if not template.proxmox_node:
-            errors.append("No Proxmox node configured")
-        return Response({"valid": len(errors) == 0, "errors": errors})
+        validator = NodeAffinityValidator(template)
+        is_valid, errors, warnings = validator.validate()
+        status_code = (
+            http_status.HTTP_200_OK if is_valid else http_status.HTTP_409_CONFLICT
+        )
+        return Response(
+            {"valid": is_valid, "errors": errors, "warnings": warnings},
+            status=status_code,
+        )
 
 
 class PackerBuildViewSet(NetBoxModelViewSet):
