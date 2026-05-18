@@ -1,0 +1,3 @@
+recursive-include netbox_packer/templates *
+recursive-include netbox_packer/static *
+include README.md LICENSE
