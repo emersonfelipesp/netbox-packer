@@ -1,0 +1,60 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Packer Build</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Template</th>
+          <td><a href="{{ object.template.get_absolute_url }}">{{ object.template }}</a></td>
+        </tr>
+        <tr>
+          <th scope="row">Status</th>
+          <td>{{ object.status }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Triggered By</th>
+          <td>{{ object.triggered_by|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Selected Node</th>
+          <td>{{ object.selected_node|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Queued At</th>
+          <td>{{ object.queued_at }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Started At</th>
+          <td>{{ object.started_at|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Finished At</th>
+          <td>{{ object.finished_at|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Exit Code</th>
+          <td>{{ object.exit_code|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Result Template ID</th>
+          <td>{{ object.result_template_id|placeholder }}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+  {% if object.log %}
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Build Log</h2>
+      <div class="card-body">
+        <pre class="border rounded p-2" style="max-height:400px;overflow:auto;">{{ object.log }}</pre>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock content %}

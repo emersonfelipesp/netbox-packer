@@ -1,0 +1,40 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Packer Build Target</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Template</th>
+          <td><a href="{{ object.template.get_absolute_url }}">{{ object.template }}</a></td>
+        </tr>
+        <tr>
+          <th scope="row">Proxmox Node</th>
+          <td>{{ object.proxmox_node }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Proxmox Endpoint</th>
+          <td>
+            {% if object.proxmox_endpoint %}
+              <a href="{{ object.proxmox_endpoint.get_absolute_url }}">{{ object.proxmox_endpoint }}</a>
+            {% else %}
+              &mdash;
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">Priority</th>
+          <td>{{ object.priority }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Enabled</th>
+          <td>{% if object.enabled %}Yes{% else %}No{% endif %}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock content %}
