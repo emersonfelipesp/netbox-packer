@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 
 def test_package_importable() -> None:
+    pytest.importorskip("netbox")
     module = importlib.import_module("netbox_packer")
     assert module is not None
     assert module.__version__
 
 
 def test_plugin_config_exposes_required_attrs() -> None:
+    pytest.importorskip("netbox")
     from netbox_packer import config
 
     cfg = config
