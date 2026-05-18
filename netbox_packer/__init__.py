@@ -18,6 +18,7 @@ class NetBoxPackerConfig(PluginConfig):
 
     def ready(self):
         super().ready()
+        from . import jobs  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob
 
 
 config = NetBoxPackerConfig
