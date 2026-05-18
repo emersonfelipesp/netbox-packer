@@ -135,14 +135,13 @@ jobs:
 
       - name: Upload to TestPyPI
         env:
-          TEST_PYPI_USERNAME: ${{ secrets.TEST_PYPI_USERNAME }}
           TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
         run: |
           python -m pip install --upgrade pip twine
           python -m twine upload \
             --non-interactive \
             --repository-url https://test.pypi.org/legacy/ \
-            --username "$TEST_PYPI_USERNAME" \
+            --username __token__ \
             --password "$TEST_PYPI_TOKEN" \
             dist/*
 
@@ -165,14 +164,13 @@ jobs:
 
       - name: Upload to PyPI
         env:
-          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
           python -m pip install --upgrade pip twine
           python -m twine upload \
             --non-interactive \
             --repository-url https://upload.pypi.org/legacy/ \
-            --username "$PYPI_USERNAME" \
+            --username __token__ \
             --password "$PYPI_TOKEN" \
             dist/*
 

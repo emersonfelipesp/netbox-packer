@@ -36,17 +36,22 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.2"
+    assert project["version"]  # non-empty; version is kept in sync by release process
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
 
 
 def test_plugin_config_fields() -> None:
-    """PluginConfig in __init__.py must declare correct name and base_url."""
+    """PluginConfig in __init__.py must declare correct name and base_url.
+
+    The version string must stay in sync with pyproject.toml.
+    """
+    data = tomllib.loads(_read("pyproject.toml"))
+    pyproject_version = data["project"]["version"]
     src = _read("netbox_packer/__init__.py")
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
-    assert 'version = "0.0.2"' in src
+    assert f'version = "{pyproject_version}"' in src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 
