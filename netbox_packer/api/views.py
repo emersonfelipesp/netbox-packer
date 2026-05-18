@@ -43,6 +43,14 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
         serializer = PackerBuildSerializer(build, context={"request": request})
         return Response(serializer.data, status=http_status.HTTP_202_ACCEPTED)
 
+    @action(detail=True, methods=["get"])
+    def builds(self, request, pk=None):
+        """List all builds for this template, newest first."""
+        template = self.get_object()
+        builds = models.PackerBuild.objects.filter(template=template).order_by("-queued_at")
+        serializer = PackerBuildSerializer(builds, many=True, context={"request": request})
+        return Response(serializer.data)
+
     @action(detail=True, methods=["get"], url_path="validate-node")
     def validate_node(self, request, pk=None):
         """Basic validation — returns warnings if endpoint or node is missing."""
@@ -61,6 +69,29 @@ class PackerBuildViewSet(NetBoxModelViewSet):
     )
     serializer_class = PackerBuildSerializer
     filterset_class = filtersets.PackerBuildFilterSet
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Cancel a queued or running build."""
+        build = self.get_object()
+        if build.status not in ("queued", "running"):
+            return Response(
+                {"detail": f"Cannot cancel a build with status '{build.status}'."},
+                status=http_status.HTTP_400_BAD_REQUEST,
+            )
+        from django.utils import timezone
+        build.status = "cancelled"
+        build.finished_at = timezone.now()
+        build.save(update_fields=["status", "finished_at"])
+        active = models.PackerBuild.objects.filter(
+            template=build.template, status__in=("queued", "running")
+        ).exists()
+        if not active:
+            models.PackerTemplate.objects.filter(pk=build.template_id).update(
+                build_status="ready"
+            )
+        serializer = self.get_serializer(build)
+        return Response(serializer.data)
 
 
 class PackerBuildTargetViewSet(NetBoxModelViewSet):
