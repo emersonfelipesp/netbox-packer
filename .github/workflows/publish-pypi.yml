@@ -121,12 +121,9 @@ jobs:
     if: needs.prepare-release.outputs.publish_target == 'testpypi'
     needs: prepare-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
       - name: Download dist artifacts
         uses: actions/download-artifact@v8
         with:
@@ -134,28 +131,19 @@ jobs:
           path: dist
 
       - name: Upload to TestPyPI
-        env:
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
-        run: |
-          python -m pip install --upgrade pip twine
-          python -m twine upload \
-            --non-interactive \
-            --repository-url https://test.pypi.org/legacy/ \
-            --username __token__ \
-            --password "$TEST_PYPI_TOKEN" \
-            dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_TOKEN }}
 
   publish-pypi:
     name: publish to PyPI
     if: needs.prepare-release.outputs.publish_target == 'pypi'
     needs: prepare-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
       - name: Download dist artifacts
         uses: actions/download-artifact@v8
         with:
@@ -163,16 +151,9 @@ jobs:
           path: dist
 
       - name: Upload to PyPI
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          python -m pip install --upgrade pip twine
-          python -m twine upload \
-            --non-interactive \
-            --repository-url https://upload.pypi.org/legacy/ \
-            --username __token__ \
-            --password "$PYPI_TOKEN" \
-            dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
 
   validate:
     name: validate / py${{ matrix.python-version }}
