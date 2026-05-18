@@ -60,6 +60,7 @@ class PackerTemplateForm(NetBoxModelForm):
             "os_family",
             "os_version",
             "proxmox_template_id",
+            "proxmox_endpoint",
             "proxmox_node",
             "storage_pool",
             "storage_pool_type",
@@ -85,6 +86,7 @@ class PackerTemplateForm(NetBoxModelForm):
             FieldSet("name", "os_family", "os_version", name="Identity"),
             FieldSet(
                 "proxmox_template_id",
+                "proxmox_endpoint",
                 "proxmox_node",
                 "storage_pool",
                 "storage_pool_type",
@@ -178,31 +180,18 @@ class PackerBuildFilterForm(NetBoxModelFilterSetForm):
 class PackerBuildTargetForm(NetBoxModelForm):
     template = DynamicModelChoiceField(queryset=PackerTemplate.objects.all())
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Lazy import to avoid module-level dependency on netbox_nms
-        try:
-            from netbox_nms.models import NMSBackend
-
-            self.fields["proxmox_endpoint"] = DynamicModelChoiceField(
-                queryset=NMSBackend.objects.all(),
-                required=False,
-                label="Proxmox Endpoint",
-            )
-        except ImportError:
-            self.fields.pop("proxmox_endpoint", None)
-
     class Meta:
         model = PackerBuildTarget
         fields = (
             "template",
+            "proxmox_endpoint",
             "proxmox_node",
             "priority",
             "enabled",
             "tags",
         )
         fieldsets = (
-            FieldSet("template", "proxmox_node", "priority", "enabled", name="Target"),
+            FieldSet("template", "proxmox_endpoint", "proxmox_node", "priority", "enabled", name="Target"),
             FieldSet("tags", name="Metadata"),
         )
 

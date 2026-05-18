@@ -20,7 +20,6 @@ class PackerInstallerConfigViewSet(NetBoxModelViewSet):
 
 class PackerTemplateViewSet(NetBoxModelViewSet):
     queryset = models.PackerTemplate.objects.select_related(
-        "proxmox_endpoint",
         "installer_config",
     ).prefetch_related("tags")
     serializer_class = PackerTemplateSerializer
@@ -105,7 +104,6 @@ class PackerBuildViewSet(NetBoxModelViewSet):
 class PackerBuildTargetViewSet(NetBoxModelViewSet):
     queryset = models.PackerBuildTarget.objects.select_related(
         "template",
-        "proxmox_endpoint",
     ).prefetch_related("tags")
     serializer_class = PackerBuildTargetSerializer
     filterset_class = filtersets.PackerBuildTargetFilterSet

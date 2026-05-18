@@ -39,7 +39,6 @@ class PackerInstallerConfigDeleteView(generic.ObjectDeleteView):
 @register_model_view(models.PackerTemplate)
 class PackerTemplateView(generic.ObjectView):
     queryset = models.PackerTemplate.objects.select_related(
-        "proxmox_endpoint",
         "installer_config",
     ).prefetch_related("tags", "builds", "build_targets")
 
@@ -61,7 +60,6 @@ class PackerTemplateView(generic.ObjectView):
 @register_model_view(models.PackerTemplate, name="list", path="", detail=False)
 class PackerTemplateListView(generic.ObjectListView):
     queryset = models.PackerTemplate.objects.select_related(
-        "proxmox_endpoint",
         "installer_config",
     ).prefetch_related("tags")
     table = tables.PackerTemplateTable
@@ -137,7 +135,6 @@ class PackerBuildDeleteView(generic.ObjectDeleteView):
 class PackerBuildTargetView(generic.ObjectView):
     queryset = models.PackerBuildTarget.objects.select_related(
         "template",
-        "proxmox_endpoint",
     ).prefetch_related("tags")
 
 
@@ -145,7 +142,6 @@ class PackerBuildTargetView(generic.ObjectView):
 class PackerBuildTargetListView(generic.ObjectListView):
     queryset = models.PackerBuildTarget.objects.select_related(
         "template",
-        "proxmox_endpoint",
     ).prefetch_related("tags")
     table = tables.PackerBuildTargetTable
     filterset = filtersets.PackerBuildTargetFilterSet

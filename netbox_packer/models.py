@@ -70,14 +70,7 @@ class PackerTemplate(NetBoxModel):
     )
     os_version = models.CharField(max_length=40)
     proxmox_template_id = models.PositiveIntegerField()
-    # nullable FK so the plugin works without netbox-nms installed
-    proxmox_endpoint = models.ForeignKey(
-        to="netbox_nms.NMSBackend",
-        on_delete=models.PROTECT,
-        related_name="packer_templates",
-        null=True,
-        blank=True,
-    )
+    proxmox_endpoint = models.URLField(blank=True)
     proxmox_node = models.CharField(max_length=100)
     storage_pool = models.CharField(max_length=100, blank=True)
     storage_pool_type = models.CharField(
@@ -222,13 +215,7 @@ class PackerBuildTarget(NetBoxModel):
         on_delete=models.CASCADE,
         related_name="build_targets",
     )
-    proxmox_endpoint = models.ForeignKey(
-        "netbox_nms.NMSBackend",
-        on_delete=models.PROTECT,
-        related_name="packer_build_targets",
-        null=True,
-        blank=True,
-    )
+    proxmox_endpoint = models.URLField(blank=True)
     proxmox_node = models.CharField(max_length=100)
     priority = models.PositiveIntegerField(default=10)
     enabled = models.BooleanField(default=True)

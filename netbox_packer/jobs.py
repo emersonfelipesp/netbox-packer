@@ -46,7 +46,7 @@ def select_build_node(template, skip_affinity_check=False):
     from .validators import NodeAffinityValidator
 
     max_concurrent = _get_plugin_setting("MAX_CONCURRENT_BUILDS_PER_NODE", 2)
-    targets = list(template.build_targets.filter(enabled=True).select_related("proxmox_endpoint").order_by("priority"))
+    targets = list(template.build_targets.filter(enabled=True).order_by("priority"))
 
     if not targets:
         # No multi-cluster targets — fall back to template primary node
