@@ -1,11 +1,7 @@
-"""Initial schema for netbox-packer image factory models."""
-
-from __future__ import annotations
-
 import django.db.models.deletion
+import netbox.models.deletion
 import taggit.managers
 import utilities.json
-from django.conf import settings
 from django.db import migrations, models
 
 
@@ -13,23 +9,17 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("extras", "0002_squashed_0059"),
-        ("netbox_proxbox", "0001_initial"),
-        ("netbox_proxbox", "0038_v0_0_16_release"),
-        ("tenancy", "0001_squashed_0012"),
-        ("virtualization", "0001_squashed_0022"),
-        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+        ("extras", "0001_initial"),
     ]
 
     operations = [
+        # ── PackerInstallerConfig ─────────────────────────────────────────────
         migrations.CreateModel(
-            name="PackerImageDefinition",
+            name="PackerInstallerConfig",
             fields=[
                 (
                     "id",
-                    models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False
-                    ),
+                    models.BigAutoField(auto_created=True, primary_key=True, serialize=False),
                 ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
@@ -41,77 +31,39 @@ class Migration(migrations.Migration):
                         encoder=utilities.json.CustomFieldJSONEncoder,
                     ),
                 ),
-                ("name", models.CharField(max_length=255, unique=True)),
-                ("slug", models.SlugField(max_length=255)),
+                ("name", models.CharField(max_length=100)),
+                ("os_family", models.CharField(max_length=20)),
+                ("installer_type", models.CharField(max_length=20)),
+                ("content", models.TextField()),
+                ("version", models.CharField(default="1.0.0", max_length=40)),
+                ("checksum", models.CharField(blank=True, editable=False, max_length=64)),
                 ("description", models.TextField(blank=True)),
-                ("enabled", models.BooleanField(default=True)),
-                (
-                    "builder_type",
-                    models.CharField(default="proxmox-clone", max_length=32),
-                ),
-                ("target_node", models.CharField(max_length=255)),
-                ("source_template_vmid", models.PositiveIntegerField()),
-                ("default_storage", models.CharField(max_length=255)),
-                ("default_bridge", models.CharField(default="vmbr0", max_length=64)),
-                ("os_family", models.CharField(max_length=32)),
-                ("os_release", models.CharField(max_length=64)),
-                ("default_ciuser", models.CharField(default="ubuntu", max_length=64)),
-                ("provisioner_recipe", models.CharField(max_length=32)),
-                (
-                    "default_variables",
-                    models.JSONField(
-                        blank=True,
-                        default=dict,
-                        encoder=utilities.json.CustomFieldJSONEncoder,
-                    ),
-                ),
-                (
-                    "allowed_tenants",
-                    models.ManyToManyField(
-                        blank=True,
-                        related_name="packer_image_definitions",
-                        to="tenancy.tenant",
-                    ),
-                ),
-                (
-                    "proxmox_endpoint",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.PROTECT,
-                        related_name="packer_image_definitions",
-                        to="netbox_proxbox.proxmoxendpoint",
-                    ),
-                ),
                 (
                     "tags",
-                    taggit.managers.TaggableManager(
-                        through="extras.TaggedItem", to="extras.Tag"
-                    ),
-                ),
-                (
-                    "target_cluster",
-                    models.ForeignKey(
-                        blank=True,
-                        null=True,
-                        on_delete=django.db.models.deletion.PROTECT,
-                        related_name="packer_image_definitions",
-                        to="virtualization.cluster",
-                    ),
+                    taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag"),
                 ),
             ],
             options={
-                "verbose_name": "Packer image definition",
-                "verbose_name_plural": "Packer image definitions",
-                "ordering": ("name",),
+                "verbose_name": "Packer Installer Config",
+                "verbose_name_plural": "Packer Installer Configs",
+                "ordering": ["name", "version"],
             },
+            bases=(netbox.models.deletion.DeleteMixin, models.Model),
         ),
+        migrations.AddConstraint(
+            model_name="packerinstallerconfig",
+            constraint=models.UniqueConstraint(
+                fields=["name", "version"],
+                name="netbox_packer_packerinstallerconfig_name_version_uniq",
+            ),
+        ),
+        # ── PackerTemplate ────────────────────────────────────────────────────
         migrations.CreateModel(
-            name="PackerImageBuild",
+            name="PackerTemplate",
             fields=[
                 (
                     "id",
-                    models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False
-                    ),
+                    models.BigAutoField(auto_created=True, primary_key=True, serialize=False),
                 ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
@@ -123,74 +75,74 @@ class Migration(migrations.Migration):
                         encoder=utilities.json.CustomFieldJSONEncoder,
                     ),
                 ),
-                ("status", models.CharField(default="pending", max_length=32)),
-                ("backend_build_id", models.CharField(blank=True, max_length=255)),
-                ("target_node", models.CharField(max_length=255)),
-                ("output_vmid", models.PositiveIntegerField()),
-                ("output_name", models.CharField(max_length=255)),
-                ("image_version", models.CharField(max_length=64)),
-                ("started_at", models.DateTimeField(blank=True, null=True)),
-                ("completed_at", models.DateTimeField(blank=True, null=True)),
-                ("netbox_job_id", models.PositiveIntegerField(blank=True, null=True)),
+                ("name", models.CharField(max_length=100)),
+                ("os_family", models.CharField(max_length=20)),
+                ("os_version", models.CharField(max_length=40)),
+                ("proxmox_template_id", models.PositiveIntegerField()),
+                ("proxmox_endpoint", models.URLField(blank=True)),
+                ("proxmox_node", models.CharField(max_length=100)),
+                ("storage_pool", models.CharField(blank=True, max_length=100)),
+                ("storage_pool_type", models.CharField(blank=True, max_length=20)),
+                ("storage_format", models.CharField(blank=True, max_length=10)),
+                ("cloud_init_ready", models.BooleanField(default=True)),
+                ("min_cpu_type", models.CharField(blank=True, max_length=40)),
                 (
-                    "backend_response",
-                    models.JSONField(
+                    "build_status",
+                    models.CharField(default="pending", max_length=20),
+                ),
+                ("built_at", models.DateTimeField(blank=True, null=True)),
+                ("packer_template_ref", models.CharField(blank=True, max_length=255)),
+                (
+                    "max_age_days",
+                    models.PositiveIntegerField(
                         blank=True,
-                        default=dict,
-                        encoder=utilities.json.CustomFieldJSONEncoder,
+                        null=True,
+                        help_text="Rebuild template after this many days",
                     ),
                 ),
-                ("error", models.TextField(blank=True)),
+                ("auto_rebuild", models.BooleanField(default=False)),
+                ("description", models.TextField(blank=True)),
+                # HCP Packer fields
+                ("hcp_bucket_name", models.CharField(blank=True, max_length=255)),
+                ("hcp_channel_name", models.CharField(blank=True, max_length=255)),
+                ("hcp_iteration_id", models.CharField(blank=True, max_length=255)),
+                ("hcp_build_id", models.CharField(blank=True, max_length=255)),
+                ("hcp_last_synced_at", models.DateTimeField(blank=True, null=True)),
+                # Installer config
                 (
-                    "cloud_image_template",
+                    "installer_config",
                     models.ForeignKey(
                         blank=True,
                         null=True,
                         on_delete=django.db.models.deletion.SET_NULL,
-                        related_name="packer_image_builds",
-                        to="netbox_proxbox.cloudimagetemplate",
+                        related_name="templates",
+                        to="netbox_packer.packerinstallerconfig",
                     ),
                 ),
                 (
-                    "created_by",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.PROTECT,
-                        related_name="packer_image_builds",
-                        to=settings.AUTH_USER_MODEL,
-                    ),
-                ),
-                (
-                    "proxmox_endpoint",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.PROTECT,
-                        related_name="packer_image_builds",
-                        to="netbox_proxbox.proxmoxendpoint",
-                    ),
+                    "installer_config_checksum_at_build",
+                    models.CharField(blank=True, max_length=64),
                 ),
                 (
                     "tags",
-                    taggit.managers.TaggableManager(
-                        through="extras.TaggedItem", to="extras.Tag"
-                    ),
-                ),
-                (
-                    "definition",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.PROTECT,
-                        related_name="builds",
-                        to="netbox_packer.packerimagedefinition",
-                    ),
+                    taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag"),
                 ),
             ],
             options={
-                "verbose_name": "Packer image build",
-                "verbose_name_plural": "Packer image builds",
-                "ordering": ("-started_at", "-created"),
+                "verbose_name": "Packer Template",
+                "verbose_name_plural": "Packer Templates",
+                "ordering": ["name"],
             },
+            bases=(netbox.models.deletion.DeleteMixin, models.Model),
         ),
+        # ── PackerBuild ───────────────────────────────────────────────────────
         migrations.CreateModel(
-            name="PackerPluginSettings",
+            name="PackerBuild",
             fields=[
+                (
+                    "id",
+                    models.BigAutoField(auto_created=True, primary_key=True, serialize=False),
+                ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
                 (
@@ -202,52 +154,85 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 (
-                    "singleton_key",
-                    models.CharField(
-                        default="default",
-                        editable=False,
-                        max_length=32,
-                        primary_key=True,
-                        serialize=False,
+                    "template",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="builds",
+                        to="netbox_packer.packertemplate",
                     ),
                 ),
-                ("image_factory_enabled", models.BooleanField(default=False)),
+                ("triggered_by", models.CharField(blank=True, max_length=100)),
+                ("queued_at", models.DateTimeField(auto_now_add=True)),
+                ("started_at", models.DateTimeField(blank=True, null=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
+                ("status", models.CharField(default="queued", max_length=20)),
                 (
-                    "image_factory_max_concurrent_builds",
-                    models.PositiveIntegerField(default=1),
+                    "variable_overrides",
+                    models.JSONField(blank=True, default=dict),
                 ),
-                (
-                    "image_factory_default_job_timeout",
-                    models.PositiveIntegerField(default=14400),
-                ),
-                ("image_factory_allow_iso_builds", models.BooleanField(default=False)),
-                (
-                    "image_factory_allow_custom_variables",
-                    models.BooleanField(default=False),
-                ),
+                ("log", models.TextField(blank=True)),
+                ("exit_code", models.IntegerField(blank=True, null=True)),
+                ("result_template_id", models.IntegerField(blank=True, null=True)),
+                ("selected_node", models.CharField(blank=True, max_length=100)),
                 (
                     "tags",
-                    taggit.managers.TaggableManager(
-                        through="extras.TaggedItem", to="extras.Tag"
-                    ),
+                    taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag"),
                 ),
             ],
             options={
-                "verbose_name": "Packer plugin settings",
-                "verbose_name_plural": "Packer plugin settings",
+                "verbose_name": "Packer Build",
+                "verbose_name_plural": "Packer Builds",
+                "ordering": ["-queued_at"],
             },
+            bases=(netbox.models.deletion.DeleteMixin, models.Model),
+        ),
+        # ── PackerBuildTarget ─────────────────────────────────────────────────
+        migrations.CreateModel(
+            name="PackerBuildTarget",
+            fields=[
+                (
+                    "id",
+                    models.BigAutoField(auto_created=True, primary_key=True, serialize=False),
+                ),
+                ("created", models.DateTimeField(auto_now_add=True, null=True)),
+                ("last_updated", models.DateTimeField(auto_now=True, null=True)),
+                (
+                    "custom_field_data",
+                    models.JSONField(
+                        blank=True,
+                        default=dict,
+                        encoder=utilities.json.CustomFieldJSONEncoder,
+                    ),
+                ),
+                (
+                    "template",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="build_targets",
+                        to="netbox_packer.packertemplate",
+                    ),
+                ),
+                ("proxmox_endpoint", models.URLField(blank=True)),
+                ("proxmox_node", models.CharField(max_length=100)),
+                ("priority", models.PositiveIntegerField(default=10)),
+                ("enabled", models.BooleanField(default=True)),
+                (
+                    "tags",
+                    taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag"),
+                ),
+            ],
+            options={
+                "verbose_name": "Packer Build Target",
+                "verbose_name_plural": "Packer Build Targets",
+                "ordering": ["priority", "proxmox_node"],
+            },
+            bases=(netbox.models.deletion.DeleteMixin, models.Model),
         ),
         migrations.AddConstraint(
-            model_name="packerimagedefinition",
+            model_name="packerbuildtarget",
             constraint=models.UniqueConstraint(
-                fields=("slug",), name="netbox_packer_definition_identity"
-            ),
-        ),
-        migrations.AddIndex(
-            model_name="packerimagebuild",
-            index=models.Index(
-                fields=["status", "started_at"],
-                name="packer_build_status_started",
+                fields=["template", "proxmox_node"],
+                name="netbox_packer_packerbuildtarget_template_node_uniq",
             ),
         ),
     ]

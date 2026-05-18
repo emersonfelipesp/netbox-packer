@@ -1,25 +1,36 @@
-"""NetBox Packer plugin built on top of netbox-proxbox."""
-
-from __future__ import annotations
-
 from netbox.plugins import PluginConfig
 
-__version__ = "0.0.1"
 
-
-class PackerConfig(PluginConfig):
-    """Plugin metadata for Proxmox image builds backed by Packer."""
-
+class NetBoxPackerConfig(PluginConfig):
     name = "netbox_packer"
     verbose_name = "NetBox Packer"
-    description = "Proxmox VM image baking via HashiCorp Packer and proxbox-api"
-    version = "0.0.1"
-    author = "N-MultiCloud"
+    description = "Manage Packer VM template builds and catalog"
+    version = "0.0.2"
     base_url = "packer"
-    min_version = "4.5.8"
+    author = "Emerson Felipe"
+    author_email = "emersonfelipe.2003@gmail.com"
+    min_version = "4.5.0"
     max_version = "4.6.99"
-    required_plugins = ["netbox_proxbox"]
-    queues: list[str] = []
+    default_settings = {
+        "PACKER_BUILD_TIMEOUT_SECONDS": 3600,
+        "PACKER_STALENESS_CHECK_INTERVAL": "0 */6 * * *",
+        # HCP Packer Registry (optional; all settings must be set to enable)
+        "HCP_CLIENT_ID": "",
+        "HCP_CLIENT_SECRET": "",
+        "HCP_ORGANIZATION_ID": "",
+        "HCP_PROJECT_ID": "",
+        "HCP_SYNC_INTERVAL": "0 */4 * * *",  # cron: every 4 hours
+        # Build dispatch
+        "MAX_CONCURRENT_BUILDS_PER_NODE": 2,
+    }
+
+    def ready(self):
+        super().ready()
+        from . import (
+            hcp_sync,  # noqa: F401 — registers PackerHCPSyncJobRunner
+            jobs,  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob
+            template_content,  # noqa: F401 — registers Derived VMs tab extension
+        )
 
 
-config = PackerConfig
+config = NetBoxPackerConfig

@@ -1,0 +1,170 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Packer Template</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Name</th>
+          <td>{{ object.name }}</td>
+        </tr>
+        <tr>
+          <th scope="row">OS Family</th>
+          <td>{{ object.get_os_family_display }}</td>
+        </tr>
+        <tr>
+          <th scope="row">OS Version</th>
+          <td>{{ object.os_version|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Build Status</th>
+          <td>{{ object.get_build_status_display }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Built At</th>
+          <td>{{ object.built_at|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Age (days)</th>
+          <td>{{ object.age_days|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Stale</th>
+          <td>{% if object.is_stale %}Yes{% else %}No{% endif %}</td>
+        </tr>
+        <tr>
+          <th scope="row">Cloud-init Ready</th>
+          <td>{% if object.cloud_init_ready %}Yes{% else %}No{% endif %}</td>
+        </tr>
+        <tr>
+          <th scope="row">Auto Rebuild</th>
+          <td>{% if object.auto_rebuild %}Yes{% else %}No{% endif %}</td>
+        </tr>
+        <tr>
+          <th scope="row">Max Age (days)</th>
+          <td>{{ object.max_age_days|placeholder }}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Proxmox</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Template ID</th>
+          <td>{{ object.proxmox_template_id }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Node</th>
+          <td>{{ object.proxmox_node|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Endpoint</th>
+          <td>
+            {% if object.proxmox_endpoint %}
+              <a href="{{ object.proxmox_endpoint.get_absolute_url }}">{{ object.proxmox_endpoint }}</a>
+            {% else %}
+              &mdash;
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">Storage Pool</th>
+          <td>{{ object.storage_pool|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Storage Pool Type</th>
+          <td>{{ object.get_storage_pool_type_display|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Storage Format</th>
+          <td>{{ object.get_storage_format_display|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Min CPU Type</th>
+          <td>{{ object.min_cpu_type|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Packer Template Ref</th>
+          <td>{{ object.packer_template_ref|placeholder }}</td>
+        </tr>
+      </table>
+    </div>
+    {% if object.installer_config %}
+    <div class="card">
+      <h2 class="card-header">Installer Config</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Config</th>
+          <td>
+            <a href="{{ object.installer_config.get_absolute_url }}">{{ object.installer_config }}</a>
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">Checksum at Build</th>
+          <td>{{ object.installer_config_checksum_at_build|placeholder }}</td>
+        </tr>
+      </table>
+    </div>
+    {% endif %}
+    {% if object.hcp_bucket_name %}
+    <div class="card">
+      <h2 class="card-header">HCP Packer</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Bucket</th>
+          <td>{{ object.hcp_bucket_name }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Channel</th>
+          <td>{{ object.hcp_channel_name|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Iteration ID</th>
+          <td>{{ object.hcp_iteration_id|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Build ID</th>
+          <td>{{ object.hcp_build_id|placeholder }}</td>
+        </tr>
+        <tr>
+          <th scope="row">Last Synced</th>
+          <td>{{ object.hcp_last_synced_at|placeholder }}</td>
+        </tr>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if builds_table.rows %}
+<div class="row mt-3">
+  <div class="col">
+    <div class="card">
+      <h2 class="card-header">Recent Builds</h2>
+      <div class="card-body">
+        {% render_table builds_table %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if targets_table.rows %}
+<div class="row mt-3">
+  <div class="col">
+    <div class="card">
+      <h2 class="card-header">Build Targets</h2>
+      <div class="card-body">
+        {% render_table targets_table %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock content %}

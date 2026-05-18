@@ -1,302 +1,210 @@
-"""NetBox forms for netbox-packer image factory views."""
-
-from __future__ import annotations
-
 from django import forms
-from django.utils import timezone
-from django.utils.translation import gettext_lazy as _
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
-from netbox_proxbox.models import ProxmoxEndpoint
-from tenancy.models import Tenant
-from utilities.forms.fields import (
-    CommentField,
-    DynamicModelChoiceField,
-    DynamicModelMultipleChoiceField,
-    JSONField,
-)
+from utilities.forms.fields import DynamicModelChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
-from virtualization.models import Cluster
 
-from netbox_packer.choices import (
-    PackerBuilderTypeChoices,
-    PackerBuildStatusChoices,
-    PackerOSFamilyChoices,
-    PackerProvisionerRecipeChoices,
+from .choices import (
+    BuildStatusChoices,
+    OSFamilyChoices,
 )
-from netbox_packer.models import (
-    PackerImageBuild,
-    PackerImageDefinition,
-    PackerPluginSettings,
-)
+from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+
+# ── PackerInstallerConfig ─────────────────────────────────────────────────────
 
 
-class PackerImageDefinitionForm(NetBoxModelForm):
-    """Create and edit reusable Packer image definitions."""
-
-    proxmox_endpoint = DynamicModelChoiceField(
-        queryset=ProxmoxEndpoint.objects.all(),
-        required=True,
-        label=_("Proxmox endpoint"),
-    )
-    target_cluster = DynamicModelChoiceField(
-        queryset=Cluster.objects.all(),
-        required=False,
-        label=_("Target cluster"),
-    )
-    allowed_tenants = DynamicModelMultipleChoiceField(
-        queryset=Tenant.objects.all(),
-        required=False,
-        label=_("Allowed tenants"),
-        help_text=_("Leave empty to make this definition available to all tenants."),
-    )
-    default_variables = JSONField(
-        required=False,
-        label=_("Default variables"),
-    )
-    comments = CommentField()
-
-    fieldsets = (
-        FieldSet(
+class PackerInstallerConfigForm(NetBoxModelForm):
+    class Meta:
+        model = PackerInstallerConfig
+        fields = (
             "name",
-            "slug",
-            "description",
-            "enabled",
-            "tags",
-            name=_("Image definition"),
-        ),
-        FieldSet(
-            "builder_type",
-            "proxmox_endpoint",
-            "target_cluster",
-            "target_node",
-            "source_template_vmid",
-            "default_storage",
-            "default_bridge",
-            name=_("Proxmox target"),
-        ),
-        FieldSet(
             "os_family",
-            "os_release",
-            "default_ciuser",
-            "provisioner_recipe",
-            "default_variables",
-            name=_("Image defaults"),
-        ),
-        FieldSet(
-            "iso_storage",
-            "iso_url",
-            "iso_checksum",
-            name=_("ISO builder (proxmox-iso only)"),
-        ),
-        FieldSet("allowed_tenants", name=_("Tenant scope")),
+            "installer_type",
+            "content",
+            "version",
+            "description",
+            "tags",
+        )
+        fieldsets = (
+            FieldSet("name", "os_family", "installer_type", "version", name="Identity"),
+            FieldSet("content", name="Content"),
+            FieldSet("description", "tags", name="Metadata"),
+        )
+
+
+class PackerInstallerConfigFilterForm(NetBoxModelFilterSetForm):
+    model = PackerInstallerConfig
+    fieldsets = (
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("name", "os_family", "installer_type", name="Attributes"),
+    )
+    os_family = forms.MultipleChoiceField(
+        choices=OSFamilyChoices,
+        required=False,
+    )
+    tag = TagFilterField(model)
+
+
+# ── PackerTemplate ────────────────────────────────────────────────────────────
+
+
+class PackerTemplateForm(NetBoxModelForm):
+    installer_config = DynamicModelChoiceField(
+        queryset=PackerInstallerConfig.objects.all(),
+        required=False,
     )
 
     class Meta:
-        model = PackerImageDefinition
+        model = PackerTemplate
         fields = (
             "name",
-            "slug",
-            "description",
-            "enabled",
-            "builder_type",
-            "proxmox_endpoint",
-            "target_cluster",
-            "target_node",
-            "source_template_vmid",
-            "default_storage",
-            "default_bridge",
             "os_family",
-            "os_release",
-            "default_ciuser",
-            "provisioner_recipe",
-            "default_variables",
-            "iso_storage",
-            "iso_url",
-            "iso_checksum",
-            "allowed_tenants",
+            "os_version",
+            "proxmox_template_id",
+            "proxmox_endpoint",
+            "proxmox_node",
+            "storage_pool",
+            "storage_pool_type",
+            "storage_format",
+            "cloud_init_ready",
+            "min_cpu_type",
+            "build_status",
+            "built_at",
+            "packer_template_ref",
+            "max_age_days",
+            "auto_rebuild",
+            "description",
+            "hcp_bucket_name",
+            "hcp_channel_name",
+            "hcp_iteration_id",
+            "hcp_build_id",
+            "hcp_last_synced_at",
+            "installer_config",
+            "installer_config_checksum_at_build",
             "tags",
-            "comments",
+        )
+        fieldsets = (
+            FieldSet("name", "os_family", "os_version", name="Identity"),
+            FieldSet(
+                "proxmox_template_id",
+                "proxmox_endpoint",
+                "proxmox_node",
+                "storage_pool",
+                "storage_pool_type",
+                "storage_format",
+                "cloud_init_ready",
+                "min_cpu_type",
+                name="Proxmox",
+            ),
+            FieldSet(
+                "build_status",
+                "built_at",
+                "packer_template_ref",
+                "max_age_days",
+                "auto_rebuild",
+                name="Build",
+            ),
+            FieldSet(
+                "installer_config",
+                "installer_config_checksum_at_build",
+                name="Installer",
+            ),
+            FieldSet(
+                "hcp_bucket_name",
+                "hcp_channel_name",
+                "hcp_iteration_id",
+                "hcp_build_id",
+                "hcp_last_synced_at",
+                name="HCP Packer",
+            ),
+            FieldSet("description", "tags", name="Metadata"),
         )
 
 
-class PackerImageBuildSubmitForm(forms.Form):
-    """Action form for queueing a build in a later phase."""
-
-    output_vmid = forms.IntegerField(
-        min_value=1,
-        required=True,
-        label=_("Output VMID"),
-    )
-    output_name = forms.CharField(
-        max_length=255,
-        required=True,
-        label=_("Output name"),
-    )
-    image_version = forms.CharField(
-        max_length=64,
-        required=True,
-        label=_("Image version"),
-    )
-    dry_run = forms.BooleanField(
-        required=False,
-        label=_("Dry run"),
-    )
-    force = forms.BooleanField(
-        required=False,
-        label=_("Force"),
-    )
-
-    def __init__(
-        self,
-        *args: object,
-        definition: PackerImageDefinition | None = None,
-        **kwargs: object,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        if definition is None:
-            return
-
-        defaults = definition.default_variables or {}
-        today = timezone.localdate()
-        self.fields["output_vmid"].initial = defaults.get("output_vmid")
-        self.fields["output_name"].initial = defaults.get(
-            "output_name",
-            f"{definition.slug}-{today:%Y%m%d}",
-        )
-        self.fields["image_version"].initial = defaults.get(
-            "image_version",
-            today.isoformat(),
-        )
-        self.fields["dry_run"].initial = bool(defaults.get("dry_run", False))
-        self.fields["force"].initial = bool(defaults.get("force", False))
-
-    def clean_output_name(self) -> str:
-        value = (self.cleaned_data.get("output_name") or "").strip()
-        if not value:
-            raise forms.ValidationError(_("Output name is required."))
-        return value
-
-    def clean_image_version(self) -> str:
-        value = (self.cleaned_data.get("image_version") or "").strip()
-        if not value:
-            raise forms.ValidationError(_("Image version is required."))
-        return value
-
-
-class PackerPluginSettingsForm(NetBoxModelForm):
-    """Edit the singleton image factory settings row."""
-
+class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
+    model = PackerTemplate
     fieldsets = (
-        FieldSet(
-            "image_factory_enabled",
-            "image_factory_max_concurrent_builds",
-            "image_factory_default_job_timeout",
-            name=_("Execution"),
-        ),
-        FieldSet(
-            "image_factory_allow_iso_builds",
-            "image_factory_allow_custom_variables",
-            "tags",
-            name=_("Feature gates"),
-        ),
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("name", "os_family", "os_version", name="Identity"),
+        FieldSet("build_status", "cloud_init_ready", "proxmox_node", name="Build"),
     )
+    os_family = forms.MultipleChoiceField(
+        choices=OSFamilyChoices,
+        required=False,
+    )
+    build_status = forms.MultipleChoiceField(
+        choices=BuildStatusChoices,
+        required=False,
+    )
+    cloud_init_ready = forms.NullBooleanSelect()
+    tag = TagFilterField(model)
+
+
+# ── PackerBuild ───────────────────────────────────────────────────────────────
+
+
+class PackerBuildForm(NetBoxModelForm):
+    template = DynamicModelChoiceField(queryset=PackerTemplate.objects.all())
 
     class Meta:
-        model = PackerPluginSettings
+        model = PackerBuild
         fields = (
-            "image_factory_enabled",
-            "image_factory_max_concurrent_builds",
-            "image_factory_default_job_timeout",
-            "image_factory_allow_iso_builds",
-            "image_factory_allow_custom_variables",
+            "template",
+            "triggered_by",
+            "variable_overrides",
             "tags",
+        )
+        fieldsets = (
+            FieldSet("template", "triggered_by", name="Build"),
+            FieldSet("variable_overrides", name="Overrides"),
+            FieldSet("tags", name="Metadata"),
         )
 
 
-class PackerImageDefinitionFilterForm(NetBoxModelFilterSetForm):
-    """Filter controls for image definition list views."""
-
-    model = PackerImageDefinition
-
-    q = forms.CharField(required=False, label=_("Search"))
-    enabled = forms.NullBooleanField(
-        required=False,
-        widget=forms.Select(
-            choices=[("", "---------"), ("true", _("Yes")), ("false", _("No"))],
-        ),
-        label=_("Enabled"),
-    )
-    builder_type = forms.MultipleChoiceField(
-        choices=PackerBuilderTypeChoices,
-        required=False,
-        label=_("Builder type"),
-    )
-    os_family = forms.MultipleChoiceField(
-        choices=PackerOSFamilyChoices,
-        required=False,
-        label=_("OS family"),
-    )
-    provisioner_recipe = forms.MultipleChoiceField(
-        choices=PackerProvisionerRecipeChoices,
-        required=False,
-        label=_("Provisioner recipe"),
-    )
-    proxmox_endpoint = DynamicModelMultipleChoiceField(
-        queryset=ProxmoxEndpoint.objects.all(),
-        required=False,
-        label=_("Proxmox endpoint"),
-    )
-    target_cluster = DynamicModelMultipleChoiceField(
-        queryset=Cluster.objects.all(),
-        required=False,
-        label=_("Target cluster"),
-    )
-    tenant = DynamicModelMultipleChoiceField(
-        queryset=Tenant.objects.all(),
-        required=False,
-        label=_("Tenant"),
-    )
-
+class PackerBuildFilterForm(NetBoxModelFilterSetForm):
+    model = PackerBuild
     fieldsets = (
-        FieldSet("q", "enabled", "builder_type", "os_family", name=_("Definition")),
-        FieldSet(
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("template_id", "status", "selected_node", name="Filters"),
+    )
+    template_id = DynamicModelChoiceField(
+        queryset=PackerTemplate.objects.all(),
+        required=False,
+        label="Template",
+    )
+    tag = TagFilterField(model)
+
+
+# ── PackerBuildTarget ─────────────────────────────────────────────────────────
+
+
+class PackerBuildTargetForm(NetBoxModelForm):
+    template = DynamicModelChoiceField(queryset=PackerTemplate.objects.all())
+
+    class Meta:
+        model = PackerBuildTarget
+        fields = (
+            "template",
             "proxmox_endpoint",
-            "target_cluster",
-            "tenant",
-            "provisioner_recipe",
-            name=_("Scope"),
-        ),
-    )
+            "proxmox_node",
+            "priority",
+            "enabled",
+            "tags",
+        )
+        fieldsets = (
+            FieldSet("template", "proxmox_endpoint", "proxmox_node", "priority", "enabled", name="Target"),
+            FieldSet("tags", name="Metadata"),
+        )
 
 
-class PackerImageBuildFilterForm(NetBoxModelFilterSetForm):
-    """Filter controls for image build list views."""
-
-    model = PackerImageBuild
-
-    q = forms.CharField(required=False, label=_("Search"))
-    status = forms.MultipleChoiceField(
-        choices=PackerBuildStatusChoices,
-        required=False,
-        label=_("Status"),
-    )
-    os_family = forms.MultipleChoiceField(
-        choices=PackerOSFamilyChoices,
-        required=False,
-        label=_("OS family"),
-    )
-    proxmox_endpoint = DynamicModelMultipleChoiceField(
-        queryset=ProxmoxEndpoint.objects.all(),
-        required=False,
-        label=_("Proxmox endpoint"),
-    )
-    tenant = DynamicModelMultipleChoiceField(
-        queryset=Tenant.objects.all(),
-        required=False,
-        label=_("Tenant"),
-    )
-
+class PackerBuildTargetFilterForm(NetBoxModelFilterSetForm):
+    model = PackerBuildTarget
     fieldsets = (
-        FieldSet("q", "status", "os_family", name=_("Build")),
-        FieldSet("proxmox_endpoint", "tenant", name=_("Scope")),
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("template_id", "proxmox_node", "enabled", name="Filters"),
     )
+    template_id = DynamicModelChoiceField(
+        queryset=PackerTemplate.objects.all(),
+        required=False,
+        label="Template",
+    )
+    tag = TagFilterField(model)

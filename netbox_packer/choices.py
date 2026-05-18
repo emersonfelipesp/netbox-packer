@@ -1,78 +1,63 @@
-"""Choice sets for netbox-packer image definitions and builds."""
-
-from __future__ import annotations
-
-from django.utils.translation import gettext_lazy as _
 from utilities.choices import ChoiceSet
 
 
-class PackerBuilderTypeChoices(ChoiceSet):
-    """Packer builder types supported by the NetBox image factory."""
+class OSFamilyChoices(ChoiceSet):
+    key = "PackerTemplate.os_family"
 
-    key = "PackerImageDefinition.builder_type"
-
-    PROXMOX_CLONE = "proxmox-clone"
-    PROXMOX_ISO = "proxmox-iso"
+    CHOICE_UBUNTU = "ubuntu"
+    CHOICE_RHEL = "rhel"
+    CHOICE_DEBIAN = "debian"
 
     CHOICES = [
-        (PROXMOX_CLONE, _("Proxmox clone"), "blue"),
-        (PROXMOX_ISO, _("Proxmox ISO"), "purple"),
+        (CHOICE_UBUNTU, "Ubuntu", "blue"),
+        (CHOICE_RHEL, "RHEL-family", "red"),
+        (CHOICE_DEBIAN, "Debian", "green"),
     ]
 
 
-class PackerOSFamilyChoices(ChoiceSet):
-    """Operating system families available for Packer image definitions."""
+class StoragePoolTypeChoices(ChoiceSet):
+    key = "PackerTemplate.storage_pool_type"
 
-    key = "PackerImageDefinition.os_family"
-
-    UBUNTU = "ubuntu"
-    DEBIAN = "debian"
-    ROCKY = "rocky"
-    ALMALINUX = "almalinux"
-    FREEBSD = "freebsd"
+    CHOICE_LVMTHIN = "lvmthin"
+    CHOICE_ZFSPOOL = "zfspool"
+    CHOICE_DIR = "dir"
 
     CHOICES = [
-        (UBUNTU, _("Ubuntu"), "orange"),
-        (DEBIAN, _("Debian"), "red"),
-        (ROCKY, _("Rocky Linux"), "green"),
-        (ALMALINUX, _("AlmaLinux"), "blue"),
-        (FREEBSD, _("FreeBSD"), "gray"),
+        (CHOICE_LVMTHIN, "LVM-Thin", "blue"),
+        (CHOICE_ZFSPOOL, "ZFS", "cyan"),
+        (CHOICE_DIR, "Directory", "gray"),
     ]
 
 
-class PackerProvisionerRecipeChoices(ChoiceSet):
-    """Provisioner recipe allowlist mirrored from proxbox-api static templates."""
+class StorageFormatChoices(ChoiceSet):
+    key = "PackerTemplate.storage_format"
 
-    key = "PackerImageDefinition.provisioner_recipe"
-
-    UBUNTU_BASE = "ubuntu-base"
-    DEBIAN_BASE = "debian-base"
-    DOCKER_HOST = "docker-host"
-    QEMU_AGENT = "qemu-agent"
+    CHOICE_QCOW2 = "qcow2"
+    CHOICE_RAW = "raw"
+    CHOICE_VMDK = "vmdk"
 
     CHOICES = [
-        (UBUNTU_BASE, _("Ubuntu base"), "orange"),
-        (DEBIAN_BASE, _("Debian base"), "red"),
-        (DOCKER_HOST, _("Docker host"), "blue"),
-        (QEMU_AGENT, _("QEMU agent"), "green"),
+        (CHOICE_QCOW2, "qcow2", "blue"),
+        (CHOICE_RAW, "raw", "gray"),
+        (CHOICE_VMDK, "VMDK", "orange"),
     ]
 
 
-class PackerBuildStatusChoices(ChoiceSet):
-    """Lifecycle states for one Packer image build execution."""
+class BuildStatusChoices(ChoiceSet):
+    key = "PackerTemplate.build_status"
 
-    key = "PackerImageBuild.status"
-
-    PENDING = "pending"
-    RUNNING = "running"
-    FAILED = "failed"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+    CHOICE_PENDING = "pending"
+    CHOICE_BUILDING = "building"
+    CHOICE_READY = "ready"
+    CHOICE_FAILED = "failed"
+    CHOICE_DEPRECATED = "deprecated"
+    CHOICE_STALE = "stale"
 
     CHOICES = [
-        (PENDING, _("Pending"), "gray"),
-        (RUNNING, _("Running"), "blue"),
-        (FAILED, _("Failed"), "red"),
-        (COMPLETED, _("Completed"), "green"),
-        (CANCELLED, _("Cancelled"), "yellow"),
+        (CHOICE_PENDING, "Pending", "gray"),
+        (CHOICE_BUILDING, "Building", "blue"),
+        (CHOICE_READY, "Ready", "green"),
+        (CHOICE_FAILED, "Failed", "red"),
+        (CHOICE_DEPRECATED, "Deprecated", "orange"),
+        (CHOICE_STALE, "Stale", "yellow"),
     ]

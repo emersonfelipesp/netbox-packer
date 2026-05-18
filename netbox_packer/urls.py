@@ -1,37 +1,43 @@
-"""URL routes for netbox-packer."""
-
-from __future__ import annotations
-
 from django.urls import include, path
 from utilities.urls import get_model_urls
 
-from netbox_packer import views
-
-app_name = "netbox_packer"
-
-_MODEL_ROUTES = (
-    ("packerimagedefinition", "image-definitions"),
-    ("packerimagebuild", "image-builds"),
-    ("packerpluginsettings", "settings"),
-)
+from . import views  # noqa: F401 — registers views via @register_model_view
 
 urlpatterns = [
-    path("", views.PackerHomeView.as_view(), name="home"),
+    # PackerTemplate
     path(
-        "settings/edit/",
-        views.settings_singleton_redirect,
-        name="packerpluginsettings_singleton_edit",
+        "templates/",
+        include(get_model_urls("netbox_packer", "packertemplate", detail=False)),
+    ),
+    path(
+        "templates/<int:pk>/",
+        include(get_model_urls("netbox_packer", "packertemplate")),
+    ),
+    # PackerBuild
+    path(
+        "builds/",
+        include(get_model_urls("netbox_packer", "packerbuild", detail=False)),
+    ),
+    path(
+        "builds/<int:pk>/",
+        include(get_model_urls("netbox_packer", "packerbuild")),
+    ),
+    # PackerInstallerConfig
+    path(
+        "installer-configs/",
+        include(get_model_urls("netbox_packer", "packerinstallerconfig", detail=False)),
+    ),
+    path(
+        "installer-configs/<int:pk>/",
+        include(get_model_urls("netbox_packer", "packerinstallerconfig")),
+    ),
+    # PackerBuildTarget
+    path(
+        "build-targets/",
+        include(get_model_urls("netbox_packer", "packerbuildtarget", detail=False)),
+    ),
+    path(
+        "build-targets/<int:pk>/",
+        include(get_model_urls("netbox_packer", "packerbuildtarget")),
     ),
 ]
-
-for _model_name, _slug in _MODEL_ROUTES:
-    urlpatterns += [
-        path(
-            f"{_slug}/<int:pk>/",
-            include(get_model_urls("netbox_packer", _model_name)),
-        ),
-        path(
-            f"{_slug}/",
-            include(get_model_urls("netbox_packer", _model_name, detail=False)),
-        ),
-    ]

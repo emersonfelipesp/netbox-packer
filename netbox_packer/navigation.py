@@ -1,29 +1,67 @@
-"""NetBox plugin navigation menu for netbox-packer."""
-
-from __future__ import annotations
-
-from netbox.plugins import PluginMenu, PluginMenuItem
+from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 
 menu = PluginMenu(
     label="Packer",
     groups=(
         (
-            "Image Factory",
+            "Templates",
             (
                 PluginMenuItem(
-                    link="plugins:netbox_packer:packerimagedefinition_list",
-                    link_text="Image Definitions",
-                    permissions=["netbox_packer.view_packerimagedefinition"],
+                    link="plugins:netbox_packer:packertemplate_list",
+                    link_text="Packer Templates",
+                    permissions=["netbox_packer.view_packertemplate"],
+                    buttons=[
+                        PluginMenuButton(
+                            link="plugins:netbox_packer:packertemplate_add",
+                            title="Add",
+                            icon_class="mdi mdi-plus-thick",
+                            permissions=["netbox_packer.add_packertemplate"],
+                        ),
+                    ],
                 ),
                 PluginMenuItem(
-                    link="plugins:netbox_packer:packerimagebuild_list",
-                    link_text="Image Builds",
-                    permissions=["netbox_packer.view_packerimagebuild"],
+                    link="plugins:netbox_packer:packerinstallerconfig_list",
+                    link_text="Installer Configs",
+                    permissions=["netbox_packer.view_packerinstallerconfig"],
+                    buttons=[
+                        PluginMenuButton(
+                            link="plugins:netbox_packer:packerinstallerconfig_add",
+                            title="Add",
+                            icon_class="mdi mdi-plus-thick",
+                            permissions=["netbox_packer.add_packerinstallerconfig"],
+                        ),
+                    ],
+                ),
+            ),
+        ),
+        (
+            "Builds",
+            (
+                PluginMenuItem(
+                    link="plugins:netbox_packer:packerbuild_list",
+                    link_text="Builds",
+                    permissions=["netbox_packer.view_packerbuild"],
+                    buttons=[
+                        PluginMenuButton(
+                            link="plugins:netbox_packer:packerbuild_add",
+                            title="Add",
+                            icon_class="mdi mdi-plus-thick",
+                            permissions=["netbox_packer.add_packerbuild"],
+                        ),
+                    ],
                 ),
                 PluginMenuItem(
-                    link="plugins:netbox_packer:packerpluginsettings_singleton_edit",
-                    link_text="Plugin Settings",
-                    permissions=["netbox_packer.change_packerpluginsettings"],
+                    link="plugins:netbox_packer:packerbuildtarget_list",
+                    link_text="Build Targets",
+                    permissions=["netbox_packer.view_packerbuildtarget"],
+                    buttons=[
+                        PluginMenuButton(
+                            link="plugins:netbox_packer:packerbuildtarget_add",
+                            title="Add",
+                            icon_class="mdi mdi-plus-thick",
+                            permissions=["netbox_packer.add_packerbuildtarget"],
+                        ),
+                    ],
                 ),
             ),
         ),

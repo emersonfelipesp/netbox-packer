@@ -1,133 +1,85 @@
-"""NetBox filtersets for netbox-packer list views and API queries."""
-
-from __future__ import annotations
-
 import django_filters
-from django.db.models import Q, QuerySet
 from netbox.filtersets import NetBoxModelFilterSet
-from netbox_proxbox.models import ProxmoxEndpoint
-from tenancy.models import Tenant
-from virtualization.models import Cluster
 
-from netbox_packer.choices import (
-    PackerBuilderTypeChoices,
-    PackerBuildStatusChoices,
-    PackerOSFamilyChoices,
-    PackerProvisionerRecipeChoices,
-)
-from netbox_packer.models import (
-    PackerImageBuild,
-    PackerImageDefinition,
-    PackerPluginSettings,
-)
+from .choices import BuildStatusChoices, OSFamilyChoices
+from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
 
 
-class PackerImageDefinitionFilterSet(NetBoxModelFilterSet):
-    """Filter reusable image definitions."""
-
-    proxmox_endpoint = django_filters.ModelMultipleChoiceFilter(
-        queryset=ProxmoxEndpoint.objects.all(),
-    )
-    target_cluster = django_filters.ModelMultipleChoiceFilter(
-        queryset=Cluster.objects.all(),
-    )
-    os_family = django_filters.MultipleChoiceFilter(
-        choices=PackerOSFamilyChoices,
-    )
-    builder_type = django_filters.MultipleChoiceFilter(
-        choices=PackerBuilderTypeChoices,
-    )
-    provisioner_recipe = django_filters.MultipleChoiceFilter(
-        choices=PackerProvisionerRecipeChoices,
-    )
-    tenant = django_filters.ModelMultipleChoiceFilter(
-        field_name="allowed_tenants",
-        queryset=Tenant.objects.all(),
-    )
+class PackerTemplateFilterSet(NetBoxModelFilterSet):
+    os_family = django_filters.MultipleChoiceFilter(choices=OSFamilyChoices)
+    build_status = django_filters.MultipleChoiceFilter(choices=BuildStatusChoices)
+    cloud_init_ready = django_filters.BooleanFilter()
 
     class Meta:
-        model = PackerImageDefinition
+        model = PackerTemplate
         fields = (
             "id",
             "name",
-            "slug",
-            "enabled",
-            "builder_type",
-            "proxmox_endpoint",
-            "target_cluster",
-            "target_node",
             "os_family",
-            "provisioner_recipe",
-            "tenant",
+            "os_version",
+            "build_status",
+            "cloud_init_ready",
+            "proxmox_node",
+            "auto_rebuild",
         )
 
-    def search(
-        self,
-        queryset: QuerySet[PackerImageDefinition],
-        name: str,
-        value: str,
-    ) -> QuerySet[PackerImageDefinition]:
-        """Match image definition name or description."""
-        if not value.strip():
-            return queryset
-        return queryset.filter(
-            Q(name__icontains=value) | Q(description__icontains=value)
-        )
+    def search(self, queryset, name, value):
+        return queryset.filter(name__icontains=value) | queryset.filter(os_version__icontains=value)
 
 
-class PackerImageBuildFilterSet(NetBoxModelFilterSet):
-    """Filter image build executions."""
-
-    status = django_filters.MultipleChoiceFilter(
-        choices=PackerBuildStatusChoices,
-    )
-    proxmox_endpoint = django_filters.ModelMultipleChoiceFilter(
-        queryset=ProxmoxEndpoint.objects.all(),
-    )
-    os_family = django_filters.MultipleChoiceFilter(
-        field_name="definition__os_family",
-        choices=PackerOSFamilyChoices,
-    )
-    tenant = django_filters.ModelMultipleChoiceFilter(
-        field_name="definition__allowed_tenants",
-        queryset=Tenant.objects.all(),
+class PackerBuildFilterSet(NetBoxModelFilterSet):
+    template_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=PackerTemplate.objects.all(),
+        label="Template (ID)",
     )
 
     class Meta:
-        model = PackerImageBuild
+        model = PackerBuild
         fields = (
             "id",
-            "definition",
+            "template_id",
             "status",
-            "backend_build_id",
-            "proxmox_endpoint",
-            "target_node",
-            "output_vmid",
-            "image_version",
-            "created_by",
-            "netbox_job_id",
-            "cloud_image_template",
-            "os_family",
-            "tenant",
+            "triggered_by",
+            "selected_node",
         )
 
-    def search(
-        self,
-        queryset: QuerySet[PackerImageBuild],
-        name: str,
-        value: str,
-    ) -> QuerySet[PackerImageBuild]:
-        """Match build output, backend identifier, or error text."""
-        if not value.strip():
-            return queryset
-        return queryset.filter(
-            Q(output_name__icontains=value)
-            | Q(backend_build_id__icontains=value)
-            | Q(error__icontains=value)
-        )
+    def search(self, queryset, name, value):
+        return queryset.filter(triggered_by__icontains=value)
 
 
-class PackerPluginSettingsFilterSet(NetBoxModelFilterSet):
+class PackerInstallerConfigFilterSet(NetBoxModelFilterSet):
+    os_family = django_filters.MultipleChoiceFilter(choices=OSFamilyChoices)
+
     class Meta:
-        model = PackerPluginSettings
-        fields = ("singleton_key",)
+        model = PackerInstallerConfig
+        fields = (
+            "id",
+            "name",
+            "os_family",
+            "installer_type",
+            "version",
+        )
+
+    def search(self, queryset, name, value):
+        return queryset.filter(name__icontains=value)
+
+
+class PackerBuildTargetFilterSet(NetBoxModelFilterSet):
+    template_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=PackerTemplate.objects.all(),
+        label="Template (ID)",
+    )
+    enabled = django_filters.BooleanFilter()
+
+    class Meta:
+        model = PackerBuildTarget
+        fields = (
+            "id",
+            "template_id",
+            "proxmox_node",
+            "priority",
+            "enabled",
+        )
+
+    def search(self, queryset, name, value):
+        return queryset.filter(proxmox_node__icontains=value)
