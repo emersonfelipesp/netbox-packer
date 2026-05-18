@@ -159,6 +159,17 @@ class PackerTemplate(NetBoxModel):
         )
         return age > self.max_age_days or config_stale
 
+    @property
+    def derived_vms(self):
+        """Return VirtualMachines whose source_packer_template custom field matches this pk."""
+        try:
+            from virtualization.models import VirtualMachine
+        except ImportError:
+            return []
+        return VirtualMachine.objects.filter(
+            custom_field_data__source_packer_template=self.pk
+        )
+
 
 class PackerBuild(NetBoxModel):
     """A single build run for a PackerTemplate."""
