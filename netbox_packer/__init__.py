@@ -14,11 +14,20 @@ class NetBoxPackerConfig(PluginConfig):
     default_settings = {
         "PACKER_BUILD_TIMEOUT_SECONDS": 3600,
         "PACKER_STALENESS_CHECK_INTERVAL": "0 */6 * * *",
+        # HCP Packer Registry (optional; all settings must be set to enable)
+        "HCP_CLIENT_ID": "",
+        "HCP_CLIENT_SECRET": "",
+        "HCP_ORGANIZATION_ID": "",
+        "HCP_PROJECT_ID": "",
+        "HCP_SYNC_INTERVAL": "0 */4 * * *",  # cron: every 4 hours
+        # Build dispatch
+        "MAX_CONCURRENT_BUILDS_PER_NODE": 2,
     }
 
     def ready(self):
         super().ready()
         from . import jobs  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob
+        from . import hcp_sync  # noqa: F401 — registers PackerHCPSyncJobRunner
         from . import template_content  # noqa: F401 — registers Derived VMs tab extension
 
 
