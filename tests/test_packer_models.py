@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKER_ROOT = REPO_ROOT / "netbox_packer"
 NETBOX_ROOTS = (
@@ -44,12 +43,13 @@ from django.contrib.auth import get_user_model  # noqa: E402
 from django.core.exceptions import ValidationError  # noqa: E402
 from django.db import IntegrityError, transaction  # noqa: E402
 from django.test import TestCase  # noqa: E402
+from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 from tenancy.models import Tenant  # noqa: E402
 from virtualization.models import Cluster, ClusterType  # noqa: E402
 
 from netbox_packer.choices import (  # noqa: E402
-    PackerBuildStatusChoices,
     PackerBuilderTypeChoices,
+    PackerBuildStatusChoices,
     PackerOSFamilyChoices,
     PackerProvisionerRecipeChoices,
 )
@@ -58,7 +58,6 @@ from netbox_packer.models import (  # noqa: E402
     PackerImageDefinition,
     PackerPluginSettings,
 )
-from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 
 
 class PackerModelTest(TestCase):

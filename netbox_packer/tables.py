@@ -11,7 +11,6 @@ from netbox_packer.models import (
     PackerImageDefinition,
 )
 
-
 _BUILD_STATUS_BADGE = """
 {% if value == "completed" %}
   <span class="badge text-bg-green">{{ record.get_status_display }}</span>

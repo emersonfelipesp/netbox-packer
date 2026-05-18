@@ -5,12 +5,13 @@ from __future__ import annotations
 import django_filters
 from django.db.models import Q, QuerySet
 from netbox.filtersets import NetBoxModelFilterSet
+from netbox_proxbox.models import ProxmoxEndpoint
 from tenancy.models import Tenant
 from virtualization.models import Cluster
 
 from netbox_packer.choices import (
-    PackerBuildStatusChoices,
     PackerBuilderTypeChoices,
+    PackerBuildStatusChoices,
     PackerOSFamilyChoices,
     PackerProvisionerRecipeChoices,
 )
@@ -19,7 +20,6 @@ from netbox_packer.models import (
     PackerImageDefinition,
     PackerPluginSettings,
 )
-from netbox_proxbox.models import ProxmoxEndpoint
 
 
 class PackerImageDefinitionFilterSet(NetBoxModelFilterSet):

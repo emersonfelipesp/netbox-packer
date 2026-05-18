@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.models import Job
 from django.contrib import messages
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -16,7 +17,6 @@ from utilities.views import (
     register_model_view,
 )
 
-from core.models import Job
 from netbox_packer import filtersets, forms, tables
 from netbox_packer.choices import PackerBuildStatusChoices
 from netbox_packer.jobs import PackerImageBuildJob

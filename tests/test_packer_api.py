@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKER_ROOT = REPO_ROOT / "netbox_packer"
 NETBOX_ROOTS = (
@@ -45,6 +44,7 @@ from django.contrib.auth import get_user_model  # noqa: E402
 from django.contrib.contenttypes.models import ContentType  # noqa: E402
 from django.test import TestCase  # noqa: E402
 from django.urls import reverse  # noqa: E402
+from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 from users.models import ObjectPermission, Token  # noqa: E402
 from virtualization.models import Cluster, ClusterType  # noqa: E402
 
@@ -58,7 +58,6 @@ from netbox_packer.models import (  # noqa: E402
     PackerImageDefinition,
     PackerPluginSettings,
 )
-from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 
 
 class PackerAPITest(TestCase):

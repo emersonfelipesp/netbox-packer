@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKER_ROOT = REPO_ROOT / "netbox_packer"
 NETBOX_ROOTS = (
@@ -40,14 +39,15 @@ except Exception as exc:  # pragma: no cover - depends on external test services
         allow_module_level=True,
     )
 
+from core.models import Job  # noqa: E402
 from django.contrib.auth import get_user_model  # noqa: E402
 from django.contrib.contenttypes.models import ContentType  # noqa: E402
 from django.test import TestCase  # noqa: E402
 from django.urls import reverse  # noqa: E402
+from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 from users.models import ObjectPermission  # noqa: E402
 from virtualization.models import Cluster, ClusterType  # noqa: E402
 
-from core.models import Job  # noqa: E402
 from netbox_packer.choices import (  # noqa: E402
     PackerBuilderTypeChoices,
     PackerOSFamilyChoices,
@@ -58,7 +58,6 @@ from netbox_packer.filtersets import (  # noqa: E402
     PackerImageDefinitionFilterSet,
 )
 from netbox_packer.models import PackerImageBuild, PackerImageDefinition  # noqa: E402
-from netbox_proxbox.models import ProxmoxEndpoint  # noqa: E402
 
 
 class PackerViewTest(TestCase):

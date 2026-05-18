@@ -113,7 +113,7 @@ def submit_image_build(
         ) from exc
 
 
-def stream_image_build(
+def stream_image_build(  # noqa: C901
     *,
     backend_build_id: str,
 ) -> Generator[tuple[str, dict[str, Any]], None, None]:
