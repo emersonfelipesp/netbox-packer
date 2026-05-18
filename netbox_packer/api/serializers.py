@@ -1,6 +1,5 @@
-from rest_framework import serializers
-
 from netbox.api.serializers import NetBoxModelSerializer
+from rest_framework import serializers
 
 from ..models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
 
@@ -35,9 +34,7 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_packer-api:packertemplate-detail",
     )
-    installer_config = PackerInstallerConfigSerializer(
-        nested=True, required=False, allow_null=True
-    )
+    installer_config = PackerInstallerConfigSerializer(nested=True, required=False, allow_null=True)
 
     class Meta:
         model = PackerTemplate

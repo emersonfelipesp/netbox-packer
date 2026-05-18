@@ -24,9 +24,7 @@ class PackerTemplateFilterSet(NetBoxModelFilterSet):
         )
 
     def search(self, queryset, name, value):
-        return queryset.filter(name__icontains=value) | queryset.filter(
-            os_version__icontains=value
-        )
+        return queryset.filter(name__icontains=value) | queryset.filter(os_version__icontains=value)
 
 
 class PackerBuildFilterSet(NetBoxModelFilterSet):

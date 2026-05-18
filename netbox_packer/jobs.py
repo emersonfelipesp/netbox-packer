@@ -1,4 +1,5 @@
 """RQ background jobs for netbox-packer."""
+
 import logging
 import subprocess
 from datetime import timedelta
@@ -45,11 +46,7 @@ def select_build_node(template, skip_affinity_check=False):
     from .validators import NodeAffinityValidator
 
     max_concurrent = _get_plugin_setting("MAX_CONCURRENT_BUILDS_PER_NODE", 2)
-    targets = list(
-        template.build_targets.filter(enabled=True)
-        .select_related("proxmox_endpoint")
-        .order_by("priority")
-    )
+    targets = list(template.build_targets.filter(enabled=True).select_related("proxmox_endpoint").order_by("priority"))
 
     if not targets:
         # No multi-cluster targets — fall back to template primary node
@@ -64,7 +61,9 @@ def select_build_node(template, skip_affinity_check=False):
         if active_count >= max_concurrent:
             logger.debug(
                 "select_build_node: skipping '%s' — at capacity (%d/%d)",
-                target.proxmox_node, active_count, max_concurrent,
+                target.proxmox_node,
+                active_count,
+                max_concurrent,
             )
             continue
 
@@ -85,7 +84,8 @@ def select_build_node(template, skip_affinity_check=False):
             if not is_valid:
                 logger.debug(
                     "select_build_node: skipping '%s' — affinity check failed: %s",
-                    target.proxmox_node, errors,
+                    target.proxmox_node,
+                    errors,
                 )
                 continue
 
@@ -93,9 +93,9 @@ def select_build_node(template, skip_affinity_check=False):
 
     # All targets exhausted — fall back to template primary node
     logger.warning(
-        "select_build_node: no suitable target found for template '%s'; "
-        "falling back to primary node '%s'",
-        template.name, template.proxmox_node,
+        "select_build_node: no suitable target found for template '%s'; falling back to primary node '%s'",
+        template.name,
+        template.proxmox_node,
     )
     return template.proxmox_endpoint, template.proxmox_node
 
@@ -170,16 +170,12 @@ class PackerBuildJob(JobRunner):
         # Build variable overrides from: per-run overrides → template fields → defaults
         var_args = _build_var_args(template, build.variable_overrides, endpoint, node)
 
-        exit_code = self._run_subprocess(
-            ["packer", "init", template_ref],
-            build, log_lines, timeout, phase="init"
-        )
+        exit_code = self._run_subprocess(["packer", "init", template_ref], build, log_lines, timeout, phase="init")
         if exit_code != 0:
             raise RuntimeError(f"packer init exited with code {exit_code}")
 
         exit_code = self._run_subprocess(
-            ["packer", "build"] + var_args + [template_ref],
-            build, log_lines, timeout, phase="build"
+            ["packer", "build"] + var_args + [template_ref], build, log_lines, timeout, phase="build"
         )
 
         build.exit_code = exit_code
@@ -187,9 +183,7 @@ class PackerBuildJob(JobRunner):
             build.status = "success"
             build.finished_at = timezone.now()
             if template.installer_config:
-                build.template.installer_config_checksum_at_build = (
-                    template.installer_config.checksum
-                )
+                build.template.installer_config_checksum_at_build = template.installer_config.checksum
                 build.template.save(update_fields=["installer_config_checksum_at_build"])
             PackerTemplate.objects.filter(pk=template.pk).update(
                 build_status="ready",
@@ -219,11 +213,9 @@ class PackerBuildJob(JobRunner):
             return 127
 
         deadline = timezone.now() + timedelta(seconds=timeout)
-        line_count = 0
 
-        for line in proc.stdout:
+        for line_count, line in enumerate(proc.stdout, start=1):
             log_lines.append(line.rstrip())
-            line_count += 1
             # Partial save every 50 lines so logs appear incrementally
             if line_count % 50 == 0:
                 build.log = "\n".join(log_lines)
@@ -282,9 +274,7 @@ class PackerStalenessCheckJob(JobRunner):
         stale = 0
         queued = 0
 
-        for template in PackerTemplate.objects.exclude(
-            build_status__in=("building",)
-        ).exclude(max_age_days=None):
+        for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
             checked += 1
             if not template.is_stale:
                 continue
@@ -296,9 +286,7 @@ class PackerStalenessCheckJob(JobRunner):
                 continue
 
             # Only queue if no build is already active
-            active = PackerBuild.objects.filter(
-                template=template, status__in=("queued", "running")
-            ).exists()
+            active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
             if active:
                 continue
 
@@ -316,5 +304,7 @@ class PackerStalenessCheckJob(JobRunner):
 
         logger.info(
             "Staleness check complete: %d templates checked, %d stale, %d rebuilds queued",
-            checked, stale, queued,
+            checked,
+            stale,
+            queued,
         )

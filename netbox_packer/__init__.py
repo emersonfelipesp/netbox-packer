@@ -26,9 +26,11 @@ class NetBoxPackerConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import jobs  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob
-        from . import hcp_sync  # noqa: F401 — registers PackerHCPSyncJobRunner
-        from . import template_content  # noqa: F401 — registers Derived VMs tab extension
+        from . import (
+            hcp_sync,  # noqa: F401 — registers PackerHCPSyncJobRunner
+            jobs,  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob
+            template_content,  # noqa: F401 — registers Derived VMs tab extension
+        )
 
 
 config = NetBoxPackerConfig

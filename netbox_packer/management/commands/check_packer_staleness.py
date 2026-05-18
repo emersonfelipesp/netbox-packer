@@ -1,4 +1,5 @@
 """Management command to run the PackerStalenessCheckJob synchronously."""
+
 import logging
 
 from django.core.management.base import BaseCommand
@@ -30,18 +31,15 @@ class Command(BaseCommand):
         stale = 0
         queued = 0
 
-        for template in PackerTemplate.objects.exclude(
-            build_status__in=("building",)
-        ).exclude(max_age_days=None):
+        for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
             checked += 1
             if not template.is_stale:
                 self.stdout.write(f"  OK       {template.name}")
                 continue
 
             stale += 1
-            self.stdout.write(
-                self.style.WARNING(f"  STALE    {template.name}  (age={template.age_days}d, max={template.max_age_days}d)")
-            )
+            msg = f"  STALE    {template.name}  (age={template.age_days}d, max={template.max_age_days}d)"
+            self.stdout.write(self.style.WARNING(msg))
 
             if dry_run:
                 continue
@@ -51,11 +49,9 @@ class Command(BaseCommand):
             if not template.auto_rebuild:
                 continue
 
-            active = PackerBuild.objects.filter(
-                template=template, status__in=("queued", "running")
-            ).exists()
+            active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
             if active:
-                self.stdout.write(f"           → skipping auto-rebuild (already active build)")
+                self.stdout.write("           → skipping auto-rebuild (already active build)")
                 continue
 
             build = PackerBuild.objects.create(
@@ -64,12 +60,6 @@ class Command(BaseCommand):
                 status="queued",
             )
             queued += 1
-            self.stdout.write(
-                self.style.SUCCESS(f"           → queued rebuild as PackerBuild #{build.pk}")
-            )
+            self.stdout.write(self.style.SUCCESS(f"           → queued rebuild as PackerBuild #{build.pk}"))
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"\nDone: {checked} checked, {stale} stale, {queued} rebuilds queued."
-            )
-        )
+        self.stdout.write(self.style.SUCCESS(f"\nDone: {checked} checked, {stale} stale, {queued} rebuilds queued."))

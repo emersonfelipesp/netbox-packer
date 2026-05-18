@@ -1,4 +1,5 @@
 """Add source_packer_template custom field to VirtualMachine."""
+
 from django.db import migrations
 
 CUSTOM_FIELD_NAME = "source_packer_template"

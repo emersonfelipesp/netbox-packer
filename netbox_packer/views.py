@@ -5,7 +5,6 @@ from utilities.views import register_model_view
 
 from . import filtersets, forms, models, tables
 
-
 # ── PackerInstallerConfig ─────────────────────────────────────────────────────
 
 
@@ -95,9 +94,7 @@ class PackerTemplateBuildView(generic.ObjectView):
             triggered_by=str(request.user),
             status="queued",
         )
-        models.PackerTemplate.objects.filter(pk=template.pk).update(
-            build_status="building"
-        )
+        models.PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
         messages.success(
             request,
             f"Build #{build.pk} queued for template '{template.name}'.",
@@ -110,16 +107,12 @@ class PackerTemplateBuildView(generic.ObjectView):
 
 @register_model_view(models.PackerBuild)
 class PackerBuildView(generic.ObjectView):
-    queryset = models.PackerBuild.objects.select_related("template").prefetch_related(
-        "tags"
-    )
+    queryset = models.PackerBuild.objects.select_related("template").prefetch_related("tags")
 
 
 @register_model_view(models.PackerBuild, name="list", path="", detail=False)
 class PackerBuildListView(generic.ObjectListView):
-    queryset = models.PackerBuild.objects.select_related("template").prefetch_related(
-        "tags"
-    )
+    queryset = models.PackerBuild.objects.select_related("template").prefetch_related("tags")
     table = tables.PackerBuildTable
     filterset = filtersets.PackerBuildFilterSet
     filterset_form = forms.PackerBuildFilterForm

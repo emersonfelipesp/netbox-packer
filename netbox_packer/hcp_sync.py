@@ -1,4 +1,5 @@
 """HCP Packer Registry sync — import artifact metadata into NetBox."""
+
 import logging
 from urllib.parse import urljoin
 
@@ -10,6 +11,7 @@ HCP_API_BASE = "https://api.cloud.hashicorp.com/packer/2023-01-01"
 
 def _get_plugin_setting(key, default=None):
     from django.conf import settings
+
     return settings.PLUGINS_CONFIG.get("netbox_packer", {}).get(key, default)
 
 
@@ -21,19 +23,21 @@ def _is_hcp_configured():
 
 def _get_hcp_token():
     """Obtain an OAuth2 Bearer token from HCP using client credentials flow."""
-    import urllib.request
-    import urllib.parse
     import json
+    import urllib.parse
+    import urllib.request
 
     client_id = _get_plugin_setting("HCP_CLIENT_ID")
     client_secret = _get_plugin_setting("HCP_CLIENT_SECRET")
 
-    data = urllib.parse.urlencode({
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "grant_type": "client_credentials",
-        "audience": "https://api.hashicorp.cloud",
-    }).encode()
+    data = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+            "audience": "https://api.hashicorp.cloud",
+        }
+    ).encode()
 
     req = urllib.request.Request(
         HCP_AUTH_URL,
@@ -48,8 +52,8 @@ def _get_hcp_token():
 
 def _hcp_get(path, token):
     """Perform a GET request against the HCP Packer Registry API."""
-    import urllib.request
     import json
+    import urllib.request
 
     org = _get_plugin_setting("HCP_ORGANIZATION_ID")
     project = _get_plugin_setting("HCP_PROJECT_ID")
@@ -87,7 +91,9 @@ def sync_template_from_hcp(template, token):
     except Exception as exc:
         logger.warning(
             "HCP sync: could not fetch channel '%s' for bucket '%s': %s",
-            channel, bucket, exc,
+            channel,
+            bucket,
+            exc,
         )
         return {"updated": False, "reason": f"fetch error: {exc}"}
 
@@ -129,10 +135,13 @@ def sync_template_from_hcp(template, token):
             logger.warning("HCP sync: invalid vmid label '%s' for bucket '%s'", vmid, bucket)
 
     from .models import PackerTemplate
+
     PackerTemplate.objects.filter(pk=template.pk).update(**update_fields)
     logger.info(
         "HCP sync: updated template '%s' — iteration %s, vmid=%s",
-        template.name, iteration_id, vmid,
+        template.name,
+        iteration_id,
+        vmid,
     )
     return {"updated": True, "iteration_id": iteration_id, "vmid": vmid}
 
@@ -147,9 +156,7 @@ class PackerHCPSyncJob:
 
     def run(self, *args, **kwargs):
         if not _is_hcp_configured():
-            logger.debug(
-                "PackerHCPSyncJob: HCP_CLIENT_ID not configured — skipping sync."
-            )
+            logger.debug("PackerHCPSyncJob: HCP_CLIENT_ID not configured — skipping sync.")
             return
 
         try:
@@ -171,9 +178,7 @@ class PackerHCPSyncJob:
             else:
                 skipped += 1
 
-        logger.info(
-            "PackerHCPSyncJob complete: %d updated, %d skipped", updated, skipped
-        )
+        logger.info("PackerHCPSyncJob complete: %d updated, %d skipped", updated, skipped)
 
 
 try:

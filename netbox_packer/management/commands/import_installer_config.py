@@ -1,4 +1,5 @@
 """Management command to import a Packer installer config from a local file."""
+
 import hashlib
 import os
 
@@ -7,8 +8,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 class Command(BaseCommand):
     help = (
-        "Import a Packer installer config file (autoinstall/kickstart/preseed) "
-        "into the PackerInstallerConfig catalog."
+        "Import a Packer installer config file (autoinstall/kickstart/preseed) into the PackerInstallerConfig catalog."
     )
 
     def add_arguments(self, parser):
@@ -53,8 +53,7 @@ class Command(BaseCommand):
         if created:
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"Created PackerInstallerConfig '{obj.name}' v{obj.version} "
-                    f"(checksum: {obj.checksum[:12]}...)"
+                    f"Created PackerInstallerConfig '{obj.name}' v{obj.version} (checksum: {obj.checksum[:12]}...)"
                 )
             )
         else:
@@ -74,6 +73,4 @@ class Command(BaseCommand):
                     )
                 )
             else:
-                self.stdout.write(
-                    f"PackerInstallerConfig '{obj.name}' v{obj.version} unchanged (checksum matches)."
-                )
+                self.stdout.write(f"PackerInstallerConfig '{obj.name}' v{obj.version} unchanged (checksum matches).")

@@ -1,16 +1,13 @@
 from django import forms
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
-from utilities.forms.fields import CommentField, DynamicModelChoiceField, TagFilterField
+from utilities.forms.fields import DynamicModelChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
 from .choices import (
     BuildStatusChoices,
     OSFamilyChoices,
-    StorageFormatChoices,
-    StoragePoolTypeChoices,
 )
 from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
-
 
 # ── PackerInstallerConfig ─────────────────────────────────────────────────────
 

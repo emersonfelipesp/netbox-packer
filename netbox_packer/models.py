@@ -166,9 +166,7 @@ class PackerTemplate(NetBoxModel):
             from virtualization.models import VirtualMachine
         except ImportError:
             return []
-        return VirtualMachine.objects.filter(
-            custom_field_data__source_packer_template=self.pk
-        )
+        return VirtualMachine.objects.filter(custom_field_data__source_packer_template=self.pk)
 
 
 class PackerBuild(NetBoxModel):

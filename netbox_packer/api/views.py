@@ -1,8 +1,7 @@
+from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import status as http_status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-
-from netbox.api.viewsets import NetBoxModelViewSet
 
 from .. import filtersets, models
 from .serializers import (
@@ -50,9 +49,7 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
             variable_overrides=request.data.get("variable_overrides", {}),
             status="queued",
         )
-        models.PackerTemplate.objects.filter(pk=template.pk).update(
-            build_status="building"
-        )
+        models.PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
         serializer = PackerBuildSerializer(build, context={"request": request})
         return Response(serializer.data, status=http_status.HTTP_202_ACCEPTED)
 
@@ -72,9 +69,7 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
         template = self.get_object()
         validator = NodeAffinityValidator(template)
         is_valid, errors, warnings = validator.validate()
-        status_code = (
-            http_status.HTTP_200_OK if is_valid else http_status.HTTP_409_CONFLICT
-        )
+        status_code = http_status.HTTP_200_OK if is_valid else http_status.HTTP_409_CONFLICT
         return Response(
             {"valid": is_valid, "errors": errors, "warnings": warnings},
             status=status_code,
@@ -82,9 +77,7 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
 
 
 class PackerBuildViewSet(NetBoxModelViewSet):
-    queryset = models.PackerBuild.objects.select_related("template").prefetch_related(
-        "tags"
-    )
+    queryset = models.PackerBuild.objects.select_related("template").prefetch_related("tags")
     serializer_class = PackerBuildSerializer
     filterset_class = filtersets.PackerBuildFilterSet
 
@@ -98,16 +91,13 @@ class PackerBuildViewSet(NetBoxModelViewSet):
                 status=http_status.HTTP_400_BAD_REQUEST,
             )
         from django.utils import timezone
+
         build.status = "cancelled"
         build.finished_at = timezone.now()
         build.save(update_fields=["status", "finished_at"])
-        active = models.PackerBuild.objects.filter(
-            template=build.template, status__in=("queued", "running")
-        ).exists()
+        active = models.PackerBuild.objects.filter(template=build.template, status__in=("queued", "running")).exists()
         if not active:
-            models.PackerTemplate.objects.filter(pk=build.template_id).update(
-                build_status="ready"
-            )
+            models.PackerTemplate.objects.filter(pk=build.template_id).update(build_status="ready")
         serializer = self.get_serializer(build)
         return Response(serializer.data)
 

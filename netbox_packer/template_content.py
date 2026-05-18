@@ -1,6 +1,4 @@
 """Template content extensions — adds Derived VMs tab to PackerTemplate detail."""
-from netbox.plugins.utils import get_plugin_config
-from netbox.views.generic.feature_views import ObjectChildrenView
 
 
 class PackerTemplateDerivedVMsTab:
@@ -9,6 +7,7 @@ class PackerTemplateDerivedVMsTab:
 
     The tab is injected via netbox.plugins TemplateExtension mechanism.
     """
+
     pass
 
 

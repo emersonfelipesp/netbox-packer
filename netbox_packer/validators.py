@@ -1,4 +1,5 @@
 """Node affinity validation for Packer template builds."""
+
 import logging
 
 logger = logging.getLogger("netbox_packer.validators")
@@ -115,8 +116,7 @@ class NodeAffinityValidator:
                 exc,
             )
             self.warnings.append(
-                f"Could not reach Proxmox endpoint to validate node '{node}'. "
-                "Proceeding without node affinity check."
+                f"Could not reach Proxmox endpoint to validate node '{node}'. Proceeding without node affinity check."
             )
 
         is_valid = len(self.errors) == 0
@@ -127,9 +127,7 @@ class NodeAffinityValidator:
         try:
             from proxmox_sdk.sdk import ProxmoxSDK
         except ImportError:
-            self.warnings.append(
-                "proxmox-sdk not installed — skipping live node validation."
-            )
+            self.warnings.append("proxmox-sdk not installed — skipping live node validation.")
             return
 
         url = getattr(endpoint, "url", None) or str(endpoint)
@@ -160,13 +158,9 @@ class NodeAffinityValidator:
                 )
                 return
             # Check node is online
-            node_data = next(
-                (n for n in (nodes_response or []) if n.get("node") == node), None
-            )
+            node_data = next((n for n in (nodes_response or []) if n.get("node") == node), None)
             if node_data and node_data.get("status") != "online":
-                self.warnings.append(
-                    f"Node '{node}' status is '{node_data.get('status')}' (expected online)."
-                )
+                self.warnings.append(f"Node '{node}' status is '{node_data.get('status')}' (expected online).")
         except Exception as exc:
             raise RuntimeError(f"Error checking node existence: {exc}") from exc
 
@@ -181,8 +175,7 @@ class NodeAffinityValidator:
             return  # always satisfies
         if required not in X86_64_V2_SATISFYING_CPU_TYPES:
             self.warnings.append(
-                f"min_cpu_type '{required}' is not in the known satisfying set; "
-                "cannot validate automatically."
+                f"min_cpu_type '{required}' is not in the known satisfying set; cannot validate automatically."
             )
             return
         # We cannot introspect a remote node's physical CPU type without live data,
@@ -206,6 +199,4 @@ class NodeAffinityValidator:
                     f"Available pools: {', '.join(sorted(pool_names)) or 'none'}"
                 )
         except Exception as exc:
-            raise RuntimeError(
-                f"Error checking storage pool '{pool}' on node '{node}': {exc}"
-            ) from exc
+            raise RuntimeError(f"Error checking storage pool '{pool}' on node '{node}': {exc}") from exc
