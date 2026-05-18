@@ -1,9 +1,6 @@
 name: Release validation and publish
 
 on:
-  push:
-    tags:
-      - "v*"
   release:
     types: [published]
   workflow_dispatch:
@@ -92,7 +89,8 @@ jobs:
               publish_target = target_input
           elif event == 'release':
               publish_target = 'pypi'
-          elif event == 'push' and re.search(r'rc\d+$', version):
+          elif re.search(r'rc\d+$', version):
+              # rc versions always go to TestPyPI when dispatched manually without explicit target
               publish_target = 'testpypi'
           else:
               publish_target = 'pypi'
