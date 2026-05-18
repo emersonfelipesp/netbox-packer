@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from netbox.plugins import PluginConfig
 
-__version__ = "0.0.1rc3"
+__version__ = "0.0.1"
 
 
 class PackerConfig(PluginConfig):
@@ -13,7 +13,7 @@ class PackerConfig(PluginConfig):
     name = "netbox_packer"
     verbose_name = "NetBox Packer"
     description = "Proxmox VM image baking via HashiCorp Packer and proxbox-api"
-    version = "0.0.1rc3"
+    version = "0.0.1"
     author = "N-MultiCloud"
     base_url = "packer"
     min_version = "4.5.8"
