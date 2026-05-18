@@ -6,6 +6,7 @@ from django import forms
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
+from netbox_proxbox.models import ProxmoxEndpoint
 from tenancy.models import Tenant
 from utilities.forms.fields import (
     CommentField,
@@ -17,8 +18,8 @@ from utilities.forms.rendering import FieldSet
 from virtualization.models import Cluster
 
 from netbox_packer.choices import (
-    PackerBuildStatusChoices,
     PackerBuilderTypeChoices,
+    PackerBuildStatusChoices,
     PackerOSFamilyChoices,
     PackerProvisionerRecipeChoices,
 )
@@ -27,7 +28,6 @@ from netbox_packer.models import (
     PackerImageDefinition,
     PackerPluginSettings,
 )
-from netbox_proxbox.models import ProxmoxEndpoint
 
 
 class PackerImageDefinitionForm(NetBoxModelForm):

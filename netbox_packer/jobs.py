@@ -7,9 +7,8 @@ from typing import Any
 
 from django.utils import timezone
 from django.utils.text import slugify
-from rq.timeouts import JobTimeoutException
-
 from netbox.jobs import JobRunner
+from rq.timeouts import JobTimeoutException
 
 from netbox_packer.choices import PackerBuildStatusChoices
 from netbox_packer.services.http_client import (
