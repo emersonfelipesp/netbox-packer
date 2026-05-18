@@ -45,7 +45,6 @@ class Migration(migrations.Migration):
     dependencies = [
         ("netbox_packer", "0001_initial"),
         ("extras", "0001_initial"),
-        ("virtualization", "0001_initial"),
     ]
 
     operations = [
