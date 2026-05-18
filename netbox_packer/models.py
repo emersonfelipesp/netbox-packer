@@ -45,7 +45,12 @@ class PackerInstallerConfig(NetBoxModel):
         ordering = ["name", "version"]
         verbose_name = "Packer Installer Config"
         verbose_name_plural = "Packer Installer Configs"
-        unique_together = [("name", "version")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name", "version"],
+                name="netbox_packer_packerinstallerconfig_name_version_uniq",
+            )
+        ]
 
     def __str__(self):
         return f"{self.name} v{self.version}"
@@ -224,7 +229,12 @@ class PackerBuildTarget(NetBoxModel):
         ordering = ["priority", "proxmox_node"]
         verbose_name = "Packer Build Target"
         verbose_name_plural = "Packer Build Targets"
-        unique_together = [("template", "proxmox_node")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template", "proxmox_node"],
+                name="netbox_packer_packerbuildtarget_template_node_uniq",
+            )
+        ]
 
     def __str__(self):
         return f"{self.template.name} -> {self.proxmox_node}"
