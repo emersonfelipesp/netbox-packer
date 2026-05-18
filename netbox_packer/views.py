@@ -11,7 +11,6 @@ from django.views import View
 from netbox.views import generic
 from utilities.permissions import get_permission_for_model
 from utilities.views import (
-    ConditionalLoginRequiredMixin,
     ContentTypePermissionRequiredMixin,
     ViewTab,
     register_model_view,
@@ -31,7 +30,7 @@ from netbox_packer.services.http_client import (
 )
 
 
-class PackerHomeView(ConditionalLoginRequiredMixin, generic.ObjectListView):
+class PackerHomeView(generic.ObjectListView):
     """Plugin home landing renders the image definition list."""
 
     queryset = (
@@ -66,7 +65,6 @@ class PackerPluginSettingsEditView(generic.ObjectEditView):
 
 
 class PackerSettingsSingletonRedirectView(
-    ConditionalLoginRequiredMixin,
     ContentTypePermissionRequiredMixin,
     View,
 ):
@@ -174,7 +172,6 @@ class PackerImageDefinitionBuildsView(generic.ObjectChildrenView):
 
 @register_model_view(PackerImageDefinition, "build", path="build")
 class PackerImageBuildSubmitView(
-    ConditionalLoginRequiredMixin,
     ContentTypePermissionRequiredMixin,
     View,
 ):
@@ -302,7 +299,6 @@ class PackerImageBuildLogsView(PackerImageBuildView):
 
 @register_model_view(PackerImageBuild, "cancel", path="cancel")
 class PackerImageBuildCancelView(
-    ConditionalLoginRequiredMixin,
     ContentTypePermissionRequiredMixin,
     View,
 ):

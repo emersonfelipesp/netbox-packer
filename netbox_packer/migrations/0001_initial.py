@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ("extras", "0002_squashed_0059"),
         ("netbox_proxbox", "0001_initial"),
-        ("netbox_proxbox", "0044_cloud_image_template"),
+        ("netbox_proxbox", "0038_v0_0_16_release"),
         ("tenancy", "0001_squashed_0012"),
         ("virtualization", "0001_squashed_0022"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
@@ -247,7 +247,7 @@ class Migration(migrations.Migration):
             model_name="packerimagebuild",
             index=models.Index(
                 fields=["status", "started_at"],
-                name="netbox_packer_build_status_started",
+                name="packer_build_status_started",
             ),
         ),
     ]

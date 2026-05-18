@@ -86,7 +86,7 @@ class PackerImageBuild(NetBoxModel):
         indexes = [
             models.Index(
                 fields=("status", "started_at"),
-                name="netbox_packer_build_status_started",
+                name="packer_build_status_started",
             )
         ]
 
