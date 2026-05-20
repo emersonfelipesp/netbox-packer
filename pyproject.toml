@@ -35,6 +35,10 @@ test = [
     "pytest>=8.0.0",
     "pytest-django>=4.0.0",
 ]
+screenshot = [
+    "playwright>=1.58.0",
+    "requests>=2.33.0",
+]
 
 [tool.setuptools]
 include-package-data = true
