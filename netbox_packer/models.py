@@ -15,6 +15,7 @@ __all__ = (
     "PackerInstallerConfig",
     "PackerBuild",
     "PackerBuildTarget",
+    "PackerPluginSettings",
 )
 
 
@@ -243,3 +244,52 @@ class PackerBuildTarget(NetBoxModel):
         from django.urls import reverse
 
         return reverse("plugins:netbox_packer:packerbuildtarget", args=[self.pk])
+
+
+PACKER_BRANCH_ON_CONFLICT_CHOICES = (
+    ("fail", "Fail and leave branch open for review"),
+    ("acknowledge", "Acknowledge conflicts and merge anyway"),
+)
+
+
+class PackerPluginSettings(NetBoxModel):
+    """Singleton-style settings row for netbox-packer branching behavior."""
+
+    singleton_key = models.CharField(
+        max_length=32,
+        unique=True,
+        default="default",
+        editable=False,
+    )
+    branching_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "When enabled, PackerStalenessCheckJob creates a netbox-branching branch, "
+            "writes stale-status updates against that branch, and merges on success."
+        ),
+    )
+    branch_name_prefix = models.CharField(
+        max_length=64,
+        default="packer-stale",
+    )
+    branch_on_conflict = models.CharField(
+        max_length=16,
+        choices=PACKER_BRANCH_ON_CONFLICT_CHOICES,
+        default="fail",
+    )
+
+    class Meta:
+        verbose_name = "Packer Plugin Settings"
+        verbose_name_plural = "Packer Plugin Settings"
+
+    def __str__(self):
+        return "Packer plugin settings"
+
+    def save(self, *args, **kwargs):
+        self.singleton_key = "default"
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls):
+        obj, _created = cls.objects.get_or_create(singleton_key="default")
+        return obj

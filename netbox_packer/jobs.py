@@ -269,42 +269,76 @@ class PackerStalenessCheckJob(JobRunner):
 
     def run(self, *args, **kwargs):
         from .models import PackerBuild, PackerTemplate
-
-        checked = 0
-        stale = 0
-        queued = 0
-
-        for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
-            checked += 1
-            if not template.is_stale:
-                continue
-
-            stale += 1
-            PackerTemplate.objects.filter(pk=template.pk).update(build_status="stale")
-
-            if not template.auto_rebuild:
-                continue
-
-            # Only queue if no build is already active
-            active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
-            if active:
-                continue
-
-            build = PackerBuild.objects.create(
-                template=template,
-                triggered_by="PackerStalenessCheckJob",
-                status="queued",
-            )
-            logger.info(
-                "Auto-queued rebuild for stale template '%s' (build #%s)",
-                template.name,
-                build.pk,
-            )
-            queued += 1
-
-        logger.info(
-            "Staleness check complete: %d templates checked, %d stale, %d rebuilds queued",
-            checked,
-            stale,
-            queued,
+        from .services.branch_lifecycle import (
+            activate_branch_context,
+            branching_enabled_settings,
+            create_and_provision_branch,
+            merge_branch,
         )
+
+        branch_config = branching_enabled_settings()
+        branch = None
+        if branch_config is not None:
+            import uuid
+            branch_name = f"{branch_config['prefix']}-{uuid.uuid4().hex[:8]}"
+            try:
+                branch = create_and_provision_branch(name=branch_name, user=None)
+                logger.info("Staleness check: using branch '%s'", branch_name)
+            except Exception:
+                logger.exception("Branch provision failed; running staleness check on main")
+                branch = None
+
+        def _run_staleness(PackerBuild, PackerTemplate):
+            checked = 0
+            stale = 0
+            queued = 0
+
+            for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+                checked += 1
+                if not template.is_stale:
+                    continue
+
+                stale += 1
+                PackerTemplate.objects.filter(pk=template.pk).update(build_status="stale")
+
+                if not template.auto_rebuild:
+                    continue
+
+                # Only queue if no build is already active
+                active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
+                if active:
+                    continue
+
+                build = PackerBuild.objects.create(
+                    template=template,
+                    triggered_by="PackerStalenessCheckJob",
+                    status="queued",
+                )
+                logger.info(
+                    "Auto-queued rebuild for stale template '%s' (build #%s)",
+                    template.name,
+                    build.pk,
+                )
+                queued += 1
+
+            logger.info(
+                "Staleness check complete: %d templates checked, %d stale, %d rebuilds queued",
+                checked,
+                stale,
+                queued,
+            )
+
+        if branch is not None:
+            with activate_branch_context(branch):
+                _run_staleness(PackerBuild, PackerTemplate)
+            merged, msg = merge_branch(
+                branch=branch,
+                user=None,
+                on_conflict=branch_config["on_conflict"],
+            )
+            if merged:
+                logger.info("Staleness check branch merged: %s", msg)
+            else:
+                logger.warning("Staleness check branch merge failed: %s", msg)
+        else:
+            _run_staleness(PackerBuild, PackerTemplate)
