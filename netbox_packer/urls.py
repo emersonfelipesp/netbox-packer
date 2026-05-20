@@ -2,8 +2,10 @@ from django.urls import include, path
 from utilities.urls import get_model_urls
 
 from . import views  # noqa: F401 — registers views via @register_model_view
+from .sitemap import SitemapView
 
 urlpatterns = [
+    path("sitemap.txt", SitemapView.as_view(), name="sitemap"),
     # PackerTemplate
     path(
         "templates/",
