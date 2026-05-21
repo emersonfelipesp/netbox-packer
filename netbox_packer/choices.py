@@ -7,11 +7,17 @@ class OSFamilyChoices(ChoiceSet):
     CHOICE_UBUNTU = "ubuntu"
     CHOICE_RHEL = "rhel"
     CHOICE_DEBIAN = "debian"
+    CHOICE_PROXMOX_VE = "proxmox_ve"
+    CHOICE_PROXMOX_BS = "proxmox_bs"
+    CHOICE_PROXMOX_PDM = "proxmox_pdm"
 
     CHOICES = [
         (CHOICE_UBUNTU, "Ubuntu", "blue"),
         (CHOICE_RHEL, "RHEL-family", "red"),
         (CHOICE_DEBIAN, "Debian", "green"),
+        (CHOICE_PROXMOX_VE, "Proxmox VE", "purple"),
+        (CHOICE_PROXMOX_BS, "Proxmox Backup Server", "orange"),
+        (CHOICE_PROXMOX_PDM, "Proxmox Datacenter Manager", "cyan"),
     ]
 
 
