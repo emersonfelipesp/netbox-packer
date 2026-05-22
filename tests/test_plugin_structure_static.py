@@ -36,9 +36,14 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"]  # non-empty; version is kept in sync by release process
+    assert project["version"] == "0.0.2.post2"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
+    assert project["license"] == "Apache-2.0"
+    assert project["license-files"] == ["LICENSE"]
+    assert "License :: OSI Approved :: Apache Software License" not in project["classifiers"]
+    assert project["urls"]["Documentation"] == "https://emersonfelipesp.github.io/netbox-packer/"
+    assert (ROOT / "LICENSE").is_file()
 
 
 def test_plugin_config_fields() -> None:
@@ -52,6 +57,8 @@ def test_plugin_config_fields() -> None:
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
+    assert 'min_version = "4.5.8"' in src
+    assert 'max_version = "4.6.99"' in src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 

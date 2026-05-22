@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-packer"
-version = "0.0.2.post1"
+version = "0.0.2.post2"
 requires-python = ">=3.12.0"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "pydantic>=2.0.0",
 ]
@@ -18,7 +19,6 @@ readme = { file = "README.md", content-type = "text/markdown" }
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Django",
-    "Framework :: Django :: 6.0",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "Natural Language :: English",
@@ -28,7 +28,14 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
 ]
+
+[project.urls]
+Homepage = "https://github.com/emersonfelipesp/netbox-packer"
+Documentation = "https://emersonfelipesp.github.io/netbox-packer/"
+Source = "https://github.com/emersonfelipesp/netbox-packer"
+Issues = "https://github.com/emersonfelipesp/netbox-packer/issues"
 
 [project.optional-dependencies]
 test = [
