@@ -26,6 +26,7 @@ class PackerInstallerConfig(NetBoxModel):
         ("autoinstall", "Cloud-init autoinstall (Ubuntu)"),
         ("kickstart", "Anaconda kickstart (RHEL-family)"),
         ("preseed", "d-i preseed (Debian)"),
+        ("cloud_config", "Cloud-config YAML (#cloud-config, Proxmox/generic)"),
     ]
 
     name = models.CharField(max_length=100)
