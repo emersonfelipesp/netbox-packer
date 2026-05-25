@@ -155,7 +155,6 @@ class PackerBuildJob(JobRunner):
         from .models import PackerPluginSettings, PackerTemplate
         from .proxbox_client import (
             ProxboxAPIError,
-            cancel_build,
             map_status,
             resolve_endpoint_id,
             start_build,
