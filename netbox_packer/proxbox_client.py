@@ -105,9 +105,9 @@ def stream_build(proxbox_url, api_key, build_id, timeout=3600):
             continue
 
         if line.startswith("event:"):
-            event_type = line[len("event:"):].strip()
+            event_type = line[len("event:") :].strip()
         elif line.startswith("data:"):
-            data_lines.append(line[len("data:"):].strip())
+            data_lines.append(line[len("data:") :].strip())
 
 
 def cancel_build(proxbox_url, api_key, build_id):

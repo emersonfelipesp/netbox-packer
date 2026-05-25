@@ -167,8 +167,7 @@ class PackerBuildJob(JobRunner):
 
         if not proxbox_url:
             raise ValueError(
-                "PackerPluginSettings.proxbox_api_url is not configured; "
-                "cannot delegate build to proxbox-api."
+                "PackerPluginSettings.proxbox_api_url is not configured; cannot delegate build to proxbox-api."
             )
 
         log_lines = [f"[INFO] Delegating build to proxbox-api at {proxbox_url}"]
@@ -179,8 +178,7 @@ class PackerBuildJob(JobRunner):
             endpoint_id = resolve_endpoint_id(proxbox_url, endpoint_url)
         except ProxboxAPIError as exc:
             raise RuntimeError(
-                f"Failed to resolve Proxmox endpoint URL '{endpoint_url}' "
-                f"to an endpoint_id on proxbox-api: {exc}"
+                f"Failed to resolve Proxmox endpoint URL '{endpoint_url}' to an endpoint_id on proxbox-api: {exc}"
             ) from exc
 
         payload = {
@@ -311,6 +309,7 @@ class PackerStalenessCheckJob(JobRunner):
         branch = None
         if branch_config is not None:
             import uuid
+
             branch_name = f"{branch_config['prefix']}-{uuid.uuid4().hex[:8]}"
             try:
                 branch = create_and_provision_branch(name=branch_name, user=None)

@@ -102,8 +102,11 @@ class PackerBuildViewSet(NetBoxModelViewSet):
                     cancel_build(settings.proxbox_api_url, settings.proxbox_api_key, proxbox_build_id)
             except Exception:
                 import logging
+
                 logging.getLogger("netbox_packer.api").warning(
-                    "Failed to cancel build %s on proxbox-api", proxbox_build_id, exc_info=True,
+                    "Failed to cancel build %s on proxbox-api",
+                    proxbox_build_id,
+                    exc_info=True,
                 )
 
         build.status = "cancelled"
