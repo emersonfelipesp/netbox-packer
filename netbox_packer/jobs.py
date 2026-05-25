@@ -1,8 +1,6 @@
 """RQ background jobs for netbox-packer."""
 
 import logging
-import subprocess
-from datetime import timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -153,80 +151,114 @@ class PackerBuildJob(JobRunner):
             raise
 
     def _run_packer(self, build, template, endpoint, node, timeout):
-        """Run packer init + packer build, streaming output into build.log."""
-        from .models import PackerTemplate
-
-        template_ref = template.packer_template_ref
-        if not template_ref:
-            raise ValueError(
-                f"PackerTemplate #{template.pk} has no packer_template_ref set; "
-                "cannot determine which .pkr.hcl file to build."
-            )
-
-        log_lines = [f"[INFO] Starting Packer build for template '{template.name}'"]
-        log_lines.append(f"[INFO] Template ref: {template_ref}")
-        log_lines.append(f"[INFO] Target node: {node}")
-
-        # Build variable overrides from: per-run overrides → template fields → defaults
-        var_args = _build_var_args(template, build.variable_overrides, endpoint, node)
-
-        exit_code = self._run_subprocess(["packer", "init", template_ref], build, log_lines, timeout, phase="init")
-        if exit_code != 0:
-            raise RuntimeError(f"packer init exited with code {exit_code}")
-
-        exit_code = self._run_subprocess(
-            ["packer", "build"] + var_args + [template_ref], build, log_lines, timeout, phase="build"
+        """Delegate the Packer build to proxbox-api and consume the SSE stream."""
+        from .models import PackerPluginSettings, PackerTemplate
+        from .proxbox_client import (
+            ProxboxAPIError,
+            cancel_build,
+            map_status,
+            resolve_endpoint_id,
+            start_build,
+            stream_build,
         )
 
+        settings = PackerPluginSettings.get_solo()
+        proxbox_url = settings.proxbox_api_url
+        api_key = settings.proxbox_api_key
+
+        if not proxbox_url:
+            raise ValueError(
+                "PackerPluginSettings.proxbox_api_url is not configured; "
+                "cannot delegate build to proxbox-api."
+            )
+
+        log_lines = [f"[INFO] Delegating build to proxbox-api at {proxbox_url}"]
+        log_lines.append(f"[INFO] Template: {template.name}, node: {node}")
+
+        endpoint_url = endpoint if isinstance(endpoint, str) else str(endpoint)
+        try:
+            endpoint_id = resolve_endpoint_id(proxbox_url, endpoint_url)
+        except ProxboxAPIError as exc:
+            raise RuntimeError(
+                f"Failed to resolve Proxmox endpoint URL '{endpoint_url}' "
+                f"to an endpoint_id on proxbox-api: {exc}"
+            ) from exc
+
+        payload = {
+            "endpoint_id": endpoint_id,
+            "target_node": node or template.proxmox_node,
+            "output_vmid": template.proxmox_template_id,
+            "output_name": template.name,
+            "os_family": template.os_family,
+            "os_release": template.os_version,
+            "image_version": template.os_version,
+            "vm_storage": template.storage_pool or "local-lvm",
+            "provisioner_recipe": template.packer_template_ref or "default",
+        }
+        if template.min_cpu_type:
+            payload["cpu_type"] = template.min_cpu_type
+        if build.variable_overrides:
+            payload["variables"] = build.variable_overrides
+
+        try:
+            build_id = start_build(proxbox_url, api_key, payload)
+        except ProxboxAPIError as exc:
+            raise RuntimeError(f"proxbox-api rejected the build request: {exc}") from exc
+
+        log_lines.append(f"[INFO] proxbox-api build_id: {build_id}")
+        overrides = dict(build.variable_overrides or {})
+        overrides["_proxbox_build_id"] = build_id
+        build.variable_overrides = overrides
+        build.save(update_fields=["variable_overrides"])
+
+        final_status = "failed"
+        exit_code = None
+
+        try:
+            for line_count, sse in enumerate(stream_build(proxbox_url, api_key, build_id, timeout=timeout), 1):
+                if sse.event == "packer_log":
+                    line = sse.data if isinstance(sse.data, str) else str(sse.data)
+                    log_lines.append(line)
+                elif sse.event in ("build_completed", "build_success"):
+                    final_status = "success"
+                elif sse.event == "build_failed":
+                    final_status = "failed"
+                    if isinstance(sse.data, dict):
+                        exit_code = sse.data.get("exit_code")
+                elif sse.event == "build_cancelled":
+                    final_status = "cancelled"
+                elif sse.event == "status":
+                    if isinstance(sse.data, dict):
+                        s = sse.data.get("status", "")
+                        mapped = map_status(s)
+                        if mapped in ("success", "failed", "cancelled"):
+                            final_status = mapped
+                            if mapped == "failed":
+                                exit_code = sse.data.get("exit_code")
+
+                if line_count % 50 == 0:
+                    build.log = "\n".join(log_lines)
+                    build.save(update_fields=["log"])
+        except Exception as exc:
+            log_lines.append(f"[ERROR] SSE stream error: {exc}")
+            final_status = "failed"
+
         build.exit_code = exit_code
-        if exit_code == 0:
-            build.status = "success"
-            build.finished_at = timezone.now()
+        build.status = final_status
+        build.finished_at = timezone.now()
+        build.log = "\n".join(log_lines)
+        build.save(update_fields=["status", "finished_at", "exit_code", "log"])
+
+        if final_status == "success":
             if template.installer_config:
-                build.template.installer_config_checksum_at_build = template.installer_config.checksum
-                build.template.save(update_fields=["installer_config_checksum_at_build"])
+                template.installer_config_checksum_at_build = template.installer_config.checksum
+                template.save(update_fields=["installer_config_checksum_at_build"])
             PackerTemplate.objects.filter(pk=template.pk).update(
                 build_status="ready",
                 built_at=timezone.now(),
             )
         else:
-            build.status = "failed"
-            build.finished_at = timezone.now()
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
-
-        build.log = "\n".join(log_lines)
-        build.save(update_fields=["status", "finished_at", "exit_code", "log"])
-
-    def _run_subprocess(self, cmd, build, log_lines, timeout, phase="build"):
-        """Run a subprocess, capturing output into log_lines with partial saves."""
-        log_lines.append(f"[INFO] Running: {' '.join(cmd)}")
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            log_lines.append("[ERROR] packer executable not found in PATH")
-            return 127
-
-        deadline = timezone.now() + timedelta(seconds=timeout)
-
-        for line_count, line in enumerate(proc.stdout, start=1):
-            log_lines.append(line.rstrip())
-            # Partial save every 50 lines so logs appear incrementally
-            if line_count % 50 == 0:
-                build.log = "\n".join(log_lines)
-                build.save(update_fields=["log"])
-            if timezone.now() > deadline:
-                proc.kill()
-                log_lines.append(f"[ERROR] Timeout exceeded ({timeout}s) during {phase}")
-                return 124
-
-        proc.wait()
-        return proc.returncode
 
 
 def _build_var_args(template, overrides, endpoint, node):

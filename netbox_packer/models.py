@@ -278,6 +278,17 @@ class PackerPluginSettings(NetBoxModel):
         choices=PACKER_BRANCH_ON_CONFLICT_CHOICES,
         default="fail",
     )
+    proxbox_api_url = models.URLField(
+        blank=True,
+        default="",
+        help_text="Base URL of the proxbox-api instance (e.g. http://10.0.30.207:8000)",
+    )
+    proxbox_api_key = models.CharField(
+        max_length=256,
+        blank=True,
+        default="",
+        help_text="X-Proxbox-API-Key header value for proxbox-api authentication",
+    )
 
     class Meta:
         verbose_name = "Packer Plugin Settings"
