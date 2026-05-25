@@ -22,6 +22,9 @@ class NetBoxPackerConfig(PluginConfig):
         "HCP_SYNC_INTERVAL": "0 */4 * * *",  # cron: every 4 hours
         # Build dispatch
         "MAX_CONCURRENT_BUILDS_PER_NODE": 2,
+        # proxbox-api integration (stateless executor)
+        "PROXBOX_API_URL": "",
+        "PROXBOX_API_KEY": "",
     }
 
     def ready(self):

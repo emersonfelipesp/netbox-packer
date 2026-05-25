@@ -91,6 +91,24 @@ class PackerBuildViewSet(NetBoxModelViewSet):
             )
         from django.utils import timezone
 
+        proxbox_build_id = (build.variable_overrides or {}).get("_proxbox_build_id")
+        if proxbox_build_id:
+            try:
+                from ..models import PackerPluginSettings
+                from ..proxbox_client import cancel_build
+
+                settings = PackerPluginSettings.get_solo()
+                if settings.proxbox_api_url:
+                    cancel_build(settings.proxbox_api_url, settings.proxbox_api_key, proxbox_build_id)
+            except Exception:
+                import logging
+
+                logging.getLogger("netbox_packer.api").warning(
+                    "Failed to cancel build %s on proxbox-api",
+                    proxbox_build_id,
+                    exc_info=True,
+                )
+
         build.status = "cancelled"
         build.finished_at = timezone.now()
         build.save(update_fields=["status", "finished_at"])
