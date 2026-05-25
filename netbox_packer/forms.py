@@ -1,5 +1,5 @@
 from django import forms
-from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
+from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm, NetBoxModelForm
 from utilities.forms.fields import DynamicModelChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
@@ -42,6 +42,13 @@ class PackerInstallerConfigFilterForm(NetBoxModelFilterSetForm):
         required=False,
     )
     tag = TagFilterField(model)
+
+
+class PackerInstallerConfigBulkEditForm(NetBoxModelBulkEditForm):
+    model = PackerInstallerConfig
+    os_family = forms.ChoiceField(choices=OSFamilyChoices, required=False)
+    fieldsets = (FieldSet("os_family", name="Installer Config"),)
+    nullable_fields = ()
 
 
 # ── PackerTemplate ────────────────────────────────────────────────────────────
@@ -139,6 +146,19 @@ class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
     tag = TagFilterField(model)
 
 
+class PackerTemplateBulkEditForm(NetBoxModelBulkEditForm):
+    model = PackerTemplate
+    os_family = forms.ChoiceField(choices=OSFamilyChoices, required=False)
+    build_status = forms.ChoiceField(choices=BuildStatusChoices, required=False)
+    cloud_init_ready = forms.NullBooleanField(required=False)
+    auto_rebuild = forms.NullBooleanField(required=False)
+    max_age_days = forms.IntegerField(required=False)
+    fieldsets = (
+        FieldSet("os_family", "build_status", "cloud_init_ready", "auto_rebuild", "max_age_days", name="Template"),
+    )
+    nullable_fields = ("max_age_days",)
+
+
 # ── PackerBuild ───────────────────────────────────────────────────────────────
 
 
@@ -174,6 +194,22 @@ class PackerBuildFilterForm(NetBoxModelFilterSetForm):
     tag = TagFilterField(model)
 
 
+class PackerBuildBulkEditForm(NetBoxModelBulkEditForm):
+    model = PackerBuild
+    status = forms.ChoiceField(
+        choices=[
+            ("queued", "Queued"),
+            ("running", "Running"),
+            ("success", "Success"),
+            ("failed", "Failed"),
+            ("cancelled", "Cancelled"),
+        ],
+        required=False,
+    )
+    fieldsets = (FieldSet("status", name="Build"),)
+    nullable_fields = ()
+
+
 # ── PackerBuildTarget ─────────────────────────────────────────────────────────
 
 
@@ -194,6 +230,14 @@ class PackerBuildTargetForm(NetBoxModelForm):
             FieldSet("template", "proxmox_endpoint", "proxmox_node", "priority", "enabled", name="Target"),
             FieldSet("tags", name="Metadata"),
         )
+
+
+class PackerBuildTargetBulkEditForm(NetBoxModelBulkEditForm):
+    model = PackerBuildTarget
+    priority = forms.IntegerField(required=False)
+    enabled = forms.NullBooleanField(required=False)
+    fieldsets = (FieldSet("priority", "enabled", name="Build Target"),)
+    nullable_fields = ()
 
 
 class PackerBuildTargetFilterForm(NetBoxModelFilterSetForm):

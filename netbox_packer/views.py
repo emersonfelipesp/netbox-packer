@@ -33,6 +33,21 @@ class PackerInstallerConfigDeleteView(generic.ObjectDeleteView):
     queryset = models.PackerInstallerConfig.objects.all()
 
 
+@register_model_view(models.PackerInstallerConfig, "bulk_edit", path="edit", detail=False)
+class PackerInstallerConfigBulkEditView(generic.BulkEditView):
+    queryset = models.PackerInstallerConfig.objects.all()
+    filterset = filtersets.PackerInstallerConfigFilterSet
+    table = tables.PackerInstallerConfigTable
+    form = forms.PackerInstallerConfigBulkEditForm
+
+
+@register_model_view(models.PackerInstallerConfig, "bulk_delete", detail=False)
+class PackerInstallerConfigBulkDeleteView(generic.BulkDeleteView):
+    queryset = models.PackerInstallerConfig.objects.all()
+    filterset = filtersets.PackerInstallerConfigFilterSet
+    table = tables.PackerInstallerConfigTable
+
+
 # ── PackerTemplate ────────────────────────────────────────────────────────────
 
 
@@ -77,6 +92,21 @@ class PackerTemplateEditView(generic.ObjectEditView):
 @register_model_view(models.PackerTemplate, name="delete")
 class PackerTemplateDeleteView(generic.ObjectDeleteView):
     queryset = models.PackerTemplate.objects.all()
+
+
+@register_model_view(models.PackerTemplate, "bulk_edit", path="edit", detail=False)
+class PackerTemplateBulkEditView(generic.BulkEditView):
+    queryset = models.PackerTemplate.objects.all()
+    filterset = filtersets.PackerTemplateFilterSet
+    table = tables.PackerTemplateTable
+    form = forms.PackerTemplateBulkEditForm
+
+
+@register_model_view(models.PackerTemplate, "bulk_delete", detail=False)
+class PackerTemplateBulkDeleteView(generic.BulkDeleteView):
+    queryset = models.PackerTemplate.objects.all()
+    filterset = filtersets.PackerTemplateFilterSet
+    table = tables.PackerTemplateTable
 
 
 @register_model_view(models.PackerTemplate, name="build", path="build/")
@@ -128,6 +158,21 @@ class PackerBuildDeleteView(generic.ObjectDeleteView):
     queryset = models.PackerBuild.objects.all()
 
 
+@register_model_view(models.PackerBuild, "bulk_edit", path="edit", detail=False)
+class PackerBuildBulkEditView(generic.BulkEditView):
+    queryset = models.PackerBuild.objects.all()
+    filterset = filtersets.PackerBuildFilterSet
+    table = tables.PackerBuildTable
+    form = forms.PackerBuildBulkEditForm
+
+
+@register_model_view(models.PackerBuild, "bulk_delete", detail=False)
+class PackerBuildBulkDeleteView(generic.BulkDeleteView):
+    queryset = models.PackerBuild.objects.all()
+    filterset = filtersets.PackerBuildFilterSet
+    table = tables.PackerBuildTable
+
+
 # ── PackerBuildTarget ─────────────────────────────────────────────────────────
 
 
@@ -158,3 +203,18 @@ class PackerBuildTargetEditView(generic.ObjectEditView):
 @register_model_view(models.PackerBuildTarget, name="delete")
 class PackerBuildTargetDeleteView(generic.ObjectDeleteView):
     queryset = models.PackerBuildTarget.objects.all()
+
+
+@register_model_view(models.PackerBuildTarget, "bulk_edit", path="edit", detail=False)
+class PackerBuildTargetBulkEditView(generic.BulkEditView):
+    queryset = models.PackerBuildTarget.objects.all()
+    filterset = filtersets.PackerBuildTargetFilterSet
+    table = tables.PackerBuildTargetTable
+    form = forms.PackerBuildTargetBulkEditForm
+
+
+@register_model_view(models.PackerBuildTarget, "bulk_delete", detail=False)
+class PackerBuildTargetBulkDeleteView(generic.BulkDeleteView):
+    queryset = models.PackerBuildTarget.objects.all()
+    filterset = filtersets.PackerBuildTargetFilterSet
+    table = tables.PackerBuildTargetTable
