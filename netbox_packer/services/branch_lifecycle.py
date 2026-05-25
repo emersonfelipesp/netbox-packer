@@ -9,9 +9,7 @@ from typing import Any
 
 logger = logging.getLogger("netbox_packer.branch_lifecycle")
 
-_BRANCHING_UNAVAILABLE = (
-    "Branch lifecycle support requires the netbox-branching plugin to be installed."
-)
+_BRANCHING_UNAVAILABLE = "Branch lifecycle support requires the netbox-branching plugin to be installed."
 
 __all__ = (
     "activate_branch_context",
@@ -37,6 +35,7 @@ def branching_enabled_settings() -> dict[str, str] | None:
         return None
     try:
         from netbox_packer.models import PackerPluginSettings  # noqa: PLC0415
+
         settings_obj = PackerPluginSettings.get_solo()
     except Exception:
         logger.exception("Could not load PackerPluginSettings")
@@ -73,13 +72,10 @@ def create_and_provision_branch(
         if branch.status == BranchStatusChoices.READY:
             return branch
         if branch.status == BranchStatusChoices.FAILED:
-            raise RuntimeError(
-                f"Branch {branch.name} entered FAILED status during provisioning"
-            )
+            raise RuntimeError(f"Branch {branch.name} entered FAILED status during provisioning")
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"Branch {branch.name} did not reach READY within "
-                f"{ready_timeout_seconds}s (status={branch.status})"
+                f"Branch {branch.name} did not reach READY within {ready_timeout_seconds}s (status={branch.status})"
             )
         time.sleep(0.5)
 
@@ -88,6 +84,7 @@ def create_and_provision_branch(
 def activate_branch_context(branch: Any):
     """Context manager that activates a Branch for all ORM calls within the block."""
     from netbox_branching.utilities import activate_branch  # noqa: PLC0415
+
     with activate_branch(branch):
         yield
 
@@ -95,6 +92,7 @@ def activate_branch_context(branch: Any):
 def branch_has_conflicts(branch: Any) -> bool:
     """True when ChangeDiff rows for this branch contain unresolved conflicts."""
     from netbox_branching.models import ChangeDiff  # noqa: PLC0415
+
     return ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).exists()
 
 
@@ -113,8 +111,7 @@ def merge_branch(
     if branch_has_conflicts(branch):
         if on_conflict != "acknowledge":
             return False, (
-                f"Branch {branch.name} has unresolved conflicts and "
-                "branch_on_conflict=fail; leaving branch open."
+                f"Branch {branch.name} has unresolved conflicts and branch_on_conflict=fail; leaving branch open."
             )
         logger.warning(
             "Merging %s despite conflicts (branch_on_conflict=acknowledge)",

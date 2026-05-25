@@ -197,7 +197,13 @@ class PackerBuildFilterForm(NetBoxModelFilterSetForm):
 class PackerBuildBulkEditForm(NetBoxModelBulkEditForm):
     model = PackerBuild
     status = forms.ChoiceField(
-        choices=[("queued", "Queued"), ("running", "Running"), ("success", "Success"), ("failed", "Failed"), ("cancelled", "Cancelled")],
+        choices=[
+            ("queued", "Queued"),
+            ("running", "Running"),
+            ("success", "Success"),
+            ("failed", "Failed"),
+            ("cancelled", "Cancelled"),
+        ],
         required=False,
     )
     fieldsets = (FieldSet("status", name="Build"),)

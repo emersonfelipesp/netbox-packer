@@ -280,6 +280,7 @@ class PackerStalenessCheckJob(JobRunner):
         branch = None
         if branch_config is not None:
             import uuid
+
             branch_name = f"{branch_config['prefix']}-{uuid.uuid4().hex[:8]}"
             try:
                 branch = create_and_provision_branch(name=branch_name, user=None)
