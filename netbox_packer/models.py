@@ -1,3 +1,4 @@
+import base64
 import hashlib
 
 from django.db import models
@@ -9,6 +10,16 @@ from .choices import (
     StorageFormatChoices,
     StoragePoolTypeChoices,
 )
+
+
+def _fernet():
+    """Build a Fernet cipher from the Django SECRET_KEY (no external key management)."""
+    from cryptography.fernet import Fernet
+    from django.conf import settings
+
+    digest = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
 
 __all__ = (
     "PackerTemplate",
@@ -278,6 +289,21 @@ class PackerPluginSettings(NetBoxModel):
         choices=PACKER_BRANCH_ON_CONFLICT_CHOICES,
         default="fail",
     )
+    proxbox_api_url = models.URLField(
+        blank=True,
+        default="",
+        help_text=(
+            "Base URL of the proxbox-api backend used to bake cloud-init template images "
+            "(e.g. http://10.0.30.207:8000). Required for cloud_config installer-config builds."
+        ),
+    )
+    proxbox_api_key_encrypted = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        editable=False,
+        help_text="Fernet-encrypted X-Proxbox-API-Key (set via set_proxbox_api_key()).",
+    )
 
     class Meta:
         verbose_name = "Packer Plugin Settings"
@@ -294,3 +320,19 @@ class PackerPluginSettings(NetBoxModel):
     def get_solo(cls):
         obj, _created = cls.objects.get_or_create(singleton_key="default")
         return obj
+
+    def set_proxbox_api_key(self, plain: str) -> None:
+        """Encrypt and store the proxbox-api key (clears it when ``plain`` is empty)."""
+        if not plain:
+            self.proxbox_api_key_encrypted = ""
+            return
+        self.proxbox_api_key_encrypted = _fernet().encrypt(plain.encode()).decode()
+
+    def get_proxbox_api_key(self) -> str:
+        """Return the decrypted proxbox-api key, or ``""`` when unset/undecryptable."""
+        if not self.proxbox_api_key_encrypted:
+            return ""
+        try:
+            return _fernet().decrypt(self.proxbox_api_key_encrypted.encode()).decode()
+        except Exception:  # noqa: BLE001 - treat any decrypt failure as "no key"
+            return ""

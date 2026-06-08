@@ -93,6 +93,10 @@ class PackerTemplateBuildView(generic.ObjectView):
             status="queued",
         )
         models.PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
+
+        from .jobs import dispatch_build
+
+        dispatch_build(build)
         messages.success(
             request,
             f"Build #{build.pk} queued for template '{template.name}'.",

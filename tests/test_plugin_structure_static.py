@@ -36,7 +36,7 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.2.post2"
+    assert project["version"] == "0.0.3"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
     assert project["license"] == "Apache-2.0"
@@ -127,7 +127,7 @@ def test_packer_build_target_model_fields() -> None:
 def test_api_routes_registered() -> None:
     """API router must register all four viewsets."""
     api_urls = _read("netbox_packer/api/urls.py")
-    for route in ("templates", "builds", "installer-configs", "build-targets"):
+    for route in ("packer-templates", "build-jobs", "installer-configs", "build-targets"):
         assert f'"{route}"' in api_urls, f"Missing route '{route}' in api/urls.py"
 
 
