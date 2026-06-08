@@ -6,21 +6,20 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('extras', '0138_customfieldchoiceset_choice_colors'),
-        ('netbox_packer', '0003_packer_plugin_settings'),
+        ("extras", "0138_customfieldchoiceset_choice_colors"),
+        ("netbox_packer", "0003_packer_plugin_settings"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='packerpluginsettings',
-            name='tags',
-            field=taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag'),
+            model_name="packerpluginsettings",
+            name="tags",
+            field=taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag"),
         ),
         migrations.AlterField(
-            model_name='packerpluginsettings',
-            name='custom_field_data',
+            model_name="packerpluginsettings",
+            name="custom_field_data",
             field=models.JSONField(blank=True, default=dict, encoder=utilities.json.CustomFieldJSONEncoder),
         ),
     ]

@@ -49,6 +49,10 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
             status="queued",
         )
         models.PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
+
+        from ..jobs import dispatch_build
+
+        dispatch_build(build)
         serializer = PackerBuildSerializer(build, context={"request": request})
         return Response(serializer.data, status=http_status.HTTP_202_ACCEPTED)
 
