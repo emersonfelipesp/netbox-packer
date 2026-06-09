@@ -90,13 +90,23 @@ dependency).
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 
-### Seeded example: Zabbix 7.4
+### Seeded examples: Zabbix 7.4 and InfluxDB 2.x
 
 Migration `0006_seed_zabbix_cloud_init.py` seeds a `cloud_config`
 `PackerInstallerConfig` + `PackerTemplate`
 (`zabbix-7.4-ubuntu-2604-pgsql-nginx`, Ubuntu 26.04, storage `local`, VMID
 9010). The `#cloud-config` installs Zabbix 7.4 server + frontend + agent2,
 PostgreSQL + nginx (PHP 8.5).
+
+Migration `0007_seed_influxdb_cloud_init.py` seeds the InfluxDB 2.x Proxmox
+metrics collector template (`influxdb-2-ubuntu-2404-proxmox-collector`, Ubuntu
+24.04, storage `local`, VMID 9011). It installs InfluxDB from the official
+InfluxData APT repository, enables `influxdb` and `qemu-guest-agent`, initializes
+org `nmulticloud` and bucket `proxmox` through the local InfluxDB setup API, and
+writes generated credentials to `/etc/nmulticloud/influxdb-collector.env` on the
+cloned VM. The seed targets only the development ProxmoxEndpoint
+`https://10.0.30.139:8006`; do not point this seeded build at the production
+`10.0.30.9` cluster.
 
 ## Automatic Production Deployment
 
