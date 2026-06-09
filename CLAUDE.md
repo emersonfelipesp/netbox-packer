@@ -27,13 +27,76 @@ python manage.py collectstatic
 
 ## Architecture
 
-See the plugin's code structure:
-- `netbox-packer_plugin/` — main plugin package
-- `netbox-packer_plugin/models/` — Django ORM models
-- `netbox-packer_plugin/views/` — Django views and viewsets
-- `netbox-packer_plugin/api/` — DRF serializers and API endpoints
-- `netbox-packer_plugin/templates/` — Django HTML templates
-- `tests/` — unit and integration tests
+The plugin package is `netbox_packer/`:
+- `netbox_packer/models.py` — Django ORM models (`PackerInstallerConfig`,
+  `PackerTemplate`, `PackerBuild`, `PackerBuildTarget`, `PackerPluginSettings`)
+- `netbox_packer/views.py` — Django UI views and viewsets
+- `netbox_packer/api/` — DRF serializers and API endpoints (incl. the `build`
+  action on `PackerTemplateViewSet`)
+- `netbox_packer/jobs.py` — RQ background jobs (`PackerBuildJob`,
+  `PackerStalenessCheckJob`) + module-level `dispatch_build()`
+- `netbox_packer/proxbox_client.py` — stdlib HTTP client to proxbox-api
+- `netbox_packer/migrations/` — schema + data migrations
+- `netbox_packer/templates/` — Django HTML templates
+- `tests/` — static (text/AST) and functional tests
+
+## Cloud-init Template Image Bake (cloud_config path)
+
+When a `PackerTemplate`'s `installer_config.installer_type == "cloud_config"`,
+`netbox-packer` does **not** run local Packer — it **delegates the real Proxmox
+template bake to `proxbox-api`**, which already holds Proxmox sessions and the
+download → create → `qm template` machinery.
+
+End-to-end flow:
+
+```
+nms UI /virtualization/packer (Create dialog -> Build)
+  -> POST /api/netbox/netbox-packer/plugin/packer-templates/{id}/build/
+  -> nms-backend /netbox/netbox-packer/plugin/* (generic proxy)
+  -> PackerTemplateViewSet.build(): create PackerBuild -> dispatch_build(build)
+  -> PackerBuildJob (RQ), cloud_config branch -> _run_proxbox_cloud_build()
+       -> proxbox_client.call_proxbox_build()
+       -> POST {PackerPluginSettings.proxbox_api_url}/cloud/templates/images
+            header X-Proxbox-API-Key
+            body { name, vmid, target_node, image_url, image_storage, vm_storage,
+                   user_data_yaml = installer_config.content, execute: true, ssh_host }
+  -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
+       on <vm_storage>:snippets -> qm template -> returns vmid
+  -> PackerBuild.result_template_id=vmid, build_status=success;
+     PackerTemplate.build_status=ready, built_at=now()
+```
+
+Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
+plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
+`get_proxbox_api_key()`, keyed off `settings.SECRET_KEY` — no `netbox-nms`
+dependency).
+
+### Dispatch invariants (do not regress)
+
+- `dispatch_build()` MUST enqueue with `PackerBuildJob.enqueue(build_id=build.pk)`
+  and **never** pass `instance=build`. `PackerBuild` is not a jobs-assignable
+  object type, so `instance=build` raises *"Jobs cannot be assigned to this
+  object type"* and the UI Build button silently no-ops.
+- `target_node` MUST collapse an unset value to `None`, never `""` — proxbox-api
+  rejects an empty `target_node` with HTTP 422 (`min_length=1`).
+- Both are locked by `tests/test_cloud_config_build_static.py`.
+
+### Prerequisites (proxbox-api side)
+
+- `proxbox-api >= 0.0.18` with `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` and
+  `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`
+  (`0.0.18.post1`). The target `ProxmoxEndpoint` needs `allow_writes=True`, and
+  the chosen storage must allow `snippets,import,images` content types.
+- Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
+  `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
+
+### Seeded example: Zabbix 7.4
+
+Migration `0006_seed_zabbix_cloud_init.py` seeds a `cloud_config`
+`PackerInstallerConfig` + `PackerTemplate`
+(`zabbix-7.4-ubuntu-2604-pgsql-nginx`, Ubuntu 26.04, storage `local`, VMID
+9010). The `#cloud-config` installs Zabbix 7.4 server + frontend + agent2,
+PostgreSQL + nginx (PHP 8.5).
 
 ## Automatic Production Deployment
 

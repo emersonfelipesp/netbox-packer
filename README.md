@@ -16,10 +16,28 @@ resolve image IDs from the HCP Packer registry via `proxbox-api`.
 
 ## Status
 
-`netbox-packer` v0.0.2.post2 ships Packer template, build, installer-config,
-build-target, staleness, and HCP Packer registry sync support. This post
-release normalizes certification evidence, packaging metadata, and
-compatibility documentation without changing runtime behavior.
+`netbox-packer` v0.0.4 ships Packer template, build, installer-config,
+build-target, staleness, and HCP Packer registry sync support, plus a
+**cloud-init template image** path (see below).
+
+## Cloud-init Template Images
+
+A `PackerInstallerConfig` with `installer_type = "cloud_config"` holds a verbatim
+`#cloud-config`. When a `PackerTemplate` using such a config is built, the plugin
+delegates the real Proxmox work to `proxbox-api`
+(`POST /cloud/templates/images`), which downloads the base image, writes the
+cloud-config as a Proxmox `cicustom` user-data snippet, and runs `qm template` —
+producing a real, bootable VM template. The flow is triggerable from the NMS UI
+at `nms.nmulti.cloud/virtualization/packer` (Installer Configs + a "Create
+cloud-init template image" dialog + per-row Build button).
+
+Requirements: `proxbox-api >= 0.0.18` with
+`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
+Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
+`snippets,import,images`. Configure `proxbox_api_url` + an encrypted API key on
+the plugin settings page. A Zabbix 7.4 (Ubuntu 26.04, PostgreSQL + nginx)
+template is seeded as a working example. See `CLAUDE.md` for the full flow and
+the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
 
 ## Compatibility
 
