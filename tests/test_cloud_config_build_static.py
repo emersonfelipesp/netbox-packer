@@ -6,6 +6,7 @@ Static (text/AST) assertions plus an isolated functional test of
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 from pathlib import Path
@@ -16,6 +17,60 @@ PKG = ROOT / "netbox_packer"
 
 def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
+
+
+def _literal_assignments(rel: str) -> dict[str, object]:
+    tree = ast.parse(_read(rel))
+    values: dict[str, object] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+    return values
+
+
+def _resolve_static_value(node: ast.AST, constants: dict[str, object]) -> object:
+    if isinstance(node, ast.Name) and node.id in constants:
+        return constants[node.id]
+    return ast.literal_eval(node)
+
+
+def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
+    tree = ast.parse(_read(rel))
+    constants = _literal_assignments(rel)
+
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        if not isinstance(call.func, ast.Attribute) or call.func.attr != "get_or_create":
+            continue
+
+        name = None
+        defaults_node = None
+        for keyword in call.keywords:
+            if keyword.arg == "name":
+                name = _resolve_static_value(keyword.value, constants)
+            elif keyword.arg == "defaults":
+                defaults_node = keyword.value
+
+        if name != constants.get("TEMPLATE_NAME") or not isinstance(defaults_node, ast.Dict):
+            continue
+
+        defaults: dict[str, object] = {}
+        for key_node, value_node in zip(defaults_node.keys, defaults_node.values, strict=True):
+            if key_node is None:
+                continue
+            key = ast.literal_eval(key_node)
+            try:
+                defaults[key] = _resolve_static_value(value_node, constants)
+            except ValueError:
+                defaults[key] = "<dynamic>"
+        if "proxmox_template_id" in defaults:
+            return str(name), defaults
+
+    raise AssertionError(f"No PackerTemplate.objects.get_or_create defaults found in {rel}")
 
 
 # ── Static wiring assertions ──────────────────────────────────────────────────
@@ -85,9 +140,65 @@ def test_migrations_present_for_settings_and_seed() -> None:
     assert "retentionPeriodSeconds" in influx_seed
     assert "INFLUXDB_ADMIN_TOKEN" in influx_seed
     assert '"proxmox_endpoint": PROXMOX_ENDPOINT' in influx_seed
-    assert "https://10.0.30.139:8006" in influx_seed
-    assert "10.0.30.9" in influx_seed
     assert '"proxmox_template_id": TEMPLATE_VMID' in influx_seed
+
+
+def test_influxdb_seed_targets_development_endpoint_only() -> None:
+    constants = _literal_assignments("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
+    name, defaults = _packer_template_seed_defaults("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
+
+    assert constants["CONFIG_NAME"] == "influxdb-2-ubuntu-2404-proxmox-collector"
+    assert constants["CONFIG_VERSION"] == "1.0.0"
+    assert constants["TEMPLATE_NAME"] == "influxdb-2-ubuntu-2404-proxmox-collector"
+    assert constants["TEMPLATE_VMID"] == 9011
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.139:8006"
+    assert name == constants["TEMPLATE_NAME"]
+
+    assert defaults["os_family"] == "ubuntu"
+    assert defaults["os_version"] == "24.04"
+    assert defaults["proxmox_template_id"] == 9011
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.139:8006"
+    assert defaults["proxmox_node"] == "10.0.30.139"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+    assert defaults["proxmox_endpoint"] != "https://10.0.30.9:8006"
+    assert defaults["proxmox_node"] != "10.0.30.9"
+
+
+def test_influxdb_cloud_config_bootstrap_contract() -> None:
+    migration = _read("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
+    assert "packages:" in migration
+    assert "qemu-guest-agent" in migration
+    assert "https://repos.influxdata.com/influxdata-archive.key" in migration
+    assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in migration
+    assert "apt-get install -y influxdb2" in migration
+    assert "systemctl enable --now qemu-guest-agent" in migration
+    assert "systemctl enable --now influxdb" in migration
+    assert "curl -fsS http://127.0.0.1:8086/health" in migration
+    assert "curl -fsS -X POST http://127.0.0.1:8086/api/v2/setup" in migration
+    assert 'ORG="${INFLUXDB_ORG:-nmulticloud}"' in migration
+    assert 'BUCKET="${INFLUXDB_BUCKET:-proxmox}"' in migration
+    assert 'RETENTION_SECONDS="${INFLUXDB_RETENTION_SECONDS:-2592000}"' in migration
+    assert "/etc/nmulticloud/influxdb-collector.env" in migration
+    assert "chmod 600 /etc/nmulticloud/influxdb-collector.env" in migration
+
+
+def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
+    required = (
+        "influxdb-2-ubuntu-2404-proxmox-collector",
+        "9011",
+        "https://10.0.30.139:8006",
+        "10.0.30.139",
+        "10.0.30.9",
+    )
+    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+    mkdocs = _read("mkdocs.yml")
+    assert "cloud-init-template-images.md" in mkdocs
 
 
 # ── Isolated functional test of the proxbox-api client ────────────────────────

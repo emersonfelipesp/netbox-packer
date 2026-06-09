@@ -36,8 +36,14 @@ Requirements: `proxbox-api >= 0.0.18` with
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 `snippets,import,images`. Configure `proxbox_api_url` + an encrypted API key on
 the plugin settings page. A Zabbix 7.4 (Ubuntu 26.04, PostgreSQL + nginx)
-template is seeded as a working example. See `CLAUDE.md` for the full flow and
-the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
+template is seeded as a working example.
+
+The InfluxDB 2 Proxmox metrics collector seed is
+`influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, on the development
+endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not target the
+production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seeded bake
+process. See [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md),
+`CLAUDE.md`, and the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
 
 ## Compatibility
 
