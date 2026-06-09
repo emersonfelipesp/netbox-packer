@@ -210,7 +210,8 @@ class PackerBuildJob(JobRunner):
         api_url = (settings_row.proxbox_api_url or "").strip()
         installer = template.installer_config
         storage = template.storage_pool or "local"
-        target_node = node or template.proxmox_node or ""
+        # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
+        target_node = (node or template.proxmox_node or "").strip() or None
         image_url = _resolve_cloud_image_url(template, build.variable_overrides)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
 
@@ -479,7 +480,9 @@ def dispatch_build(build):
     action, fixing the gap where creating a PackerBuild never started a job.
     """
     try:
-        PackerBuildJob.enqueue(instance=build, build_id=build.pk)
+        # No `instance=`: PackerBuild is not a jobs-assignable object type in NetBox
+        # ("Jobs cannot be assigned to this object type"); the job links via build_id.
+        PackerBuildJob.enqueue(build_id=build.pk)
     except Exception:
         logger.exception("Failed to enqueue PackerBuildJob for build #%s", build.pk)
         raise
