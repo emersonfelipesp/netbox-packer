@@ -108,6 +108,12 @@ cloned VM. The seed targets only the development ProxmoxEndpoint
 `https://10.0.30.139:8006`; do not point this seeded build at the production
 `10.0.30.9` cluster.
 
+Operator docs for this flow live in
+`docs/cloud-init-template-images.md`. Keep that file, `README.md`, `AGENTS.md`,
+and `tests/test_cloud_config_build_static.py` aligned whenever the seeded
+template name, VMID, endpoint, node, cloud-init bootstrap, or production
+endpoint guardrail changes.
+
 ## Automatic Production Deployment
 
 **Starting with the deploy-production workflow**, new commits to `main` automatically deploy to `netbox.nmulti.cloud`.
