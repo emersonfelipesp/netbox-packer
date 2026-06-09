@@ -38,7 +38,18 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "user_data_yaml=installer.content" in src
     # Gap 1: PackerBuild creation must enqueue the job.
     assert "def dispatch_build(build):" in src
-    assert "PackerBuildJob.enqueue(instance=build, build_id=build.pk)" in src
+    # PackerBuild is not a jobs-assignable object type in NetBox, so the job must
+    # enqueue WITHOUT instance= (it links the build via build_id) — otherwise NetBox
+    # raises "Jobs cannot be assigned to this object type" and the UI Build button fails.
+    assert "PackerBuildJob.enqueue(build_id=build.pk)" in src
+    assert "PackerBuildJob.enqueue(instance=build" not in src
+
+
+def test_jobs_target_node_unset_becomes_none() -> None:
+    # proxbox-api rejects an empty target_node (min_length=1); an unset node must
+    # collapse to None, never "".
+    src = _read("netbox_packer/jobs.py")
+    assert 'target_node = (node or template.proxmox_node or "").strip() or None' in src
 
 
 def test_build_actions_dispatch_the_job() -> None:

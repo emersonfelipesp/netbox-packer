@@ -36,7 +36,7 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.3"
+    assert project["version"] == "0.0.4"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
     assert project["license"] == "Apache-2.0"
