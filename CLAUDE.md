@@ -116,7 +116,12 @@ cloned VM. The seed targets only the development ProxmoxEndpoint
 - Triggers on `push: [main]` branch updates
 - Also supports manual dispatch via `workflow_dispatch` with optional `ref` input
 - Runs on `prod-deploy` runner with SSH access to production host
-- Executes: `ssh nmc-prod-207 -- deploy-plugin packer "$REF"`
+- Executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"`
+  when the production deploy helper is local, otherwise falls back to
+  `ssh nmc-prod-207 -- deploy-plugin netbox-packer "$REF"`.
+- Keep the full plugin slug `netbox-packer`; the production deploy helper
+  validates repository-style NetBox plugin names and rejects the short
+  historical slug `packer`.
 
 **Deploy parameters:**
 - REF: can be a version tag (v0.1.0), branch name (main/develop), or 7+ character commit SHA
@@ -150,7 +155,7 @@ nms git actions run netbox-packer .gitea/workflows/deploy-production.yml \
   -r main -f ref=v0.1.0
 
 # Or SSH directly to production
-ssh nmc-prod-207 -- deploy-plugin packer v0.1.0
+ssh nmc-prod-207 -- deploy-plugin netbox-packer v0.1.0
 ```
 
 For comprehensive deploy infrastructure documentation, see `/root/personal-context/nmulticloud-context/CLAUDE.md` section "Automatic Plugin Deployment to Production".
