@@ -27,10 +27,10 @@ jobs:
             *) echo "ERROR: Invalid ref format: $REF"; exit 1 ;;
           esac
           if [[ -x /opt/nmulticloud/deploy/bin/deploy-netbox-plugin ]]; then
-            /opt/nmulticloud/deploy/bin/deploy-netbox-plugin packer "$REF"
+            /opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"
           else
             ssh -o StrictHostKeyChecking=accept-new \
                 -o ServerAliveInterval=30 \
                 -o ServerAliveCountMax=20 \
-                nmc-prod-207 -- deploy-plugin packer "$REF"
+                nmc-prod-207 -- deploy-plugin netbox-packer "$REF"
           fi
