@@ -57,6 +57,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - Cloud-init Template Images: cloud-init-template-images.md
   - Certification: certification.md
   - Release Notes:
       - Summary: release-notes/index.md
