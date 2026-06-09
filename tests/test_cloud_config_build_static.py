@@ -75,6 +75,20 @@ def test_migrations_present_for_settings_and_seed() -> None:
     assert 'installer_type": "cloud_config"' in seed or '"installer_type": "cloud_config"' in seed
     assert '"storage_pool": "local"' in seed
 
+    influx_seed = _read("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
+    assert "influxdb-2-ubuntu-2404-proxmox-collector" in influx_seed
+    assert "https://repos.influxdata.com/influxdata-archive.key" in influx_seed
+    assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in influx_seed
+    assert "apt-get install -y influxdb2" in influx_seed
+    assert "curl -fsS http://127.0.0.1:8086/health" in influx_seed
+    assert "curl -fsS -X POST http://127.0.0.1:8086/api/v2/setup" in influx_seed
+    assert "retentionPeriodSeconds" in influx_seed
+    assert "INFLUXDB_ADMIN_TOKEN" in influx_seed
+    assert '"proxmox_endpoint": PROXMOX_ENDPOINT' in influx_seed
+    assert "https://10.0.30.139:8006" in influx_seed
+    assert "10.0.30.9" in influx_seed
+    assert '"proxmox_template_id": TEMPLATE_VMID' in influx_seed
+
 
 # ── Isolated functional test of the proxbox-api client ────────────────────────
 
