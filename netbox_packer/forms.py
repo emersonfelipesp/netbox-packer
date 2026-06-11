@@ -80,6 +80,9 @@ class PackerTemplateForm(NetBoxModelForm):
             "hcp_last_synced_at",
             "installer_config",
             "installer_config_checksum_at_build",
+            "install_qemu_guest_agent",
+            "install_zabbix_agent2",
+            "zabbix_server",
             "tags",
         )
         fieldsets = (
@@ -107,6 +110,12 @@ class PackerTemplateForm(NetBoxModelForm):
                 "installer_config",
                 "installer_config_checksum_at_build",
                 name="Installer",
+            ),
+            FieldSet(
+                "install_qemu_guest_agent",
+                "install_zabbix_agent2",
+                "zabbix_server",
+                name="Monitoring Agents",
             ),
             FieldSet(
                 "hcp_bucket_name",

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 
+from django.core.validators import RegexValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
@@ -117,6 +118,41 @@ class PackerTemplate(NetBoxModel):
     )
     auto_rebuild = models.BooleanField(default=False)
     description = models.TextField(blank=True)
+
+    # Monitoring agent injection (applied at build time by PackerBuildJob)
+    install_qemu_guest_agent = models.BooleanField(
+        default=True,
+        help_text=(
+            "Inject qemu-guest-agent package + systemctl enable into the cloud-config at build time. "
+            "Skipped if the installer config already contains qemu-guest-agent."
+        ),
+    )
+    install_zabbix_agent2 = models.BooleanField(
+        default=True,
+        help_text=(
+            "Inject Zabbix Agent 2 bootstrap into the cloud-config at build time. "
+            "Skipped entirely if the installer config already mentions zabbix-agent2."
+        ),
+    )
+    zabbix_server = models.CharField(
+        max_length=255,
+        default="zabbix.nmulti.cloud",
+        blank=True,
+        validators=[
+            RegexValidator(
+                regex=r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$",
+                message=(
+                    "Enter a valid Zabbix server address. Allowed: hostname or IP (optionally with "
+                    ":port), multiple entries comma-separated. No spaces or shell metacharacters."
+                ),
+            )
+        ],
+        help_text=(
+            "Zabbix server address for the injected agent config (ServerActive= directive). "
+            "Accepts hostname or IP with optional :port; comma-separate multiple entries. "
+            "Only alphanumeric characters, dots, hyphens, brackets, colons, and commas are allowed."
+        ),
+    )
 
     # HCP Packer fields
     hcp_bucket_name = models.CharField(max_length=255, blank=True)

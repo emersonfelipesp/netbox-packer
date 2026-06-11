@@ -90,6 +90,31 @@ dependency).
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 
+### Monitoring agent injection (applied at build time)
+
+Every cloud-config build pass through `_inject_monitoring_agents()` in `jobs.py`
+**before** the payload is sent to proxbox-api. The injection respects the
+`PackerTemplate` model flags:
+
+| Field | Type | Default | Effect |
+|-------|------|---------|--------|
+| `install_qemu_guest_agent` | bool | `True` | Adds `qemu-guest-agent` to the `packages:` list and `systemctl enable --now qemu-guest-agent` to `runcmd:`. Skipped if `qemu-guest-agent` is already in the `packages:` list. |
+| `install_zabbix_agent2` | bool | `True` | Injects a Zabbix Agent 2 bootstrap script (`write_files:` + `runcmd:`). Skipped entirely if the string `"zabbix-agent2"` appears anywhere in the original cloud-config YAML. |
+| `zabbix_server` | str (255) | `"zabbix.nmulti.cloud"` | `ServerActive=` directive written into the injected Zabbix agent config. |
+
+The injection is **idempotent** — running the same template twice produces the
+same cloud-config. The seeded Zabbix 7.4 template already has
+`"zabbix-agent2"` in its content, so the Zabbix injection is skipped for it.
+The seeded InfluxDB template already has `qemu-guest-agent` in its packages
+list, so only the `systemctl enable` runcmd line is added.
+
+The NMS `/virtualization/packer` Create dialog exposes all three fields in a
+"Monitoring agents" section (both toggles default to on, `zabbix_server` input
+appears when the Zabbix toggle is on). Both presets (InfluxDB, Zabbix) default
+all three fields to their `PackerTemplate` defaults.
+
+Migration `0008_packertemplate_monitoring_agents.py` adds the three fields.
+
 ### Seeded examples: Zabbix 7.4 and InfluxDB 2.x
 
 Migration `0006_seed_zabbix_cloud_init.py` seeds a `cloud_config`
