@@ -90,7 +90,9 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert 'installer.installer_type == "cloud_config"' in src
     assert "def _run_proxbox_cloud_build(self, build, template, node, timeout):" in src
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
-    assert "user_data_yaml=installer.content" in src
+    # Monitoring agents are injected before the proxbox-api call.
+    assert "_inject_monitoring_agents(installer.content, template)" in src
+    assert "user_data_yaml=user_data_yaml" in src
     # Gap 1: PackerBuild creation must enqueue the job.
     assert "def dispatch_build(build):" in src
     # PackerBuild is not a jobs-assignable object type in NetBox, so the job must
@@ -290,3 +292,44 @@ def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
         assert "403" in str(exc)
     else:  # pragma: no cover - the call must raise
         raise AssertionError("expected ProxboxApiError")
+
+
+# ── Monitoring agent injection ────────────────────────────────────────────────
+
+
+def test_model_has_monitoring_agent_fields() -> None:
+    src = _read("netbox_packer/models.py")
+    assert "install_qemu_guest_agent = models.BooleanField(" in src
+    assert "install_zabbix_agent2 = models.BooleanField(" in src
+    assert 'zabbix_server = models.CharField(' in src
+    assert '"zabbix.nmulti.cloud"' in src
+
+
+def test_migration_0008_adds_monitoring_agent_fields() -> None:
+    src = _read("netbox_packer/migrations/0008_packertemplate_monitoring_agents.py")
+    assert '"install_qemu_guest_agent"' in src
+    assert '"install_zabbix_agent2"' in src
+    assert '"zabbix_server"' in src
+    assert '"0007_seed_influxdb_cloud_init"' in src  # correct dependency
+
+
+def test_jobs_has_monitoring_injection_functions() -> None:
+    src = _read("netbox_packer/jobs.py")
+    assert "def _zabbix_agent2_bootstrap(zabbix_server" in src
+    assert "def _inject_monitoring_agents(user_data_yaml" in src
+    # Injection function uses deduplication: skip packages if already present.
+    assert '"qemu-guest-agent" not in pkgs' in src
+    # Zabbix whole-YAML dedup: skip entirely if zabbix-agent2 already in content.
+    assert '"zabbix-agent2" not in user_data_yaml' in src
+    # Zabbix bootstrap script uses ServerActive= with the configured server.
+    assert "ServerActive=" in src
+    # Security: module-level regex guard prevents heredoc break-out via zabbix_server.
+    assert "_ZABBIX_SERVER_RE" in src
+    assert "raise ValueError" in src
+
+
+def test_serializer_exposes_monitoring_agent_fields() -> None:
+    src = _read("netbox_packer/api/serializers.py")
+    assert '"install_qemu_guest_agent"' in src
+    assert '"install_zabbix_agent2"' in src
+    assert '"zabbix_server"' in src

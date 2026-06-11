@@ -1,6 +1,7 @@
 """RQ background jobs for netbox-packer."""
 
 import logging
+import re
 import subprocess
 from datetime import timedelta
 
@@ -9,6 +10,12 @@ from django.utils import timezone
 from netbox.jobs import JobRunner
 
 logger = logging.getLogger("netbox_packer.jobs")
+
+# Zabbix ServerActive= value: hostname/IP (optional IPv6 brackets) with optional :port,
+# comma-separated for multiple servers.  No spaces, newlines, or shell metacharacters.
+_ZABBIX_SERVER_RE = re.compile(
+    r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$"
+)
 
 # Minimum CPU arch requirements known to require non-default cpu_type
 MIN_CPU_KNOWN_REQUIREMENTS = {
@@ -141,6 +148,110 @@ def select_build_node(template, skip_affinity_check=False):
     return template.proxmox_endpoint, template.proxmox_node
 
 
+def _zabbix_agent2_bootstrap(zabbix_server: str) -> str:
+    """Return a shell script that installs and configures Zabbix Agent 2 for active checks.
+
+    The script detects the Ubuntu version at runtime and fetches the matching
+    Zabbix release .deb, so the same script works across Ubuntu 22.04, 24.04,
+    and 26.04 without hardcoding a version.
+    """
+    server = zabbix_server.strip() or "zabbix.nmulti.cloud"
+    if not _ZABBIX_SERVER_RE.fullmatch(server):
+        raise ValueError(
+            f"Invalid zabbix_server value: {server!r}. "
+            "Only hostnames, IP addresses, optional :port, and comma-separated entries are allowed."
+        )
+    return f"""\
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+. /etc/os-release
+UBUNTU_CODENAME="${{UBUNTU_CODENAME:-${{VERSION_CODENAME}}}}"
+VERSION_ID="${{VERSION_ID:-24.04}}"
+ZABBIX_RELEASE_DEB="https://repo.zabbix.com/zabbix/7.4/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.4+ubuntu${{VERSION_ID}}_all.deb"
+curl -fsSL -o /tmp/zabbix-release.deb "${{ZABBIX_RELEASE_DEB}}"
+dpkg -i /tmp/zabbix-release.deb
+apt-get update -qq
+apt-get install -y zabbix-agent2
+systemctl stop zabbix-agent2 2>/dev/null || true
+cat > /etc/zabbix/zabbix_agent2.conf <<'ZABBIX_CONF'
+LogFile=/var/log/zabbix/zabbix_agent2.log
+LogFileSize=0
+PidFile=/run/zabbix/zabbix_agent2.pid
+ServerActive={server}
+Hostname=${{HOSTNAME}}
+Include=/etc/zabbix/zabbix_agent2.d/*.conf
+PluginSocket=/run/zabbix/agent.plugin.sock
+ZABBIX_CONF
+systemctl enable --now zabbix-agent2
+"""
+
+
+def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
+    """Inject QEMU Guest Agent and/or Zabbix Agent 2 into a #cloud-config YAML string.
+
+    Deduplication rules:
+    - QEMU Guest Agent: skip package add if 'qemu-guest-agent' already in packages list;
+      always add the systemctl enable runcmd entry if not already present.
+    - Zabbix Agent 2: skip all injection if 'zabbix-agent2' appears anywhere in the YAML
+      (handles templates that already manage Zabbix themselves, e.g. the Zabbix server seed).
+    """
+    import yaml  # stdlib-adjacent; always available in NetBox's Django env via PyYAML
+
+    if not user_data_yaml or not user_data_yaml.strip():
+        return user_data_yaml
+
+    # Preserve the #cloud-config header line (must remain the very first line).
+    lines = user_data_yaml.splitlines(keepends=True)
+    header = lines[0].rstrip("\n") if lines and lines[0].startswith("#") else "#cloud-config"
+    body = "".join(lines[1:]) if lines and lines[0].startswith("#") else user_data_yaml
+
+    config = yaml.safe_load(body) or {}
+    pkgs = list(config.get("packages", []))
+    runcmds = list(config.get("runcmd", []))
+    write_files = list(config.get("write_files", []))
+
+    # --- QEMU Guest Agent ---
+    if getattr(template, "install_qemu_guest_agent", True):
+        if "qemu-guest-agent" not in pkgs:
+            pkgs.append("qemu-guest-agent")
+        # Add enable/start command if not already referenced in any runcmd entry.
+        if not any("qemu-guest-agent" in str(r) for r in runcmds):
+            runcmds.insert(0, ["bash", "-c", "systemctl enable --now qemu-guest-agent || true"])
+
+    # --- Zabbix Agent 2 ---
+    if getattr(template, "install_zabbix_agent2", True):
+        # Whole-YAML dedup: if the existing content already handles zabbix-agent2
+        # (e.g. the Zabbix server template that installs zabbix-server-pgsql + zabbix-agent2),
+        # skip injection entirely to avoid a double-install.
+        if "zabbix-agent2" not in user_data_yaml:
+            zabbix_server = (getattr(template, "zabbix_server", "") or "").strip() or "zabbix.nmulti.cloud"
+            script_path = "/opt/nmulticloud-zabbix-agent2-bootstrap.sh"
+            if not any(
+                (isinstance(f, dict) and f.get("path") == script_path) for f in write_files
+            ):
+                write_files.append(
+                    {
+                        "path": script_path,
+                        "permissions": "0755",
+                        "owner": "root:root",
+                        "content": _zabbix_agent2_bootstrap(zabbix_server),
+                    }
+                )
+            if not any(script_path in str(r) for r in runcmds):
+                runcmds.append(["bash", script_path])
+
+    if pkgs:
+        config["packages"] = pkgs
+    if runcmds:
+        config["runcmd"] = runcmds
+    if write_files:
+        config["write_files"] = write_files
+
+    serialized = yaml.safe_dump(config, default_flow_style=False, allow_unicode=True)
+    return header + "\n" + serialized
+
+
 class PackerBuildJob(JobRunner):
     """
     Execute a Packer build asynchronously.
@@ -231,6 +342,12 @@ class PackerBuildJob(JobRunner):
                 "cloud_config template image via proxbox-api."
             )
 
+        user_data_yaml = _inject_monitoring_agents(installer.content, template)
+        log_lines += [
+            f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
+            f"[INFO] Zabbix Agent 2 injection: {'enabled (server=' + (template.zabbix_server or 'zabbix.nmulti.cloud') + ')' if template.install_zabbix_agent2 else 'disabled'}",
+        ]
+
         try:
             response = call_proxbox_build(
                 proxbox_api_url=api_url,
@@ -239,7 +356,7 @@ class PackerBuildJob(JobRunner):
                 vmid=template.proxmox_template_id,
                 target_node=target_node,
                 image_url=image_url,
-                user_data_yaml=installer.content,
+                user_data_yaml=user_data_yaml,
                 image_storage=storage,
                 vm_storage=storage,
                 storage=storage,
