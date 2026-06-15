@@ -206,3 +206,41 @@ def test_ci_workflow_exists() -> None:
     assert "ruff check" in ci
     assert "ruff format" in ci
     assert "pytest tests" in ci
+
+
+def test_migration_0010_k8s_role_templates_exists() -> None:
+    """Migration 0010 must seed K8s Control Plane (VMID 9013) and Worker (VMID 9014) templates."""
+    src = _read("netbox_packer/migrations/0010_seed_k8s_role_templates.py")
+
+    # Both template names must be present
+    assert "k8s-1.31-control-plane-ubuntu-2404" in src, "Missing CP template name"
+    assert "k8s-1.31-worker-node-ubuntu-2404" in src, "Missing Worker template name"
+
+    # Both installer config names must be present
+    assert "k8s-1.31-control-plane-cloud-config" in src, "Missing CP config name"
+    assert "k8s-1.31-worker-node-cloud-config" in src, "Missing Worker config name"
+
+    # VMIDs must be pinned to 9013 (CP) and 9014 (Worker)
+    assert "9013" in src, "Missing CP VMID 9013"
+    assert "9014" in src, "Missing Worker VMID 9014"
+
+    # Must target the production endpoint, NOT the development one
+    assert "10.0.30.71" in src, "Missing production endpoint"
+    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0010"
+
+    # Dependency must chain from 0009
+    assert '"netbox_packer", "0009_seed_kubernetes_cloud_init"' in src, "Missing dependency on 0009"
+
+    # Must use get_or_create for idempotency
+    assert src.count("get_or_create") >= 4, "Expected at least 4 get_or_create calls (2 configs + 2 templates)"
+
+    # Reverse migration must be present (even as no-op)
+    assert "def unseed_k8s_role_templates" in src, "Missing reverse migration function"
+
+    # Both cloud-configs must be syntactically valid Python strings (checked by test_all_python_files_parse)
+    assert "#cloud-config" in src, "Missing #cloud-config marker"
+
+    # CP template must pre-pull control-plane images; Worker must not
+    assert "kubeadm config images pull" in src, "CP template must pre-pull control-plane images"
+    assert "k8s-control-plane-bootstrap complete" in src, "Missing CP bootstrap completion marker"
+    assert "k8s-worker-node-bootstrap complete" in src, "Missing Worker bootstrap completion marker"
