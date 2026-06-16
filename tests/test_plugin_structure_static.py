@@ -244,3 +244,91 @@ def test_migration_0010_k8s_role_templates_exists() -> None:
     assert "kubeadm config images pull" in src, "CP template must pre-pull control-plane images"
     assert "k8s-control-plane-bootstrap complete" in src, "Missing CP bootstrap completion marker"
     assert "k8s-worker-node-bootstrap complete" in src, "Missing Worker bootstrap completion marker"
+
+
+def test_migration_0008_monitoring_agent_fields_exists() -> None:
+    """Migration 0008 must add install_qemu_guest_agent, install_zabbix_agent2, and zabbix_server fields."""
+    src = _read("netbox_packer/migrations/0008_packertemplate_monitoring_agents.py")
+
+    # All three fields must be added
+    assert "install_qemu_guest_agent" in src, "Missing install_qemu_guest_agent field"
+    assert "install_zabbix_agent2" in src, "Missing install_zabbix_agent2 field"
+    assert "zabbix_server" in src, "Missing zabbix_server field"
+
+    # Dependency must chain from 0007
+    assert '"netbox_packer", "0007_seed_influxdb_cloud_init"' in src, "Missing dependency on 0007"
+
+    # Defaults must be correct
+    assert "default=True" in src, "install_qemu_guest_agent/install_zabbix_agent2 must default to True"
+    assert "zabbix.nmulti.cloud" in src, "zabbix_server must default to zabbix.nmulti.cloud"
+
+
+def test_migration_0009_kubernetes_seed_exists() -> None:
+    """Migration 0009 must seed the Kubernetes 1.31 node template (VMID 9012) on 10.0.30.71."""
+    src = _read("netbox_packer/migrations/0009_seed_kubernetes_cloud_init.py")
+
+    # Template and config names must be present
+    assert "k8s-1.31-ubuntu-2404-node" in src, "Missing K8s node template name"
+
+    # VMID must be pinned to 9012
+    assert "9012" in src, "Missing node VMID 9012"
+
+    # Must target production endpoint
+    assert "10.0.30.71" in src, "Missing production endpoint"
+    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0009"
+
+    # Dependency must chain from 0008
+    assert '"netbox_packer", "0008_packertemplate_monitoring_agents"' in src, "Missing dependency on 0008"
+
+    # Must use get_or_create for idempotency
+    assert src.count("get_or_create") >= 2, "Expected at least 2 get_or_create calls (config + template)"
+
+    # Reverse migration must be a no-op
+    assert "def unseed_kubernetes" in src, "Missing reverse migration function"
+
+    # Cloud-config marker
+    assert "#cloud-config" in src, "Missing #cloud-config marker"
+
+
+def test_migration_0011_powerdns_seed_exists() -> None:
+    """Migration 0011 must seed PowerDNS Authoritative (VMID 9017) and Recursor (VMID 9018) templates."""
+    src = _read("netbox_packer/migrations/0011_seed_powerdns_cloud_init.py")
+
+    # Both template names must be present
+    assert "pdns-auth-ubuntu-2404" in src, "Missing pdns-auth template name"
+    assert "pdns-recursor-ubuntu-2404" in src, "Missing pdns-recursor template name"
+
+    # VMIDs must be pinned
+    assert "9017" in src, "Missing PowerDNS Auth VMID 9017"
+    assert "9018" in src, "Missing PowerDNS Recursor VMID 9018"
+
+    # Must target production endpoint, not development
+    assert "10.0.30.71" in src, "Missing production endpoint"
+    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0011"
+
+    # DNS domain and nameservers
+    assert "nmulti.cloud" in src, "Missing DNS domain nmulti.cloud"
+    assert "168.0.96.26" in src, "Missing nameserver 168.0.96.26"
+    assert "168.0.96.27" in src, "Missing nameserver 168.0.96.27"
+
+    # Cloud-config strings must NOT contain 'zabbix-agent2' (injected by _inject_monitoring_agents)
+    assert "zabbix-agent2" not in src, (
+        "Cloud-config must NOT contain 'zabbix-agent2' — injection is handled by _inject_monitoring_agents"
+    )
+
+    # Official PowerDNS APT repo must be referenced
+    assert "repo.powerdns.com" in src, "Missing PowerDNS APT repository"
+    assert "noble-auth-49" in src, "Missing PowerDNS Authoritative 4.9 APT suite"
+    assert "noble-rec-51" in src, "Missing PowerDNS Recursor 5.1 APT suite"
+
+    # Dependency must chain from 0010
+    assert '"netbox_packer", "0010_seed_k8s_role_templates"' in src, "Missing dependency on 0010"
+
+    # Must use get_or_create for idempotency
+    assert src.count("get_or_create") >= 4, "Expected at least 4 get_or_create calls (2 configs + 2 templates)"
+
+    # Reverse migration must be a no-op
+    assert "def unseed_powerdns" in src, "Missing reverse migration function"
+
+    # Both cloud-configs must be valid Python strings (checked by test_all_python_files_parse)
+    assert src.count("#cloud-config") >= 2, "Expected #cloud-config marker in both configs"
