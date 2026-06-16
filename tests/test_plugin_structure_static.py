@@ -208,9 +208,9 @@ def test_ci_workflow_exists() -> None:
     assert "pytest tests" in ci
 
 
-def test_migration_0010_k8s_role_templates_exists() -> None:
-    """Migration 0010 must seed K8s Control Plane (VMID 9013) and Worker (VMID 9014) templates."""
-    src = _read("netbox_packer/migrations/0010_seed_k8s_role_templates.py")
+def test_migration_0011_k8s_role_templates_exists() -> None:
+    """Migration 0011 must seed K8s Control Plane (VMID 9013) and Worker (VMID 9014) templates."""
+    src = _read("netbox_packer/migrations/0011_seed_k8s_role_templates.py")
 
     # Both template names must be present
     assert "k8s-1.31-control-plane-ubuntu-2404" in src, "Missing CP template name"
@@ -226,10 +226,11 @@ def test_migration_0010_k8s_role_templates_exists() -> None:
 
     # Must target the production endpoint, NOT the development one
     assert "10.0.30.71" in src, "Missing production endpoint"
-    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0010"
+    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0011"
 
-    # Dependency must chain from 0009
-    assert '"netbox_packer", "0009_seed_kubernetes_cloud_init"' in src, "Missing dependency on 0009"
+    # Dependency must chain from 0010_alter_packertemplate_zabbix_server
+    dep = '"netbox_packer", "0010_alter_packertemplate_zabbix_server"'
+    assert dep in src, "Missing dependency on 0010_alter_packertemplate_zabbix_server"
 
     # Must use get_or_create for idempotency
     assert src.count("get_or_create") >= 4, "Expected at least 4 get_or_create calls (2 configs + 2 templates)"
@@ -290,9 +291,9 @@ def test_migration_0009_kubernetes_seed_exists() -> None:
     assert "#cloud-config" in src, "Missing #cloud-config marker"
 
 
-def test_migration_0011_powerdns_seed_exists() -> None:
-    """Migration 0011 must seed PowerDNS Authoritative (VMID 9017) and Recursor (VMID 9018) templates."""
-    src = _read("netbox_packer/migrations/0011_seed_powerdns_cloud_init.py")
+def test_migration_0012_powerdns_seed_exists() -> None:
+    """Migration 0012 must seed PowerDNS Authoritative (VMID 9017) and Recursor (VMID 9018) templates."""
+    src = _read("netbox_packer/migrations/0012_seed_powerdns_cloud_init.py")
 
     # Both template names must be present
     assert "pdns-auth-ubuntu-2404" in src, "Missing pdns-auth template name"
@@ -304,7 +305,7 @@ def test_migration_0011_powerdns_seed_exists() -> None:
 
     # Must target production endpoint, not development
     assert "10.0.30.71" in src, "Missing production endpoint"
-    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0011"
+    assert "10.0.30.139" not in src, "Development endpoint must not appear in migration 0012"
 
     # DNS domain and nameservers
     assert "nmulti.cloud" in src, "Missing DNS domain nmulti.cloud"
@@ -321,8 +322,9 @@ def test_migration_0011_powerdns_seed_exists() -> None:
     assert "noble-auth-49" in src, "Missing PowerDNS Authoritative 4.9 APT suite"
     assert "noble-rec-51" in src, "Missing PowerDNS Recursor 5.1 APT suite"
 
-    # Dependency must chain from 0010
-    assert '"netbox_packer", "0010_seed_k8s_role_templates"' in src, "Missing dependency on 0010"
+    # Dependency must chain from 0011_seed_k8s_role_templates
+    dep = '"netbox_packer", "0011_seed_k8s_role_templates"'
+    assert dep in src, "Missing dependency on 0011_seed_k8s_role_templates"
 
     # Must use get_or_create for idempotency
     assert src.count("get_or_create") >= 4, "Expected at least 4 get_or_create calls (2 configs + 2 templates)"
