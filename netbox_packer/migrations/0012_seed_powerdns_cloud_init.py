@@ -286,7 +286,7 @@ def unseed_powerdns(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("netbox_packer", "0010_seed_k8s_role_templates"),
+        ("netbox_packer", "0011_seed_k8s_role_templates"),
     ]
 
     operations = [

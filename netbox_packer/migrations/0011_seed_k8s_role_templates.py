@@ -314,7 +314,7 @@ def unseed_k8s_role_templates(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("netbox_packer", "0009_seed_kubernetes_cloud_init"),
+        ("netbox_packer", "0010_alter_packertemplate_zabbix_server"),
     ]
 
     operations = [

@@ -98,13 +98,14 @@ are intentional no-ops (never delete operator data on rollback).
 | Migration | Template name | VMID | OS | ProxmoxEndpoint | Notes |
 |---|---|---|---|---|---|
 | `0006` | `zabbix-7.4-ubuntu-2604-pgsql-nginx` | 9010 | Ubuntu 26.04 | `https://10.0.30.139:8006` (dev) | Zabbix 7.4 + PostgreSQL + nginx; dev host only |
-| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only |
+| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only; do **not** target production endpoint `10.0.30.9` |
 | `0008` | *(schema only — adds monitoring-agent fields)* | — | — | — | Adds `install_qemu_guest_agent`, `install_zabbix_agent2`, `zabbix_server` to `PackerTemplate` |
 | `0009` | `k8s-1.31-ubuntu-2404-node` | 9012 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Kubernetes 1.31 base node (containerd + kubelet/kubeadm/kubectl, pre-pulls CP images) |
-| `0010` | `k8s-1.31-control-plane-ubuntu-2404` | 9013 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 control-plane (pre-pulls all CP images for fast `kubeadm init`) |
-| `0010` | `k8s-1.31-worker-node-ubuntu-2404` | 9014 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 worker (no CP image pre-pull) |
-| `0011` | `pdns-auth-ubuntu-2404` | 9017 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Authoritative 4.9 + SQLite3 backend + REST API on 8081; DNS domain `nmulti.cloud`, nameservers `168.0.96.26`/`168.0.96.27` |
-| `0011` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
+| `0010` | *(schema only — adds RegexValidator to `zabbix_server` field)* | — | — | — | `AlterField` on `PackerTemplate.zabbix_server`; no data changes |
+| `0011` | `k8s-1.31-control-plane-ubuntu-2404` | 9013 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 control-plane (pre-pulls all CP images for fast `kubeadm init`) |
+| `0011` | `k8s-1.31-worker-node-ubuntu-2404` | 9014 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 worker (no CP image pre-pull) |
+| `0012` | `pdns-auth-ubuntu-2404` | 9017 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Authoritative 4.9 + SQLite3 backend + REST API on 8081; DNS domain `nmulti.cloud`, nameservers `168.0.96.26`/`168.0.96.27` |
+| `0012` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -121,7 +122,7 @@ The cloud-config installs containerd, kubelet, kubeadm, kubectl 1.31, and
 pre-pulls all control-plane images via `kubeadm config images pull`.
 Enables `qemu-guest-agent`.
 
-#### Migration 0011 — PowerDNS Authoritative and Recursor
+#### Migration 0012 — PowerDNS Authoritative and Recursor
 
 Seeds two templates on ProxmoxEndpoint `10.0.30.71` (storage `local`):
 
