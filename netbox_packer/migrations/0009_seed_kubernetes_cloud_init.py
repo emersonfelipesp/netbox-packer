@@ -99,7 +99,6 @@ runcmd:
 CONFIG_NAME = "k8s-1.31-ubuntu-2404-node"
 CONFIG_VERSION = "1.0.0"
 TEMPLATE_NAME = "k8s-1.31-ubuntu-2404-node"
-# Production Proxmox endpoint.  Do NOT redirect this build to 10.0.30.139.
 PROXMOX_ENDPOINT = "https://10.0.30.71:8006"
 TEMPLATE_VMID = 9012
 

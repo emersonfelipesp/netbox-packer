@@ -115,23 +115,58 @@ all three fields to their `PackerTemplate` defaults.
 
 Migration `0008_packertemplate_monitoring_agents.py` adds the three fields.
 
-### Seeded examples: Zabbix 7.4 and InfluxDB 2.x
+### Seeded examples and migration chain
 
-Migration `0006_seed_zabbix_cloud_init.py` seeds a `cloud_config`
-`PackerInstallerConfig` + `PackerTemplate`
-(`zabbix-7.4-ubuntu-2604-pgsql-nginx`, Ubuntu 26.04, storage `local`, VMID
-9010). The `#cloud-config` installs Zabbix 7.4 server + frontend + agent2,
-PostgreSQL + nginx (PHP 8.5).
+All seed migrations use `get_or_create` for idempotency. Reverse functions
+are intentional no-ops (never delete operator data on rollback).
 
-Migration `0007_seed_influxdb_cloud_init.py` seeds the InfluxDB 2.x Proxmox
-metrics collector template (`influxdb-2-ubuntu-2404-proxmox-collector`, Ubuntu
-24.04, storage `local`, VMID 9011). It installs InfluxDB from the official
-InfluxData APT repository, enables `influxdb` and `qemu-guest-agent`, initializes
-org `nmulticloud` and bucket `proxmox` through the local InfluxDB setup API, and
-writes generated credentials to `/etc/nmulticloud/influxdb-collector.env` on the
-cloned VM. The seed targets only the development ProxmoxEndpoint
-`https://10.0.30.139:8006`; do not point this seeded build at the production
-`10.0.30.9` cluster.
+| Migration | Template name | VMID | OS | ProxmoxEndpoint | Notes |
+|---|---|---|---|---|---|
+| `0006` | `zabbix-7.4-ubuntu-2604-pgsql-nginx` | 9010 | Ubuntu 26.04 | `https://10.0.30.139:8006` (dev) | Zabbix 7.4 + PostgreSQL + nginx; dev host only |
+| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only; do **not** target production endpoint `10.0.30.9` |
+| `0008` | *(schema only — adds monitoring-agent fields)* | — | — | — | Adds `install_qemu_guest_agent`, `install_zabbix_agent2`, `zabbix_server` to `PackerTemplate` |
+| `0009` | `k8s-1.31-ubuntu-2404-node` | 9012 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Kubernetes 1.31 base node (containerd + kubelet/kubeadm/kubectl, pre-pulls CP images) |
+| `0010` | *(schema only — adds RegexValidator to `zabbix_server` field)* | — | — | — | `AlterField` on `PackerTemplate.zabbix_server`; no data changes |
+| `0011` | `k8s-1.31-control-plane-ubuntu-2404` | 9013 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 control-plane (pre-pulls all CP images for fast `kubeadm init`) |
+| `0011` | `k8s-1.31-worker-node-ubuntu-2404` | 9014 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 worker (no CP image pre-pull) |
+| `0012` | `pdns-auth-ubuntu-2404` | 9017 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Authoritative 4.9 + SQLite3 backend + REST API on 8081; DNS domain `nmulti.cloud`, nameservers `168.0.96.26`/`168.0.96.27` |
+| `0012` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
+
+#### Migration 0008 — monitoring-agent fields
+
+Adds three fields to `PackerTemplate` used by `_inject_monitoring_agents()` at build time:
+
+- `install_qemu_guest_agent` (BooleanField, default `True`) — injects `qemu-guest-agent` install + `systemctl enable`.
+- `install_zabbix_agent2` (BooleanField, default `True`) — injects Zabbix Agent 2 bootstrap. **Injection is skipped entirely** if the installer config already contains the string `"zabbix-agent2"` (hyphen).
+- `zabbix_server` (CharField, default `"zabbix.nmulti.cloud"`) — sets the `ServerActive=` directive in the injected Zabbix config.
+
+#### Migration 0009 — Kubernetes 1.31 base node
+
+Seeds `k8s-1.31-ubuntu-2404-node` (VMID 9012) on ProxmoxEndpoint `10.0.30.71`.
+The cloud-config installs containerd, kubelet, kubeadm, kubectl 1.31, and
+pre-pulls all control-plane images via `kubeadm config images pull`.
+Enables `qemu-guest-agent`.
+
+#### Migration 0012 — PowerDNS Authoritative and Recursor
+
+Seeds two templates on ProxmoxEndpoint `10.0.30.71` (storage `local`):
+
+**`pdns-auth-ubuntu-2404` (VMID 9017):**
+- Installs `pdns-server` + `pdns-backend-sqlite3` from the official PowerDNS APT repo (suite `noble-auth-49`).
+- GPG key: `https://repo.powerdns.com/FD380FBB-pub.asc`
+- SQLite3 database initialized at `/var/lib/powerdns/pdns.sqlite3`.
+- REST API enabled on port 8081; `api-key` placeholder must be changed before production.
+- `systemd-resolved` drop-in: `DNS=168.0.96.26 168.0.96.27`, `Domains=nmulti.cloud`.
+- Cloud-config does NOT contain `"zabbix-agent2"` — QEMU guest agent and
+  Zabbix Agent 2 (pointing at `zabbix.nmulti.cloud`) are injected by
+  `_inject_monitoring_agents()` at build time.
+
+**`pdns-recursor-ubuntu-2404` (VMID 9018):**
+- Installs `pdns-recursor` from the official PowerDNS APT repo (suite `noble-rec-51`).
+- Configured as a caching forwarder: `forward-zones-recurse=.=168.0.96.26;168.0.96.27`.
+- `allow-from` restricted to `127.0.0.1/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ::1/128`.
+- Same systemd-resolved drop-in for DNS domain and nameservers.
+- Same QEMU guest agent + Zabbix Agent 2 injection at build time.
 
 Operator docs for this flow live in
 `docs/cloud-init-template-images.md`. Keep that file, `README.md`, `AGENTS.md`,
