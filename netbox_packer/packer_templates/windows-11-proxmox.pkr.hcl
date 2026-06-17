@@ -13,8 +13,21 @@ packer {
 
 variable "proxmox_url" {
   type        = string
-  default     = ""
-  description = "Proxmox API URL (e.g. https://10.0.30.71:8006/api2/json). Falls back to PROXMOX_URL env var."
+  default     = env("PROXMOX_URL")
+  description = "Proxmox API URL (e.g. https://10.0.30.71:8006/api2/json). Set via PROXMOX_URL env var."
+}
+
+variable "proxmox_username" {
+  type        = string
+  default     = env("PROXMOX_USERNAME")
+  description = "Proxmox API token username (user@realm!tokenid). Set via PROXMOX_USERNAME env var."
+}
+
+variable "proxmox_token" {
+  type        = string
+  default     = env("PROXMOX_TOKEN")
+  sensitive   = true
+  description = "Proxmox API token secret (raw UUID). Set via PROXMOX_TOKEN env var."
 }
 
 variable "proxmox_node" {
@@ -91,7 +104,7 @@ variable "disk_size" {
 
 variable "network_bridge" {
   type        = string
-  default     = "vmbr0"
+  default     = "vmbr1"
   description = "Proxmox network bridge to attach the build VM to."
 }
 
@@ -117,9 +130,9 @@ variable "winrm_password" {
 
 source "proxmox-iso" "windows11" {
   # --- Proxmox connection ---
-  proxmox_url              = env("PROXMOX_URL") != "" ? env("PROXMOX_URL") : var.proxmox_url
-  username                 = env("PROXMOX_USERNAME")
-  token                    = env("PROXMOX_TOKEN")
+  proxmox_url              = var.proxmox_url
+  username                 = var.proxmox_username
+  token                    = var.proxmox_token
   insecure_skip_tls_verify = true
 
   # --- VM placement ---
@@ -170,9 +183,10 @@ source "proxmox-iso" "windows11" {
     # any attached drive at the start of the windowsPE phase.
     # templatefile() injects var.winrm_password at build time; the password
     # is never written to any file in the repository.
-    device   = "ide2"
-    unmount  = true
-    cd_label = "UNATTEND"
+    device           = "ide2"
+    unmount          = true
+    iso_storage_pool = var.proxmox_storage_pool
+    cd_label         = "UNATTEND"
     cd_content = {
       "autounattend.xml" = templatefile(
         "${path.root}/windows-11/autounattend.xml.tpl",
@@ -188,7 +202,6 @@ source "proxmox-iso" "windows11" {
     type         = "virtio"
     format       = "raw"
     discard      = true
-    io_thread    = true
   }
 
   # --- Network ---

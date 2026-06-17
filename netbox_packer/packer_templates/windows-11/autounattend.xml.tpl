@@ -229,6 +229,28 @@
   <!-- ================================================================ -->
   <settings pass="oobeSystem">
 
+    <!--
+      Install VirtIO guest tools (includes QEMU guest agent service) early in
+      OOBE so the Proxmox QEMU agent is running before Packer polls for the
+      VM's IP address via 'qemu_agent = true'.  Without this, Packer never
+      gets the IP and the WinRM connection times out.
+      The MSI is at the root of the virtio-win ISO; drive letter varies by
+      slot so we probe D through K.
+    -->
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>cmd.exe /c for %d in (D E F G H I J K) do if exist %d:\virtio-win-gt-x64.msi msiexec.exe /i %d:\virtio-win-gt-x64.msi /qn /norestart ADDLOCAL=ALL</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35"
