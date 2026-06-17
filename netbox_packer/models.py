@@ -39,6 +39,7 @@ class PackerInstallerConfig(NetBoxModel):
         ("kickstart", "Anaconda kickstart (RHEL-family)"),
         ("preseed", "d-i preseed (Debian)"),
         ("cloud_config", "Cloud-config YAML (#cloud-config, Proxmox/generic)"),
+        ("unattend", "Windows Unattend XML (autounattend.xml)"),
     ]
 
     name = models.CharField(max_length=100)

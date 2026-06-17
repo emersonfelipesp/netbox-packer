@@ -10,6 +10,7 @@ class OSFamilyChoices(ChoiceSet):
     CHOICE_PROXMOX_VE = "proxmox_ve"
     CHOICE_PROXMOX_BS = "proxmox_bs"
     CHOICE_PROXMOX_PDM = "proxmox_pdm"
+    CHOICE_WINDOWS = "windows"
 
     CHOICES = [
         (CHOICE_UBUNTU, "Ubuntu", "blue"),
@@ -18,6 +19,7 @@ class OSFamilyChoices(ChoiceSet):
         (CHOICE_PROXMOX_VE, "Proxmox VE", "purple"),
         (CHOICE_PROXMOX_BS, "Proxmox Backup Server", "orange"),
         (CHOICE_PROXMOX_PDM, "Proxmox Datacenter Manager", "cyan"),
+        (CHOICE_WINDOWS, "Windows", "teal"),
     ]
 
 
