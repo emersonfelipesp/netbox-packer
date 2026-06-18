@@ -7,6 +7,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "netbox_packer"
+SUPPORTED_NETBOX_IMAGES = (
+    "netboxcommunity/netbox:v4.5.8",
+    "netboxcommunity/netbox:v4.5.9",
+    "netboxcommunity/netbox:v4.6.0",
+    "netboxcommunity/netbox:v4.6.1",
+    "netboxcommunity/netbox:v4.6.2",
+    "netboxcommunity/netbox:v4.6.3",
+)
 
 
 def _read(path: str) -> str:
@@ -206,6 +214,28 @@ def test_ci_workflow_exists() -> None:
     assert "ruff check" in ci
     assert "ruff format" in ci
     assert "pytest tests" in ci
+
+
+def test_e2e_workflow_covers_supported_netbox_versions() -> None:
+    workflow = _read(".github/workflows/e2e.yml")
+
+    for image in SUPPORTED_NETBOX_IMAGES:
+        assert image in workflow
+
+
+def test_docs_name_supported_netbox_versions() -> None:
+    docs = "\n".join(
+        [
+            _read("CERTIFICATION.md"),
+            _read("README.md"),
+            _read("docs/certification.md"),
+            _read("docs/index.md"),
+            _read("docs/release-notes/version-0.0.2.post2.md"),
+        ]
+    )
+
+    for image in SUPPORTED_NETBOX_IMAGES:
+        assert image.rsplit(":", 1)[1] in docs
 
 
 def test_migration_0011_k8s_role_templates_exists() -> None:

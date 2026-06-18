@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- NetBox 4.5.8 through 4.6.x
+- NetBox 4.5.8, 4.5.9, and 4.6.0 through 4.6.3
 - Python 3.12+
 - Optional HCP Packer Registry credentials for registry synchronization
 
