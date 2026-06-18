@@ -70,7 +70,7 @@ jobs:
 
   # ── NetBox integration tests ──────────────────────────────────────────────
   test:
-    name: Test (NetBox v4.6.1 source)
+    name: Test (NetBox v4.6.3 source)
     runs-on: ubuntu-latest
     needs: [lint, static-tests, package]
 
@@ -111,9 +111,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev
 
-      - name: Run NetBox v4.6.1 source test suite
+      - name: Run NetBox v4.6.3 source test suite
         env:
-          NETBOX_REF: v4.6.1
+          NETBOX_REF: v4.6.3
           NETBOX_PLUGINS_JSON: '["netbox_packer"]'
           MIGRATION_APPS: "netbox_packer"
           TEST_LABELS: "netbox_packer"
