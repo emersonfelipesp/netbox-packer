@@ -5,7 +5,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("netbox_packer", "0009_seed_kubernetes_cloud_init"),
     ]

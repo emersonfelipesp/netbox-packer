@@ -66,6 +66,52 @@ variables:
 | `INFLUXDB_RETENTION_SECONDS` | Bucket retention, default `2592000` |
 | `INFLUXDB_ADMIN_TOKEN` | Admin token, default random |
 
+## PowerDNS Authoritative + Recursor Template
+
+Migration `0013_seed_powerdns_auth_recursor_cloud_init.py` seeds a co-hosted
+PowerDNS image for internal DNS service VMs.
+
+| Field | Value |
+| --- | --- |
+| Template name | `powerdns-auth-recursor-ubuntu` |
+| Installer config | `powerdns-auth-recursor-ubuntu` |
+| OS | Ubuntu `24.04` |
+| Template VMID | `9019` |
+| Proxmox endpoint | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` |
+| Storage | `local` |
+| Authoritative listener | `127.0.0.1:5300` |
+| Recursor listener | VM primary IPv4 address on port `53` |
+
+The default bake target is the CLUSTER01-DC01 PVE cluster host
+`10.0.30.71`. Operators may override the node or VMID at build dispatch when a
+different target is needed.
+
+The cloud-init payload installs `pdns-server`, `pdns-backend-sqlite3`,
+`pdns-recursor`, `qemu-guest-agent`, `sqlite3`, and `iproute2`. The
+authoritative service uses the bundled SQLite3 backend and initializes the
+`gsqlite3` schema at `/var/lib/powerdns/pdns.sqlite3`.
+
+Authoritative is loopback-only:
+
+- DNS: `local-address=127.0.0.1`, `local-port=5300`
+- API: `webserver=yes`, `webserver-address=127.0.0.1`, `webserver-port=8081`
+- API key placeholder: `PDNS_AUTH_API_KEY`
+
+Recursor is the resolver surface:
+
+- DNS: VM primary IPv4 on port 53
+- API: `webserver=yes`, `webserver-address=127.0.0.1`, `webserver-port=8082`
+- Local-zone forwarding: `PDNS_LOCAL_FORWARD_ZONES`, default
+  `nmulti.cloud=127.0.0.1:5300`
+- Optional recursive forwarding: `PDNS_LOCAL_FORWARD_ZONES_RECURSE` appends a
+  `forward-zones-recurse` entry when provided
+- API key placeholder: `PDNS_RECURSOR_API_KEY`
+
+The recursor `allow-from` list is restricted to `127.0.0.1/8`, `10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, and `::1/128`. Do not set it to
+`0.0.0.0/0`; this template must not become an open resolver.
+
 ## Build Verification
 
 After the build completes, the template row should have:
@@ -78,6 +124,12 @@ After the build completes, the template row should have:
 On the Proxmox development endpoint, VMID `9011` should be marked as a template
 and include a cloud-init `cicustom` user-data snippet. The production endpoint
 `10.0.30.9` must remain untouched by this process.
+
+For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
+on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
+`127.0.0.1:5300`, `pdns-recursor` should listen on the primary IPv4 address on
+port 53, both PowerDNS API webservers should bind to localhost, and no
+configuration should expose recursion to `0.0.0.0/0`.
 
 ## Regression Coverage
 
@@ -92,3 +144,6 @@ and include a cloud-init `cicustom` user-data snippet. The production endpoint
   credential file;
 - project docs and LLM files mention the template identity and production
   endpoint guardrail.
+- the PowerDNS co-hosted seed keeps `pdns-server`, `pdns-recursor`,
+  `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
+  reversible seeded-row cleanup stable.

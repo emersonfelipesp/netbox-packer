@@ -13,9 +13,7 @@ logger = logging.getLogger("netbox_packer.jobs")
 
 # Zabbix ServerActive= value: hostname/IP (optional IPv6 brackets) with optional :port,
 # comma-separated for multiple servers.  No spaces, newlines, or shell metacharacters.
-_ZABBIX_SERVER_RE = re.compile(
-    r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$"
-)
+_ZABBIX_SERVER_RE = re.compile(r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$")
 
 # Minimum CPU arch requirements known to require non-default cpu_type
 MIN_CPU_KNOWN_REQUIREMENTS = {
@@ -220,26 +218,22 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
             runcmds.insert(0, ["bash", "-c", "systemctl enable --now qemu-guest-agent || true"])
 
     # --- Zabbix Agent 2 ---
-    if getattr(template, "install_zabbix_agent2", True):
-        # Whole-YAML dedup: if the existing content already handles zabbix-agent2
-        # (e.g. the Zabbix server template that installs zabbix-server-pgsql + zabbix-agent2),
-        # skip injection entirely to avoid a double-install.
-        if "zabbix-agent2" not in user_data_yaml:
-            zabbix_server = (getattr(template, "zabbix_server", "") or "").strip() or "zabbix.nmulti.cloud"
-            script_path = "/opt/nmulticloud-zabbix-agent2-bootstrap.sh"
-            if not any(
-                (isinstance(f, dict) and f.get("path") == script_path) for f in write_files
-            ):
-                write_files.append(
-                    {
-                        "path": script_path,
-                        "permissions": "0755",
-                        "owner": "root:root",
-                        "content": _zabbix_agent2_bootstrap(zabbix_server),
-                    }
-                )
-            if not any(script_path in str(r) for r in runcmds):
-                runcmds.append(["bash", script_path])
+    # Whole-YAML dedup: if the existing content already handles zabbix-agent2
+    # (e.g. the Zabbix server template), skip injection to avoid a double-install.
+    if getattr(template, "install_zabbix_agent2", True) and "zabbix-agent2" not in user_data_yaml:
+        zabbix_server = (getattr(template, "zabbix_server", "") or "").strip() or "zabbix.nmulti.cloud"
+        script_path = "/opt/nmulticloud-zabbix-agent2-bootstrap.sh"
+        if not any((isinstance(f, dict) and f.get("path") == script_path) for f in write_files):
+            write_files.append(
+                {
+                    "path": script_path,
+                    "permissions": "0755",
+                    "owner": "root:root",
+                    "content": _zabbix_agent2_bootstrap(zabbix_server),
+                }
+            )
+        if not any(script_path in str(r) for r in runcmds):
+            runcmds.append(["bash", script_path])
 
     if pkgs:
         config["packages"] = pkgs
@@ -343,9 +337,12 @@ class PackerBuildJob(JobRunner):
             )
 
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
+        zabbix_status = "disabled"
+        if template.install_zabbix_agent2:
+            zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"
         log_lines += [
             f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
-            f"[INFO] Zabbix Agent 2 injection: {'enabled (server=' + (template.zabbix_server or 'zabbix.nmulti.cloud') + ')' if template.install_zabbix_agent2 else 'disabled'}",
+            f"[INFO] Zabbix Agent 2 injection: {zabbix_status}",
         ]
 
         try:

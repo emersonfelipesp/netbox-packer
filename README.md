@@ -35,8 +35,8 @@ Requirements: `proxbox-api >= 0.0.18` with
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 `snippets,import,images`. Configure `proxbox_api_url` + an encrypted API key on
-the plugin settings page. A Zabbix 7.4 (Ubuntu 26.04, PostgreSQL + nginx)
-template is seeded as a working example.
+the plugin settings page. Seeded examples include Zabbix 7.4, InfluxDB 2, and
+PowerDNS service images.
 
 The InfluxDB 2 Proxmox metrics collector seed is
 `influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, on the development
@@ -44,6 +44,15 @@ endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not target the
 production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seeded bake
 process. See [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md),
 `CLAUDE.md`, and the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
+
+The PowerDNS co-hosted Authoritative + Recursor seed is
+`powerdns-auth-recursor-ubuntu`, VMID `9019`, on Ubuntu 24.04. It installs
+`pdns-server`, `pdns-backend-sqlite3`, `pdns-recursor`, and `qemu-guest-agent`.
+Authoritative listens only on `127.0.0.1:5300`, while Recursor listens on the
+VM primary interface on port 53 and forwards local zones to that loopback
+authoritative listener. The resolver allow-list is locked to private ranges
+including `10.0.0.0/8` and `172.16.0.0/12`; it must never be changed to
+`0.0.0.0/0`.
 
 ## Compatibility
 

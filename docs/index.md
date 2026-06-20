@@ -28,6 +28,14 @@ development endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not
 target the production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this
 seeded build process.
 
+The PowerDNS co-hosted Authoritative + Recursor seed is
+`powerdns-auth-recursor-ubuntu`, VMID `9019`, targeting CLUSTER01-DC01 at
+`https://10.0.30.71:8006` / node `10.0.30.71`. It installs `pdns-server`,
+`pdns-recursor`, and `qemu-guest-agent`, keeps authoritative on
+`127.0.0.1:5300`, and restricts recursive `allow-from` ranges to internal
+networks such as `10.0.0.0/8` and `172.16.0.0/12`. Never expose recursion to
+`0.0.0.0/0`.
+
 ## Compatibility
 
 | NetBox | netbox-packer | Python |

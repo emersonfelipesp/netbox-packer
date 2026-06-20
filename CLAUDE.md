@@ -117,8 +117,9 @@ Migration `0008_packertemplate_monitoring_agents.py` adds the three fields.
 
 ### Seeded examples and migration chain
 
-All seed migrations use `get_or_create` for idempotency. Reverse functions
-are intentional no-ops (never delete operator data on rollback).
+All seed migrations use `get_or_create` for idempotency. Historical seed
+reverse functions are no-ops to avoid deleting operator data on rollback;
+new reversible seeds such as `0013` delete only the named rows they add.
 
 | Migration | Template name | VMID | OS | ProxmoxEndpoint | Notes |
 |---|---|---|---|---|---|
@@ -131,6 +132,7 @@ are intentional no-ops (never delete operator data on rollback).
 | `0011` | `k8s-1.31-worker-node-ubuntu-2404` | 9014 | Ubuntu 24.04 | `https://10.0.30.71:8006` | K8s 1.31 worker (no CP image pre-pull) |
 | `0012` | `pdns-auth-ubuntu-2404` | 9017 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Authoritative 4.9 + SQLite3 backend + REST API on 8081; DNS domain `nmulti.cloud`, nameservers `168.0.96.26`/`168.0.96.27` |
 | `0012` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
+| `0013` | `powerdns-auth-recursor-ubuntu` | 9019 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Co-hosted PowerDNS Authoritative + Recursor; auth on `127.0.0.1:5300`, recursor on primary interface `:53`, private client ranges only |
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -167,6 +169,37 @@ Seeds two templates on ProxmoxEndpoint `10.0.30.71` (storage `local`):
 - `allow-from` restricted to `127.0.0.1/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ::1/128`.
 - Same systemd-resolved drop-in for DNS domain and nameservers.
 - Same QEMU guest agent + Zabbix Agent 2 injection at build time.
+
+#### Migration 0013 — Co-hosted PowerDNS Authoritative + Recursor
+
+Seeds `powerdns-auth-recursor-ubuntu` (VMID 9019) on ProxmoxEndpoint
+`https://10.0.30.71:8006` / node `10.0.30.71`. This is the CLUSTER01-DC01 PVE
+cluster host default; the node and VMID may still be overridden at build
+dispatch when an operator needs a different bake target.
+
+The cloud-config installs `pdns-server`, `pdns-backend-sqlite3`,
+`pdns-recursor`, `qemu-guest-agent`, `sqlite3`, and `iproute2` from the Ubuntu
+24.04 package repositories. It initializes the bundled `gsqlite3` schema under
+`/var/lib/powerdns/pdns.sqlite3`.
+
+Authoritative is private to the VM:
+- `local-address=127.0.0.1`
+- `local-port=5300`
+- REST API webserver bound to `127.0.0.1:8081`
+- `api-key` populated from the placeholder variable `PDNS_AUTH_API_KEY`
+
+Recursor is the public-facing resolver surface:
+- `local-address` is set to the VM primary IPv4 discovered at first boot
+- `local-port=53`
+- `forward-zones` defaults local zones to `nmulti.cloud=127.0.0.1:5300`
+- optional `PDNS_LOCAL_FORWARD_ZONES_RECURSE` appends `forward-zones-recurse`
+- REST API webserver bound to `127.0.0.1:8082`
+- `allow-from` is restricted to `127.0.0.1/8`, `10.0.0.0/8`,
+  `172.16.0.0/12`, `192.168.0.0/16`, and `::1/128`
+
+Never set the recursor allow-list to `0.0.0.0/0`; this seed must not create an
+open resolver. Replace `PDNS_AUTH_API_KEY` and `PDNS_RECURSOR_API_KEY`
+placeholders before production use.
 
 Operator docs for this flow live in
 `docs/cloud-init-template-images.md`. Keep that file, `README.md`, `AGENTS.md`,

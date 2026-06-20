@@ -203,6 +203,79 @@ def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
     assert "cloud-init-template-images.md" in mkdocs
 
 
+def test_powerdns_auth_recursor_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0013_seed_powerdns_auth_recursor_cloud_init.py"
+    src = _read(rel)
+    constants = _literal_assignments(rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+
+    assert constants["CONFIG_NAME"] == "powerdns-auth-recursor-ubuntu"
+    assert constants["CONFIG_VERSION"] == "1.0.0"
+    assert constants["TEMPLATE_NAME"] == "powerdns-auth-recursor-ubuntu"
+    assert constants["TEMPLATE_VMID"] == 9019
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
+    assert constants["PROXMOX_NODE"] == "10.0.30.71"
+    assert name == constants["TEMPLATE_NAME"]
+
+    assert defaults["os_family"] == "ubuntu"
+    assert defaults["os_version"] == "24.04"
+    assert defaults["proxmox_template_id"] == 9019
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
+    assert defaults["proxmox_node"] == "10.0.30.71"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+
+    assert '"installer_type": "cloud_config"' in src
+    for package in ("pdns-server", "pdns-backend-sqlite3", "pdns-recursor", "qemu-guest-agent"):
+        assert package in src
+
+    assert "local-address=127.0.0.1" in src
+    assert "local-port=5300" in src
+    assert "webserver-address=127.0.0.1" in src
+    assert "webserver-port=8081" in src
+    assert "webserver-port=8082" in src
+    assert "__SET_PDNS_AUTH_API_KEY_AT_PROVISION__" in src
+    assert "__SET_PDNS_RECURSOR_API_KEY_AT_PROVISION__" in src
+    assert "api-key=changeme" not in src
+
+    assert "local-address=${PRIMARY_IPV4}" in src
+    assert "forward-zones=${LOCAL_FORWARD_ZONES}" in src
+    assert "PDNS_LOCAL_FORWARD_ZONES:-nmulti.cloud=127.0.0.1:5300" in src
+    assert "forward-zones-recurse=%s" in src
+    assert "allow-from=${ALLOW_FROM}" in src
+    assert "10.0.0.0/8" in src
+    assert "172.16.0.0/12" in src
+    assert "192.168.0.0/16" in src
+    assert "0.0.0.0/0" not in src
+
+    assert "schema.sqlite3.sql" in src
+    assert "systemctl enable pdns.service pdns-recursor.service" in src
+    assert "systemctl restart pdns.service pdns-recursor.service" in src
+    assert "[systemctl, enable, --now, qemu-guest-agent]" in src
+
+    assert "PackerTemplate.objects.filter(name=TEMPLATE_NAME).delete()" in src
+    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
+    assert '"netbox_packer", "0012_seed_powerdns_cloud_init"' in src
+
+
+def test_powerdns_auth_recursor_process_is_documented_for_operators_and_agents() -> None:
+    required = (
+        "powerdns-auth-recursor-ubuntu",
+        "9019",
+        "127.0.0.1:5300",
+        "pdns-server",
+        "pdns-recursor",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "0.0.0.0/0",
+    )
+    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+
 # ── Isolated functional test of the proxbox-api client ────────────────────────
 
 
@@ -301,7 +374,7 @@ def test_model_has_monitoring_agent_fields() -> None:
     src = _read("netbox_packer/models.py")
     assert "install_qemu_guest_agent = models.BooleanField(" in src
     assert "install_zabbix_agent2 = models.BooleanField(" in src
-    assert 'zabbix_server = models.CharField(' in src
+    assert "zabbix_server = models.CharField(" in src
     assert '"zabbix.nmulti.cloud"' in src
 
 
