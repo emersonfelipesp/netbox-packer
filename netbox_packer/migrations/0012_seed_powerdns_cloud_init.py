@@ -24,6 +24,8 @@ write_files:
       [Resolve]
       DNS=168.0.96.26 168.0.96.27
       Domains=nmulti.cloud
+      # Disable the systemd-resolved stub on 127.0.0.53:53 so PowerDNS can bind 0.0.0.0:53.
+      DNSStubListener=no
   - path: /etc/apt/sources.list.d/pdns.sources
     permissions: "0644"
     owner: root:root
@@ -63,7 +65,6 @@ write_files:
       gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
       local-address=0.0.0.0
       local-port=53
-      local-ipv6=::
       api=yes
       api-key=changeme-override-before-production
       webserver=yes
@@ -72,15 +73,15 @@ write_files:
       webserver-allow-from=127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       loglevel=4
       log-dns-queries=no
-      default-soa-mail=hostmaster.nmulti.cloud
       PDNSCONF
       chmod 640 /etc/powerdns/pdns.conf
       chown root:pdns /etc/powerdns/pdns.conf
 
-      # 4. Initialize SQLite backend schema
+      # 4. Initialize SQLite backend schema (path is resolved dynamically so the
+      #    bootstrap survives pdns-backend-sqlite3 packaging-path changes).
       mkdir -p /var/lib/powerdns
-      sqlite3 /var/lib/powerdns/pdns.sqlite3 \\
-        < /usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql
+      SCHEMA=$(find /usr/share -name 'schema.sqlite3.sql' 2>/dev/null | head -1)
+      sqlite3 /var/lib/powerdns/pdns.sqlite3 < "$SCHEMA"
       chown -R pdns:pdns /var/lib/powerdns
 
       # 5. Apply DNS resolver config and start service
@@ -114,6 +115,8 @@ write_files:
       [Resolve]
       DNS=168.0.96.26 168.0.96.27
       Domains=nmulti.cloud
+      # Disable the systemd-resolved stub on 127.0.0.53:53 so PowerDNS can bind 0.0.0.0:53.
+      DNSStubListener=no
   - path: /etc/apt/sources.list.d/pdns.sources
     permissions: "0644"
     owner: root:root
@@ -153,7 +156,6 @@ write_files:
       forward-zones-recurse=.=168.0.96.26;168.0.96.27
       local-address=0.0.0.0
       local-port=53
-      local-ipv6=::
       dnssec=off
       loglevel=4
       quiet=yes
