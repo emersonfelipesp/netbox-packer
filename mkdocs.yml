@@ -57,6 +57,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - Configuration: configuration.md
+  - Data Models: models.md
   - Cloud-init Template Images: cloud-init-template-images.md
   - Certification: certification.md
   - Release Notes:
