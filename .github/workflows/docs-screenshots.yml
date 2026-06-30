@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  NETBOX_IMAGE: netboxcommunity/netbox:v4.6.3
+  NETBOX_IMAGE: netboxcommunity/netbox:v4.6.4
   SECRET_KEY: netbox-packer-e2e-secret-key-netbox-packer-e2e-secret-key-netbox-packer-e2e
 
 jobs:
