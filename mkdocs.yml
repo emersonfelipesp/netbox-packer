@@ -63,5 +63,6 @@ nav:
   - Certification: certification.md
   - Release Notes:
       - Summary: release-notes/index.md
+      - Version 0.0.5: release-notes/version-0.0.5.md
       - Version 0.0.2.post2: release-notes/version-0.0.2.post2.md
   - Roadmap: roadmap.md

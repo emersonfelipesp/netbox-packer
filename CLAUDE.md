@@ -38,7 +38,37 @@ The plugin package is `netbox_packer/`:
 - `netbox_packer/proxbox_client.py` — stdlib HTTP client to proxbox-api
 - `netbox_packer/migrations/` — schema + data migrations
 - `netbox_packer/templates/` — Django HTML templates
+- `netbox_packer/static/netbox_packer/` — plugin static assets (e.g.
+  `os_version_filter.js`)
 - `tests/` — static (text/AST) and functional tests
+
+## Template form UX (`PackerTemplateForm`)
+
+The template add/edit form is tuned for creating cloud-init templates:
+
+- **`os_version` is a grouped dropdown**, not free text. Options live in the
+  single `OS_VERSIONS_BY_FAMILY` mapping in `choices.py` (helpers
+  `os_version_grouped_choices()` / `os_version_known_values()`) and are rendered
+  as optgroups by OS family. The static `os_version_filter.js` (loaded via the
+  form's `Media`) is **progressive enhancement**: it narrows the list to the
+  selected family using the `data-os-version-map` JSON on the widget, but the
+  grouped `<select>` works fully without JavaScript.
+  - The model field and REST API stay a plain `CharField` — **no migration** and
+    automation can still POST any version string.
+  - The form's `__init__` re-adds an instance's stored `os_version` if it is not
+    in the offered list (labelled `… (current)`), so editing an older template
+    never fails validation. The JS mirrors this (keeps an off-list value).
+  - Add a new offered version by appending a `("<ver>", "<label>")` tuple to the
+    relevant family list in `OS_VERSIONS_BY_FAMILY`; no migration needed.
+- **Machine-managed fields are hidden** from the form (`built_at`,
+  `packer_template_ref`, `installer_config_checksum_at_build`) — they are written
+  by `PackerBuildJob` and remain available via the REST API.
+- **Help text** guides `os_version`, `proxmox_template_id`, `storage_pool`,
+  `cloud_init_ready`, and `installer_config`.
+
+Verify form changes against a live NetBox runtime (per the workspace NetBox form
+guardrail), not only the static AST tests in
+`tests/test_plugin_structure_static.py`.
 
 ## Cloud-init Template Image Bake (cloud_config path)
 

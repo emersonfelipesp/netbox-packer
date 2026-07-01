@@ -1,4 +1,5 @@
 """Static structure tests — run without Django or NetBox installed."""
+
 from __future__ import annotations
 
 import ast
@@ -45,7 +46,7 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.4"
+    assert project["version"] == "0.0.5"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
     assert project["license"] == "Apache-2.0"
@@ -143,9 +144,9 @@ def test_api_routes_registered() -> None:
 def test_build_action_endpoint_exists() -> None:
     """POST /build/ action and cancel action must exist in api/views.py."""
     api_views = _read("netbox_packer/api/views.py")
-    assert 'def build' in api_views
-    assert 'def cancel' in api_views
-    assert 'HTTP_202_ACCEPTED' in api_views
+    assert "def build" in api_views
+    assert "def cancel" in api_views
+    assert "HTTP_202_ACCEPTED" in api_views
 
 
 def test_validate_node_uses_node_affinity_validator() -> None:
@@ -365,3 +366,49 @@ def test_migration_0012_powerdns_seed_exists() -> None:
 
     # Both cloud-configs must be valid Python strings (checked by test_all_python_files_parse)
     assert src.count("#cloud-config") >= 2, "Expected #cloud-config marker in both configs"
+
+
+def test_os_versions_by_family_mapping() -> None:
+    """choices.py must expose an OS version map covering seeded values + helpers."""
+    choices_src = _read("netbox_packer/choices.py")
+    assert "OS_VERSIONS_BY_FAMILY" in choices_src, "Missing OS_VERSIONS_BY_FAMILY mapping"
+    assert "def os_version_grouped_choices" in choices_src, "Missing os_version_grouped_choices helper"
+    assert "def os_version_known_values" in choices_src, "Missing os_version_known_values helper"
+    # Seeded os_version values must stay offered so existing templates remain editable.
+    for version in ('"24.04"', '"26.04"'):
+        assert version in choices_src, f"Missing seeded os_version {version} in OS_VERSIONS_BY_FAMILY"
+
+
+def test_template_form_os_version_is_grouped_dropdown() -> None:
+    """PackerTemplateForm must render os_version as a grouped ChoiceField dropdown."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "os_version = forms.ChoiceField" in block, "os_version must be a forms.ChoiceField (dropdown)"
+    assert "os_version_grouped_choices()" in block, "os_version choices must use os_version_grouped_choices()"
+    assert "add_blank_choice" in block, "os_version dropdown must include a blank placeholder"
+    assert "os_version_known_values()" in block, "os_version __init__ must guard off-list current values"
+    assert "data-os-version-map" in block, "os_version widget must expose the family->versions map for the JS filter"
+    assert 'js = ("netbox_packer/os_version_filter.js",)' in block, "Form.Media must load os_version_filter.js"
+
+
+def test_template_form_declutters_machine_managed_fields() -> None:
+    """Machine-managed lifecycle fields must not be exposed on the template form."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    for machine_field in ("built_at", "packer_template_ref", "installer_config_checksum_at_build"):
+        assert f'"{machine_field}"' not in block, (
+            f"Machine-managed field '{machine_field}' should not appear on PackerTemplateForm"
+        )
+
+
+def test_os_version_filter_js_asset() -> None:
+    """The progressive-enhancement JS must exist and be XSS-safe."""
+    js_src = _read("netbox_packer/static/netbox_packer/os_version_filter.js")
+    assert 'name="os_version"' in js_src, "JS must target the os_version select"
+    assert 'name="os_family"' in js_src, "JS must target the os_family select"
+    assert "data-os-version-map" in js_src, "JS must read the family->versions map"
+    assert "new Option(" in js_src, "JS must build options with the DOM Option API"
+    # Must preserve an off-list current value so edits never lose data.
+    assert "(current)" in js_src, "JS must keep an off-list current version selectable"
+    # Security: no unsafe HTML injection.
+    assert "innerHTML" not in js_src, "JS must not use innerHTML"
