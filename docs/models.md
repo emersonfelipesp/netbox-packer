@@ -49,7 +49,7 @@ installer config, target node/storage, and monitoring-agent injection preference
 | --- | --- | --- | --- |
 | `name` | CharField(100) | — | — |
 | `os_family` | CharField(20) | — | Choices from `OSFamilyChoices` |
-| `os_version` | CharField(40) | — | e.g. `24.04` |
+| `os_version` | CharField(40) | — | e.g. `24.04`. The web form renders this as a dropdown grouped by OS family (`OS_VERSIONS_BY_FAMILY` in `choices.py`); the model/API stay free-form so automation can send any version. |
 | `proxmox_template_id` | PositiveIntegerField | — | Proxmox VMID for the resulting template |
 | `proxmox_endpoint` | URLField | blank | Proxmox API URL (used to derive SSH host) |
 | `proxmox_node` | CharField(100) | — | Proxmox node name or IP |
@@ -66,6 +66,16 @@ installer config, target node/storage, and monitoring-agent injection preference
 | `description` | TextField | blank | — |
 | `installer_config` | FK → PackerInstallerConfig | null | SET_NULL; drives build type |
 | `installer_config_checksum_at_build` | CharField(64) | blank | Snapshot of checksum at last successful build |
+
+!!! note "Template form vs. model fields"
+    The template add/edit form intentionally hides machine-managed lifecycle
+    fields (`built_at`, `packer_template_ref`, and
+    `installer_config_checksum_at_build`) — they are written by
+    `PackerBuildJob`, not by operators. The full set of fields is still
+    available through the REST API. The form also renders `os_version` as an
+    OS-family-grouped dropdown and carries help text on the key
+    cloud-init-template fields (`os_version`, `proxmox_template_id`,
+    `storage_pool`, `cloud_init_ready`, `installer_config`).
 
 ### Monitoring agent injection fields (added in migration `0008`)
 

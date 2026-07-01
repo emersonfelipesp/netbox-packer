@@ -1,11 +1,17 @@
+import json
+
 from django import forms
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
+from utilities.forms import add_blank_choice
 from utilities.forms.fields import DynamicModelChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
 from .choices import (
+    OS_VERSIONS_BY_FAMILY,
     BuildStatusChoices,
     OSFamilyChoices,
+    os_version_grouped_choices,
+    os_version_known_values,
 )
 from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
 
@@ -48,10 +54,21 @@ class PackerInstallerConfigFilterForm(NetBoxModelFilterSetForm):
 
 
 class PackerTemplateForm(NetBoxModelForm):
+    os_version = forms.ChoiceField(
+        choices=(),
+        help_text=(
+            "Pick a release for the selected OS family. The list narrows to the "
+            "chosen family; every version stays selectable if JavaScript is off."
+        ),
+    )
     installer_config = DynamicModelChoiceField(
         queryset=PackerInstallerConfig.objects.all(),
         required=False,
+        help_text="For a cloud-init template, select an installer config whose type is 'Cloud-config YAML'.",
     )
+
+    class Media:
+        js = ("netbox_packer/os_version_filter.js",)
 
     class Meta:
         model = PackerTemplate
@@ -68,8 +85,6 @@ class PackerTemplateForm(NetBoxModelForm):
             "cloud_init_ready",
             "min_cpu_type",
             "build_status",
-            "built_at",
-            "packer_template_ref",
             "max_age_days",
             "auto_rebuild",
             "description",
@@ -79,7 +94,6 @@ class PackerTemplateForm(NetBoxModelForm):
             "hcp_build_id",
             "hcp_last_synced_at",
             "installer_config",
-            "installer_config_checksum_at_build",
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
@@ -100,15 +114,12 @@ class PackerTemplateForm(NetBoxModelForm):
             ),
             FieldSet(
                 "build_status",
-                "built_at",
-                "packer_template_ref",
                 "max_age_days",
                 "auto_rebuild",
                 name="Build",
             ),
             FieldSet(
                 "installer_config",
-                "installer_config_checksum_at_build",
                 name="Installer",
             ),
             FieldSet(
@@ -127,6 +138,30 @@ class PackerTemplateForm(NetBoxModelForm):
             ),
             FieldSet("description", "tags", name="Metadata"),
         )
+        help_texts = {
+            "proxmox_template_id": "Proxmox VMID the baked template will occupy (must be free on the target node).",
+            "storage_pool": "Proxmox storage pool that will hold the template disk (e.g. 'local', 'local-lvm').",
+            "cloud_init_ready": "Leave enabled for cloud-init images so clones receive user-data at first boot.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Grouped (optgroup-by-family) choices; works fully without JavaScript.
+        grouped = os_version_grouped_choices()
+
+        # Never drop an existing template's stored version: if the persisted
+        # value is outside the offered lists, keep it selectable so editing an
+        # older template does not fail validation.
+        current = self.instance.os_version if self.instance and self.instance.pk else None
+        if current and current not in os_version_known_values():
+            grouped = [*grouped, (f"{current} (current)", [(current, current)])]
+
+        self.fields["os_version"].choices = add_blank_choice(grouped)
+
+        # Expose the family→versions map so the progressive-enhancement script
+        # can narrow the dropdown to the selected OS family.
+        self.fields["os_version"].widget.attrs["data-os-version-map"] = json.dumps(OS_VERSIONS_BY_FAMILY)
 
 
 class PackerTemplateFilterForm(NetBoxModelFilterSetForm):

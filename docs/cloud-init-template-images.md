@@ -24,6 +24,44 @@ The plugin settings must include `proxbox_api_url` and an encrypted
 writes, and the selected Proxmox storage must support `snippets`, `import`, and
 `images`.
 
+## Creating a template from the web form
+
+The template add/edit form (`/plugins/packer/templates/add/`) is optimised for
+creating cloud-init images:
+
+- **OS family** and **OS version** are both dropdowns. OS version is grouped by
+  OS family (Ubuntu / Debian / RHEL / Proxmox) and, with JavaScript enabled,
+  narrows to the family you pick. It works without JavaScript too — every
+  version stays listed under its optgroup. An existing template whose stored
+  version is not in the offered list keeps that value selectable, so editing an
+  older template never fails validation.
+- **Machine-managed fields are hidden.** `built_at`, `packer_template_ref`, and
+  `installer_config_checksum_at_build` are written by `PackerBuildJob`, so the
+  form no longer asks operators to fill them in. They remain available via the
+  REST API.
+- **Guidance help text** is shown on `os_version`, `proxmox_template_id`,
+  `storage_pool`, `cloud_init_ready`, and `installer_config` to make picking the
+  right values for a cloud-init bake obvious.
+
+### Adding a new OS version to the dropdown
+
+Offered versions live in a single mapping,
+`OS_VERSIONS_BY_FAMILY`, in `netbox_packer/choices.py`. Add a
+`("<version>", "<label>")` tuple to the relevant family list — no database
+migration is required, because the model field stays a free-form `CharField`
+(the REST API keeps accepting any version string for automation).
+
+```python
+OS_VERSIONS_BY_FAMILY = {
+    OSFamilyChoices.CHOICE_UBUNTU: [
+        ("26.04", "Ubuntu 26.04 LTS"),
+        ("24.04", "Ubuntu 24.04 LTS (Noble)"),
+        # add new Ubuntu releases here
+    ],
+    # ...
+}
+```
+
 ## InfluxDB 2 Collector Template
 
 Migration `0007_seed_influxdb_cloud_init.py` seeds the InfluxDB collector image
