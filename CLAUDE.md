@@ -160,6 +160,33 @@ all three fields to their `PackerTemplate` defaults.
 
 Migration `0008_packertemplate_monitoring_agents.py` adds the three fields.
 
+## Packer Template Table Create-Instance Modal
+
+The `/plugins/packer/templates/` table includes a custom
+`PackerTemplateTable.create_instance` `TemplateColumn` rendered by
+`netbox_packer/inc/create_instance_button.html`. Each row opens a Bootstrap
+modal scoped to the selected `PackerTemplate` and posts to the model view
+registered as `packertemplate_create_instance`
+(`PackerTemplateCreateInstanceView`, path `create-instance/`).
+
+The modal gathers:
+
+- proxbox-api backend `ProxmoxEndpoint` ID (required);
+- destination VMID and VM name;
+- target node, storage, CPU, memory, clone/start toggles;
+- optional cloud-init user, SSH keys, static network, and DNS servers.
+
+`PackerTemplateCreateInstanceForm` validates the POST and builds the exact
+`/cloud/vm/provision` payload. `call_proxbox_vm_provision()` sends that payload
+to the configured `PackerPluginSettings.proxbox_api_url` using the encrypted API
+key. The selected template supplies `template_vmid` from
+`proxmox_template_id`, plus default `target_node` and `storage`.
+
+Important boundary: `PackerTemplate.proxmox_endpoint` is a URL string, not the
+proxbox-api backend endpoint primary key. Do not silently derive `endpoint_id`
+from that field unless the model is changed to hold a reliable backend endpoint
+reference.
+
 ### Seeded examples and migration chain
 
 All seed migrations use `get_or_create` for idempotency. Historical seed

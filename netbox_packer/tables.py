@@ -9,6 +9,11 @@ class PackerTemplateTable(NetBoxTable):
     os_family = ChoiceFieldColumn()
     build_status = ChoiceFieldColumn()
     cloud_init_ready = tables.BooleanColumn()
+    create_instance = tables.TemplateColumn(
+        template_name="netbox_packer/inc/create_instance_button.html",
+        verbose_name="Create new instance",
+        orderable=False,
+    )
 
     class Meta(NetBoxTable.Meta):
         model = PackerTemplate
@@ -23,6 +28,7 @@ class PackerTemplateTable(NetBoxTable):
             "built_at",
             "cloud_init_ready",
             "auto_rebuild",
+            "create_instance",
             "description",
             "actions",
         )
@@ -34,6 +40,7 @@ class PackerTemplateTable(NetBoxTable):
             "build_status",
             "built_at",
             "cloud_init_ready",
+            "create_instance",
             "actions",
         )
 

@@ -54,6 +54,19 @@ authoritative listener. The resolver allow-list is locked to private ranges
 including `10.0.0.0/8` and `172.16.0.0/12`; it must never be changed to
 `0.0.0.0/0`.
 
+## Create VM Instances from Templates
+
+The Packer Templates table includes a per-row **Create new instance** action.
+The button opens a NetBox modal with template confirmation, destination VMID,
+target node, resource, cloud-init, and submit steps. Submission delegates to
+`proxbox-api` `POST /cloud/vm/provision` using the configured
+`PackerPluginSettings.proxbox_api_url` and encrypted API key.
+
+Operators must provide the proxbox-api backend `ProxmoxEndpoint` ID in the modal
+because `PackerTemplate.proxmox_endpoint` stores the Proxmox URL, not the
+backend endpoint primary key. The selected template supplies the source VMID
+(`proxmox_template_id`), default node, storage pool, and lineage context.
+
 ## Compatibility
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the full version compatibility table.

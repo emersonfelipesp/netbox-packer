@@ -149,6 +149,104 @@ def test_build_action_endpoint_exists() -> None:
     assert "HTTP_202_ACCEPTED" in api_views
 
 
+def test_template_table_has_create_instance_column() -> None:
+    """PackerTemplate table must expose the create-instance modal action."""
+    tables_src = _read("netbox_packer/tables.py")
+    block = _class_block(tables_src, "PackerTemplateTable")
+
+    assert "create_instance = tables.TemplateColumn" in block
+    assert "netbox_packer/inc/create_instance_button.html" in block
+    assert 'verbose_name="Create new instance"' in block
+    assert '"create_instance"' in block
+
+
+def test_create_instance_modal_template_contract() -> None:
+    """The row action must render a modal wizard scoped to the selected template."""
+    template = _read("netbox_packer/templates/netbox_packer/inc/create_instance_button.html")
+
+    assert "Create new instance" in template
+    assert 'data-bs-toggle="modal"' in template
+    assert 'data-bs-target="#packer-create-instance-{{ record.pk }}"' in template
+    assert "packertemplate_create_instance" in template
+    assert "record.proxmox_template_id" in template
+    assert "record.proxmox_node" in template
+    for field in (
+        "endpoint_id",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "cores",
+        "memory_mb",
+        "ssh_keys",
+    ):
+        assert f'name="{field}"' in template
+    for step in (
+        "Step 1: Confirm template",
+        "Step 2: Name and destination",
+        "Step 3: Resources and cloud-init",
+        "Step 4: Submit",
+    ):
+        assert step in template
+
+
+def test_create_instance_form_validates_proxbox_payload_fields() -> None:
+    """The modal form must validate proxbox-api clone payload fields."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateCreateInstanceForm")
+
+    for field in (
+        "endpoint_id",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "storage",
+        "cores",
+        "memory_mb",
+        "full_clone",
+        "start_after_provision",
+        "ci_user",
+        "ssh_keys",
+        "static_ip",
+        "static_cidr",
+        "gateway",
+        "dns_servers",
+    ):
+        assert field in block, f"Missing create-instance form field '{field}'"
+    assert "cloud_init_payload" in block
+    assert "proxbox_payload" in block
+    assert "template.proxmox_template_id" in block
+
+
+def test_create_instance_view_registered_and_delegates_to_proxbox() -> None:
+    """The PackerTemplate POST action must call proxbox-api through plugin settings."""
+    views_src = _read("netbox_packer/views.py")
+    assert '@register_model_view(models.PackerTemplate, name="create_instance", path="create-instance/")' in views_src
+    assert "class PackerTemplateCreateInstanceView" in views_src
+    assert "PackerTemplateCreateInstanceForm" in views_src
+    assert "PackerPluginSettings.get_solo()" in views_src
+    assert "call_proxbox_vm_provision" in views_src
+    assert "netbox_packer.change_packertemplate" in views_src
+
+
+def test_proxbox_client_has_vm_provision_call() -> None:
+    """The stdlib proxbox client must know the VM clone endpoint."""
+    client_src = _read("netbox_packer/proxbox_client.py")
+
+    assert "def call_proxbox_vm_provision" in client_src
+    assert 'path="/cloud/vm/provision"' in client_src
+    for key in (
+        "endpoint_id",
+        "template_vmid",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "cloud_init",
+        "start_after_provision",
+        "full_clone",
+    ):
+        assert f'"{key}"' in client_src
+
+
 def test_validate_node_uses_node_affinity_validator() -> None:
     """validate_node action must use NodeAffinityValidator."""
     api_views = _read("netbox_packer/api/views.py")
