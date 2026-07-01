@@ -412,3 +412,34 @@ def test_os_version_filter_js_asset() -> None:
     assert "(current)" in js_src, "JS must keep an off-list current version selectable"
     # Security: no unsafe HTML injection.
     assert "innerHTML" not in js_src, "JS must not use innerHTML"
+
+
+def test_os_version_select_opts_out_of_tom_select() -> None:
+    """os_version must render as a plain <select> (no-ts) so native narrowing wins.
+
+    NetBox wraps static <select> elements in Tom Select, which owns the rendered
+    dropdown; the ``no-ts`` class opts os_version out so os_version_filter.js can
+    drive the visible list.
+    """
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "no-ts" in block, "os_version widget must be excluded from Tom Select via the 'no-ts' class"
+
+
+def test_os_version_filter_js_resets_on_family_change() -> None:
+    """A user-driven OS family change must reset os_version (no stale value)."""
+    js_src = _read("netbox_packer/static/netbox_packer/os_version_filter.js")
+    # Initial pass preserves the stored value; the change handler does not.
+    assert "populate(familySelect.value, true)" in js_src, "Initial pass must preserve the stored value"
+    assert "populate(familySelect.value, false)" in js_src, (
+        "OS family change must reset the version (preserveSelection=false)"
+    )
+
+
+def test_template_form_validates_family_version_pairing() -> None:
+    """PackerTemplateForm.clean must reject a version outside the selected family."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "def clean(self)" in block, "PackerTemplateForm must add a clean() cross-field guard"
+    assert "OS_VERSIONS_BY_FAMILY" in block, "clean() must check the family->versions map"
+    assert "add_error" in block, "clean() must raise a field error for a mismatched os_version"

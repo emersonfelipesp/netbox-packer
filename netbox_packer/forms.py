@@ -163,6 +163,48 @@ class PackerTemplateForm(NetBoxModelForm):
         # can narrow the dropdown to the selected OS family.
         self.fields["os_version"].widget.attrs["data-os-version-map"] = json.dumps(OS_VERSIONS_BY_FAMILY)
 
+        # Opt os_version out of NetBox's Tom Select enhancement. Tom Select owns
+        # the rendered dropdown from its own option registry, so the native
+        # DOM narrowing in os_version_filter.js would silently no-op against it.
+        # A plain <select> lets the script drive the visible list, and for a
+        # short release list a non-searchable select is also the better UX.
+        existing_class = self.fields["os_version"].widget.attrs.get("class", "")
+        self.fields["os_version"].widget.attrs["class"] = f"{existing_class} no-ts".strip()
+
+    def clean(self):
+        """Reject an os_version that does not belong to the selected os_family.
+
+        This is the server-side counterpart to the ``os_version_filter.js``
+        progressive enhancement, closing the case where JavaScript is disabled.
+        It is intentionally scoped to this UI form only — the model field and
+        REST serializer keep ``os_version`` free-form so automation may send any
+        version. An existing template's originally-stored value is always allowed
+        so editing an older (off-list) template never fails validation.
+        """
+        cleaned_data = super().clean()
+
+        family = cleaned_data.get("os_family")
+        version = cleaned_data.get("os_version")
+
+        if not family or not version:
+            return cleaned_data
+
+        # Preserve the persisted value on edit (mirrors the __init__ guard).
+        stored = self.instance.os_version if self.instance and self.instance.pk else None
+        if version == stored:
+            return cleaned_data
+
+        allowed = {value for value, _label in OS_VERSIONS_BY_FAMILY.get(family, [])}
+        if version not in allowed:
+            family_label = dict(OSFamilyChoices).get(family, family)
+            self.add_error(
+                "os_version",
+                f"'{version}' is not a valid version for OS family '{family_label}'. "
+                "Choose a version that belongs to the selected OS family.",
+            )
+
+        return cleaned_data
+
 
 class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
     model = PackerTemplate

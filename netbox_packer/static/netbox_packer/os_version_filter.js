@@ -6,10 +6,17 @@
  * dropdown works with JavaScript disabled. When enabled, this script narrows
  * the visible options to the OS family currently selected in os_family.
  *
- * It never destroys data: a stored version that is not in the selected
- * family's list is kept selectable so editing an older template cannot fail.
- * Options are built with the DOM Option API, so untrusted strings are never
- * interpolated into raw markup.
+ * It never destroys data: on the initial pass a stored version that is not in
+ * the selected family's list is kept selectable so editing an older template
+ * cannot fail. When the user actively changes the OS family, the version is
+ * reset to blank so a stale value from the previous family can never linger
+ * (e.g. OS family "Ubuntu" must not keep "Debian 13" selected). Options are
+ * built with the DOM Option API, so untrusted strings are never interpolated
+ * into raw markup.
+ *
+ * The os_version <select> is rendered with the ``no-ts`` class (see
+ * PackerTemplateForm) so NetBox does not wrap it in Tom Select; that keeps this
+ * native DOM manipulation authoritative over the visible dropdown.
  */
 (function () {
   "use strict";
@@ -33,8 +40,11 @@
       return;
     }
 
-    function populate(family) {
-      var current = versionSelect.value;
+    // preserveSelection=true keeps the current value selectable (initial/edit
+    // pass); false clears it (the user switched OS family, so the previous
+    // version no longer belongs to the new family).
+    function populate(family, preserveSelection) {
+      var current = preserveSelection ? versionSelect.value : "";
       var versions = (map && map[family]) || [];
 
       while (versionSelect.options.length) {
@@ -52,7 +62,7 @@
         seen[value] = true;
       });
 
-      // Keep a previously stored / off-list value selectable.
+      // Keep a previously stored / off-list value selectable (initial pass only).
       if (current && !seen[current]) {
         versionSelect.add(new Option(current + " (current)", current));
       }
@@ -61,10 +71,10 @@
     }
 
     // Initial pass preserves the server-rendered value (edit case).
-    populate(familySelect.value);
+    populate(familySelect.value, true);
 
     familySelect.addEventListener("change", function () {
-      populate(familySelect.value);
+      populate(familySelect.value, false);
     });
   }
 
