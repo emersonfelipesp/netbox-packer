@@ -1,4 +1,5 @@
 import json
+import re
 
 from django import forms
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
@@ -14,6 +15,17 @@ from .choices import (
     os_version_known_values,
 )
 from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+
+_VM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_NODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_STORAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]*$")
+_SSH_KEY_PREFIXES = (
+    "ssh-ed25519 ",
+    "ssh-rsa ",
+    "ecdsa-sha2-",
+    "sk-ecdsa-sha2-",
+    "sk-ssh-ed25519 ",
+)
 
 # ── PackerInstallerConfig ─────────────────────────────────────────────────────
 
@@ -223,6 +235,142 @@ class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
     )
     cloud_init_ready = forms.NullBooleanSelect()
     tag = TagFilterField(model)
+
+
+class PackerTemplateCreateInstanceForm(forms.Form):
+    """Validate the PackerTemplate table modal payload for proxbox-api VM clone."""
+
+    endpoint_id = forms.IntegerField(
+        min_value=1,
+        label="Proxbox endpoint ID",
+        help_text="Backend ProxmoxEndpoint ID used by proxbox-api for clone operations.",
+    )
+    new_vmid = forms.IntegerField(
+        min_value=100,
+        label="New VMID",
+        help_text="Destination VMID to reserve for the new virtual machine.",
+    )
+    new_name = forms.CharField(max_length=128, label="VM name")
+    target_node = forms.CharField(max_length=100)
+    storage = forms.CharField(max_length=100, required=False)
+    cores = forms.IntegerField(min_value=1, required=False)
+    memory_mb = forms.IntegerField(min_value=64, required=False, label="Memory (MB)")
+    full_clone = forms.BooleanField(required=False, initial=True)
+    start_after_provision = forms.BooleanField(required=False, initial=True)
+    ci_user = forms.CharField(max_length=64, required=False, label="Cloud-init user")
+    ssh_keys = forms.CharField(
+        required=False,
+        widget=forms.Textarea,
+        label="SSH public keys",
+        help_text="One authorized SSH public key per line.",
+    )
+    static_ip = forms.GenericIPAddressField(required=False, label="Static IP")
+    static_cidr = forms.IntegerField(min_value=0, max_value=128, required=False, label="CIDR")
+    gateway = forms.GenericIPAddressField(required=False)
+    dns_servers = forms.CharField(
+        max_length=255,
+        required=False,
+        help_text="Comma-separated DNS server IP addresses.",
+    )
+
+    def __init__(self, *args, template: PackerTemplate | None = None, **kwargs):
+        self.template = template
+        super().__init__(*args, **kwargs)
+        if template is not None:
+            self.fields["target_node"].initial = template.proxmox_node
+            self.fields["storage"].initial = template.storage_pool
+
+    def clean_new_name(self):
+        value = self.cleaned_data["new_name"].strip()
+        if not _VM_NAME_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_target_node(self):
+        value = self.cleaned_data["target_node"].strip()
+        if not _NODE_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_storage(self):
+        value = self.cleaned_data.get("storage", "").strip()
+        if value and not _STORAGE_RE.fullmatch(value):
+            raise forms.ValidationError("Use a valid Proxmox storage identifier.")
+        return value
+
+    def clean_ci_user(self):
+        value = self.cleaned_data.get("ci_user", "").strip()
+        if value and not _VM_NAME_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_ssh_keys(self):
+        raw = self.cleaned_data.get("ssh_keys", "")
+        keys = [line.strip() for line in raw.splitlines() if line.strip()]
+        for key in keys:
+            if not key.startswith(_SSH_KEY_PREFIXES):
+                raise forms.ValidationError("SSH keys must start with a supported public-key prefix.")
+        return keys
+
+    def clean_dns_servers(self):
+        raw = self.cleaned_data.get("dns_servers", "")
+        servers = [entry.strip() for entry in raw.split(",") if entry.strip()]
+        field = forms.GenericIPAddressField()
+        for server in servers:
+            field.clean(server)
+        return servers
+
+    def clean(self):
+        cleaned_data = super().clean()
+        network_values = (
+            cleaned_data.get("static_ip"),
+            cleaned_data.get("static_cidr"),
+            cleaned_data.get("gateway"),
+        )
+        if any(value not in (None, "") for value in network_values) and not all(
+            value not in (None, "") for value in network_values
+        ):
+            raise forms.ValidationError("Static IP, CIDR, and gateway must be provided together.")
+        return cleaned_data
+
+    def cloud_init_payload(self) -> dict[str, object]:
+        """Return the validated proxbox-api cloud_init object."""
+        payload: dict[str, object] = {}
+        if self.cleaned_data.get("ci_user"):
+            payload["user"] = self.cleaned_data["ci_user"]
+        if self.cleaned_data.get("ssh_keys"):
+            payload["ssh_keys"] = self.cleaned_data["ssh_keys"]
+        if self.cleaned_data.get("static_ip"):
+            payload["network"] = {
+                "ip": self.cleaned_data["static_ip"],
+                "cidr": self.cleaned_data["static_cidr"],
+                "gw": self.cleaned_data["gateway"],
+            }
+        if self.cleaned_data.get("dns_servers"):
+            payload["dns_servers"] = self.cleaned_data["dns_servers"]
+        return payload
+
+    def proxbox_payload(self, template: PackerTemplate) -> dict[str, object]:
+        """Return the validated ``/cloud/vm/provision`` payload."""
+        return {
+            "endpoint_id": self.cleaned_data["endpoint_id"],
+            "template_vmid": template.proxmox_template_id,
+            "new_vmid": self.cleaned_data["new_vmid"],
+            "new_name": self.cleaned_data["new_name"],
+            "target_node": self.cleaned_data["target_node"],
+            "cloud_init": self.cloud_init_payload(),
+            "start_after_provision": self.cleaned_data["start_after_provision"],
+            "storage": self.cleaned_data.get("storage") or None,
+            "memory_mb": self.cleaned_data.get("memory_mb"),
+            "cores": self.cleaned_data.get("cores"),
+            "full_clone": self.cleaned_data["full_clone"],
+        }
 
 
 # ── PackerBuild ───────────────────────────────────────────────────────────────

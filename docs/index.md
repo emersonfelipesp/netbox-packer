@@ -36,6 +36,18 @@ The PowerDNS co-hosted Authoritative + Recursor seed is
 networks such as `10.0.0.0/8` and `172.16.0.0/12`. Never expose recursion to
 `0.0.0.0/0`.
 
+## Create VM Instances
+
+Each row in the Packer Templates table has a **Create new instance** action. The
+action opens a modal flow that keeps the selected `PackerTemplate` visible,
+collects the proxbox-api endpoint ID, destination VMID, VM name, target node,
+resource overrides, and optional cloud-init values, then submits the request to
+`proxbox-api` `POST /cloud/vm/provision`.
+
+The endpoint ID is intentionally entered by the operator: `PackerTemplate`
+stores a Proxmox endpoint URL for inventory context, while proxbox-api clone
+requests require the backend `ProxmoxEndpoint` primary key.
+
 ## Compatibility
 
 | NetBox | netbox-packer | Python |
