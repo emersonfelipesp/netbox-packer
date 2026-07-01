@@ -21,6 +21,44 @@ class ProxboxApiError(RuntimeError):
     """Raised when the proxbox-api template-image build call fails."""
 
 
+def _post_json(
+    *,
+    proxbox_api_url: str,
+    proxbox_api_key: str,
+    path: str,
+    payload: dict,
+    timeout: int,
+) -> dict:
+    """POST JSON to proxbox-api and return the decoded response body."""
+    base = proxbox_api_url.rstrip("/")
+    url = f"{base}{path}"
+    data = json.dumps(payload).encode()
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Proxbox-API-Key": proxbox_api_key,
+        },
+    )
+    try:
+        # nosec B310 - scheme is operator-configured http(s) from plugin settings
+        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+            body = resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")
+        raise ProxboxApiError(f"proxbox-api HTTP {exc.code}: {detail[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise ProxboxApiError(f"proxbox-api unreachable at {url}: {exc.reason}") from exc
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ProxboxApiError(f"proxbox-api returned non-JSON body: {body[:300]}") from exc
+
+
 def call_proxbox_build(
     *,
     proxbox_api_url: str,
@@ -51,8 +89,6 @@ def call_proxbox_build(
     the proxbox-api ``CloudImageTemplateBuildResponse`` (carries ``status``,
     ``vmid``/``template_vmid``, ``build_script``, ``stdout``/``stderr``).
     """
-    base = proxbox_api_url.rstrip("/")
-    url = f"{base}/cloud/templates/images"
     payload: dict = {
         "name": name,
         "vmid": vmid,
@@ -78,28 +114,50 @@ def call_proxbox_build(
     if ssh_identity_file:
         payload["ssh_identity_file"] = ssh_identity_file
 
-    data = json.dumps(payload).encode()
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-Proxbox-API-Key": proxbox_api_key,
-        },
+    return _post_json(
+        proxbox_api_url=proxbox_api_url,
+        proxbox_api_key=proxbox_api_key,
+        path="/cloud/templates/images",
+        payload=payload,
+        timeout=timeout,
     )
-    try:
-        # nosec B310 - scheme is operator-configured http(s) from plugin settings
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
-            body = resp.read().decode()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")
-        raise ProxboxApiError(f"proxbox-api HTTP {exc.code}: {detail[:500]}") from exc
-    except urllib.error.URLError as exc:
-        raise ProxboxApiError(f"proxbox-api unreachable at {url}: {exc.reason}") from exc
 
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise ProxboxApiError(f"proxbox-api returned non-JSON body: {body[:300]}") from exc
+
+def call_proxbox_vm_provision(
+    *,
+    proxbox_api_url: str,
+    proxbox_api_key: str,
+    endpoint_id: int,
+    template_vmid: int,
+    new_vmid: int,
+    new_name: str,
+    target_node: str,
+    cloud_init: dict,
+    start_after_provision: bool = True,
+    storage: str | None = None,
+    memory_mb: int | None = None,
+    cores: int | None = None,
+    full_clone: bool = True,
+    timeout: int = 90,
+) -> dict:
+    """POST to ``{proxbox_api_url}/cloud/vm/provision`` and return the JSON body."""
+    payload: dict = {
+        "endpoint_id": int(endpoint_id),
+        "template_vmid": int(template_vmid),
+        "new_vmid": int(new_vmid),
+        "new_name": new_name,
+        "target_node": target_node,
+        "cloud_init": cloud_init,
+        "start_after_provision": bool(start_after_provision),
+        "storage": storage,
+        "memory_mb": memory_mb,
+        "cores": cores,
+        "full_clone": bool(full_clone),
+    }
+    return _post_json(
+        proxbox_api_url=proxbox_api_url,
+        proxbox_api_key=proxbox_api_key,
+        path="/cloud/vm/provision",
+        payload=payload,
+        timeout=timeout,
+    )

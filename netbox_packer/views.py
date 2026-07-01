@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect
 from netbox.views import generic
 from utilities.views import register_model_view
@@ -102,6 +103,65 @@ class PackerTemplateBuildView(generic.ObjectView):
             f"Build #{build.pk} queued for template '{template.name}'.",
         )
         return redirect(build.get_absolute_url())
+
+
+@register_model_view(models.PackerTemplate, name="create_instance", path="create-instance/")
+class PackerTemplateCreateInstanceView(generic.ObjectView):
+    """Create a VM from a PackerTemplate by delegating to proxbox-api."""
+
+    queryset = models.PackerTemplate.objects.all()
+
+    def post(self, request, pk):
+        template = get_object_or_404(models.PackerTemplate.objects.all(), pk=pk)
+        if not request.user.has_perm("netbox_packer.change_packertemplate"):
+            raise PermissionDenied
+
+        form = forms.PackerTemplateCreateInstanceForm(request.POST, template=template)
+        if not form.is_valid():
+            messages.error(
+                request,
+                "Could not create instance: "
+                + "; ".join(f"{field}: {', '.join(errors)}" for field, errors in form.errors.items()),
+            )
+            return _redirect_after_instance_create(request, template)
+
+        settings_row = models.PackerPluginSettings.get_solo()
+        proxbox_api_url = (settings_row.proxbox_api_url or "").strip()
+        proxbox_api_key = settings_row.get_proxbox_api_key()
+        if not proxbox_api_url or not proxbox_api_key:
+            messages.error(
+                request,
+                "Configure Packer plugin proxbox_api_url and API key before creating VM instances.",
+            )
+            return _redirect_after_instance_create(request, template)
+
+        from .proxbox_client import ProxboxApiError, call_proxbox_vm_provision
+
+        payload = form.proxbox_payload(template)
+        try:
+            response = call_proxbox_vm_provision(
+                proxbox_api_url=proxbox_api_url,
+                proxbox_api_key=proxbox_api_key,
+                **payload,
+            )
+        except ProxboxApiError as exc:
+            messages.error(request, f"proxbox-api failed to create the instance: {exc}")
+            return _redirect_after_instance_create(request, template)
+
+        status = response.get("status") or "submitted"
+        messages.success(
+            request,
+            f"Create request submitted for VMID {payload['new_vmid']} from template '{template.name}' ({status}).",
+        )
+        return _redirect_after_instance_create(request, template)
+
+
+def _redirect_after_instance_create(request, template):
+    """Return to the table when possible, falling back to the template detail page."""
+    return_url = (request.POST.get("return_url") or "").strip()
+    if return_url.startswith("/"):
+        return redirect(return_url)
+    return redirect(template.get_absolute_url())
 
 
 # ── PackerBuild ───────────────────────────────────────────────────────────────
