@@ -46,15 +46,30 @@ The plugin package is `netbox_packer/`:
 
 The template add/edit form is tuned for creating cloud-init templates:
 
-- **`os_version` is a grouped dropdown**, not free text. Options live in the
-  single `OS_VERSIONS_BY_FAMILY` mapping in `choices.py` (helpers
-  `os_version_grouped_choices()` / `os_version_known_values()`) and are rendered
-  as optgroups by OS family. The static `os_version_filter.js` (loaded via the
-  form's `Media`) is **progressive enhancement**: it narrows the list to the
-  selected family using the `data-os-version-map` JSON on the widget, but the
-  grouped `<select>` works fully without JavaScript.
+- **`os_version` is a grouped dropdown that narrows to the selected OS family**,
+  not free text. Options live in the single `OS_VERSIONS_BY_FAMILY` mapping in
+  `choices.py` (helpers `os_version_grouped_choices()` /
+  `os_version_known_values()`) and are rendered as optgroups by OS family. The
+  static `os_version_filter.js` (loaded via the form's `Media`) narrows the
+  visible list to the family selected in `os_family`, using the
+  `data-os-version-map` JSON on the widget; the grouped `<select>` still works
+  without JavaScript.
+  - **The `os_version` widget carries the `no-ts` class** so NetBox does **not**
+    wrap it in Tom Select. Tom Select owns the rendered dropdown from its own
+    option registry, so the native `.add()/.remove()` narrowing in the JS would
+    silently no-op against it — the field would stay cross-selectable with any
+    family. `no-ts` keeps the plain `<select>` (and the JS) authoritative.
+  - **Family change resets the version.** On initial load the JS preserves the
+    server-rendered value (edit case); when the user *changes* `os_family` it
+    clears `os_version` so a stale value from the previous family can never
+    linger (e.g. `Ubuntu` can never keep `Debian 13` selected).
+  - **`PackerTemplateForm.clean()`** is the server-side guard: it rejects an
+    `os_version` that is not in `OS_VERSIONS_BY_FAMILY[os_family]` (covering
+    JavaScript-disabled submits), while still allowing an instance's
+    originally-stored (off-list) value on edit. Scope is this **UI form only**.
   - The model field and REST API stay a plain `CharField` — **no migration** and
-    automation can still POST any version string.
+    automation can still POST any version string (the free-form contract is
+    intentional; do not add serializer validation).
   - The form's `__init__` re-adds an instance's stored `os_version` if it is not
     in the offered list (labelled `… (current)`), so editing an older template
     never fails validation. The JS mirrors this (keeps an off-list value).
