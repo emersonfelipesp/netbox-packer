@@ -205,6 +205,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0012` | `pdns-auth-ubuntu-2404` | 9017 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Authoritative 4.9 + SQLite3 backend + REST API on 8081; DNS domain `nmulti.cloud`, nameservers `168.0.96.26`/`168.0.96.27` |
 | `0012` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
 | `0013` | `powerdns-auth-recursor-ubuntu` | 9019 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Co-hosted PowerDNS Authoritative + Recursor; auth on `127.0.0.1:5300`, recursor on primary interface `:53`, private client ranges only |
+| `0014` | `tpl-fileserver-allinone-ubuntu-2404` | 9032 | Ubuntu 24.04 | `https://10.0.30.71:8006` | File Server all-in-one; Samba AD/DC packages + Nextcloud prerequisites + pip-installed `nms-fileserver-agent`; runtime provisioning supplies tenant state and enrollment token |
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -272,6 +273,33 @@ Recursor is the public-facing resolver surface:
 Never set the recursor allow-list to `0.0.0.0/0`; this seed must not create an
 open resolver. Replace `PDNS_AUTH_API_KEY` and `PDNS_RECURSOR_API_KEY`
 placeholders before production use.
+
+#### Migration 0014 — File Server all-in-one
+
+Seeds `tpl-fileserver-allinone-ubuntu-2404` (VMID 9032) on ProxmoxEndpoint
+`https://10.0.30.71:8006` / node `10.0.30.71`, using installer config
+`fileserver-allinone-cloud-config`. The verbatim cloud-config source is tracked
+at `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`, and
+`tests/test_cloud_config_build_static.py` asserts the migration constant matches
+that file exactly.
+
+The cloud-config installs Samba AD/DC packages, Nextcloud web/PHP
+prerequisites, `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
+`nms-fileserver-agent` is not an apt package in this image. The bake creates
+`/opt/nms-fileserver-agent/venv` and installs the Python package from
+`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), so the
+bake environment must provide that agent package through an accessible pip
+index, wheel, source archive, or direct source/VCS spec. It writes
+`/etc/nms-fileserver-agent/config.env` with
+`NMS_BACKEND_URL=https://backend.nms.nmulti.cloud` and
+`NETBOX_URL=https://netbox.nmulti.cloud`.
+
+The image is software-only: tenant provisioning is deferred to clone-time
+automation, no enrollment token is baked, `nginx` is disabled,
+`smbd`/`nmbd`/`winbind` are masked, `nms-fileserver-agent-enroll.service` is
+installed but disabled/not run on the golden template, and
+`nms-fileserver-agent-heartbeat.timer` is also disabled until runtime user-data
+supplies the per-instance one-time token and starts the agent lifecycle.
 
 Operator docs for this flow live in
 `docs/cloud-init-template-images.md`. Keep that file, `README.md`, `AGENTS.md`,

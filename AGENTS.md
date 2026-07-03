@@ -34,3 +34,21 @@ ranges including `10.0.0.0/8` and `172.16.0.0/12`; never change it to
 
 The default bake target is CLUSTER01-DC01, `https://10.0.30.71:8006` / node
 `10.0.30.71`, with operator overrides still available at build dispatch.
+
+## File Server All-in-One Seed
+
+Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds
+`tpl-fileserver-allinone-ubuntu-2404` with VMID `9032` for Ubuntu 24.04. The
+installer config is `fileserver-allinone-cloud-config`, and the verbatim
+cloud-config source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
+
+The image installs Samba AD/DC packages, Nextcloud web/PHP prerequisites,
+`qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
+`nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
+`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
+through apt. The bake source must provide that pip package or direct source
+spec. The image installs `nms-fileserver-agent-enroll.service` and
+`nms-fileserver-agent-heartbeat.timer`; it points the agent at
+`https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; do not
+bake a tenant enrollment token into the image. The default bake target is
+CLUSTER01-DC01, `https://10.0.30.71:8006` / node `10.0.30.71`.
