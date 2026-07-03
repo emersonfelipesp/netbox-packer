@@ -178,12 +178,19 @@ The cloud-config installs Samba AD/DC packages (`samba`, `samba-dsdb-modules`,
 (`nginx`, `php-fpm`, `php-ldap`, `php-smbclient`, `php-pgsql`, `php-gd`,
 `php-curl`, `php-zip`, `php-xml`, `php-mbstring`, `php-intl`, `php-bcmath`,
 `php-gmp`, `php-imagick`, `smbclient`, `cifs-utils`, `postgresql-client`),
-`qemu-guest-agent`, `zabbix-agent2`, and `nms-fileserver-agent`.
+`qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
+`nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
+`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
+through apt. The bake environment must provide that package through an
+accessible pip index, wheel, source archive, or direct source/VCS spec.
 
 This image is software-only. The bake does not create a Samba domain, does not
 run a Nextcloud tenant install, and does not include any tenant secret. `nginx`
-is disabled, `smbd`/`nmbd`/`winbind` are masked, and `nms-fileserver-agent` is
-disabled until clone-time user-data provides the one-time enrollment token.
+is disabled, `smbd`/`nmbd`/`winbind` are masked,
+`nms-fileserver-agent-enroll.service` is installed but disabled/not run on the
+golden template, and `nms-fileserver-agent-heartbeat.timer` is disabled until
+clone-time user-data provides the one-time enrollment token and starts the agent
+lifecycle.
 
 ## Build Verification
 

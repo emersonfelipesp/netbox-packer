@@ -339,12 +339,23 @@ def test_fileserver_allinone_seed_contract() -> None:
         "smbclient",
         "cifs-utils",
         "postgresql-client",
+        "python3-venv",
         "qemu-guest-agent",
         "zabbix-agent2",
-        "nms-fileserver-agent",
     ):
         assert package in seed
 
+    assert "apt-get install -y zabbix-agent2" in seed
+    assert "apt-get install -y zabbix-agent2 nms-fileserver-agent" not in seed
+    assert "python3 -m venv \"${NMS_FILESERVER_AGENT_VENV_DIR}\"" in seed
+    assert "pip install \"${NMS_FILESERVER_AGENT_PIP_SPEC}\"" in seed
+    assert "NMS_FILESERVER_AGENT_PIP_SPEC=\"${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}\"" in seed
+    assert "systemctl enable nms-fileserver-agent-enroll.service" in seed
+    assert "systemctl enable --now nms-fileserver-agent-heartbeat.timer" in seed
+    assert "systemctl disable --now nms-fileserver-agent-enroll.service || true" in seed
+    assert "systemctl disable --now nms-fileserver-agent-heartbeat.timer || true" in seed
+    assert "systemctl disable --now nms-fileserver-agent-heartbeat.service || true" in seed
+    assert "systemctl disable --now nms-fileserver-agent || true" not in seed
     assert "NMS_BACKEND_URL=https://backend.nms.nmulti.cloud" in seed
     assert "NETBOX_URL=https://netbox.nmulti.cloud" in seed
     assert "NMS_FILESERVER_ENROLLMENT_TOKEN=" not in seed
@@ -366,6 +377,10 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
         "https://10.0.30.71:8006",
         "10.0.30.71",
         "nms-fileserver-agent",
+        "NMS_FILESERVER_AGENT_PIP_SPEC",
+        "python3-venv",
+        "nms-fileserver-agent-enroll.service",
+        "nms-fileserver-agent-heartbeat.timer",
         "https://backend.nms.nmulti.cloud",
         "https://netbox.nmulti.cloud",
     )

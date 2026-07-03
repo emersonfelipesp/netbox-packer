@@ -38,6 +38,7 @@ packages:
   - php-xml
   - php-zip
   - postgresql-client
+  - python3-venv
   - qemu-guest-agent
   - samba
   - samba-dsdb-modules
@@ -61,6 +62,63 @@ write_files:
       # Static template identity marker for the image bake.
       # Proxmox clone metadata and per-instance user-data provide runtime identity.
       preserve_hostname: false
+  - path: /etc/systemd/system/nms-fileserver-agent-enroll.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=N-MultiCloud File Server agent enrollment
+      Wants=network-online.target
+      After=network-online.target cloud-final.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/nms-fileserver-agent/venv/bin/nms-fileserver-agent-enroll
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectHome=true
+      ProtectSystem=full
+      ReadWritePaths=/etc/nms-fileserver-agent
+      LockPersonality=true
+      RestrictSUIDSGID=true
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/nms-fileserver-agent-heartbeat.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=N-MultiCloud File Server agent heartbeat
+      Wants=network-online.target
+      After=network-online.target nms-fileserver-agent-enroll.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/nms-fileserver-agent/venv/bin/nms-fileserver-agent-heartbeat
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectHome=true
+      ProtectSystem=full
+      ReadWritePaths=/etc/nms-fileserver-agent
+      LockPersonality=true
+      RestrictSUIDSGID=true
+  - path: /etc/systemd/system/nms-fileserver-agent-heartbeat.timer
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Run N-MultiCloud File Server agent heartbeat every five minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      AccuracySec=30s
+      Persistent=true
+      Unit=nms-fileserver-agent-heartbeat.service
+
+      [Install]
+      WantedBy=timers.target
   - path: /opt/fileserver-allinone-bootstrap.sh
     permissions: "0755"
     owner: root:root
@@ -70,16 +128,25 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
 
       install -d -m 0755 /etc/apt/keyrings
-      install -d -m 0750 /etc/nms-fileserver-agent
+      install -d -m 0755 /opt/nms-fileserver-agent
+      install -d -m 0700 /etc/nms-fileserver-agent
 
       . /etc/os-release
       VERSION_ID="${VERSION_ID:-24.04}"
+      NMS_FILESERVER_AGENT_INSTALL_DIR="${NMS_FILESERVER_AGENT_INSTALL_DIR:-/opt/nms-fileserver-agent}"
+      NMS_FILESERVER_AGENT_DIR="${NMS_FILESERVER_AGENT_DIR:-/etc/nms-fileserver-agent}"
+      NMS_FILESERVER_AGENT_PIP_SPEC="${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}"
+      NMS_FILESERVER_AGENT_VENV_DIR="${NMS_FILESERVER_AGENT_INSTALL_DIR}/venv"
       ZABBIX_RELEASE_BASE="https://repo.zabbix.com/zabbix/7.4/release/ubuntu/pool/main/z/zabbix-release"
       ZABBIX_RELEASE_DEB="${ZABBIX_RELEASE_BASE}/zabbix-release_latest_7.4+ubuntu${VERSION_ID}_all.deb"
       curl -fsSL -o /tmp/zabbix-release.deb "${ZABBIX_RELEASE_DEB}"
       dpkg -i /tmp/zabbix-release.deb
       apt-get update
-      apt-get install -y zabbix-agent2 nms-fileserver-agent
+      apt-get install -y zabbix-agent2
+
+      python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"
+      "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --upgrade pip
+      "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install "${NMS_FILESERVER_AGENT_PIP_SPEC}"
 
       cat > /etc/zabbix/zabbix_agent2.conf <<'ZABBIX_CONF'
       LogFile=/var/log/zabbix/zabbix_agent2.log
@@ -94,14 +161,25 @@ write_files:
 
       chown root:root /etc/nms-fileserver-agent/config.env
       chmod 0640 /etc/nms-fileserver-agent/config.env
+      for state_file in enroll-token credential deployment-id; do
+        if [[ -f "${NMS_FILESERVER_AGENT_DIR}/${state_file}" ]]; then
+          chmod 0600 "${NMS_FILESERVER_AGENT_DIR}/${state_file}"
+        fi
+      done
+
+      systemctl daemon-reload
 
       systemctl enable --now qemu-guest-agent
       systemctl enable --now chrony
       systemctl enable --now zabbix-agent2
+      systemctl enable nms-fileserver-agent-enroll.service
+      systemctl enable --now nms-fileserver-agent-heartbeat.timer
 
       # Keep the unprovisioned appliance dark until runtime provisioning supplies tenant state.
       systemctl disable --now nginx || true
-      systemctl disable --now nms-fileserver-agent || true
+      systemctl disable --now nms-fileserver-agent-enroll.service || true
+      systemctl disable --now nms-fileserver-agent-heartbeat.timer || true
+      systemctl disable --now nms-fileserver-agent-heartbeat.service || true
       for unit in smbd nmbd winbind samba-ad-dc; do
         systemctl disable --now "${unit}" || true
       done
@@ -140,8 +218,9 @@ def seed_fileserver_allinone(apps, schema_editor):
             "description": (
                 "File Server all-in-one cloud-config on Ubuntu 24.04. Installs "
                 "Samba AD/DC packages, Nextcloud web/PHP prerequisites, monitoring "
-                "agents, and nms-fileserver-agent with production NMS URLs. Tenant "
-                "provisioning and enrollment tokens are supplied at clone time."
+                "agents, and a pip-installed nms-fileserver-agent with production "
+                "NMS URLs. Tenant provisioning and enrollment tokens are supplied "
+                "at clone time."
             ),
         },
     )

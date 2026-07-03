@@ -39,10 +39,14 @@ networks such as `10.0.0.0/8` and `172.16.0.0/12`. Never expose recursion to
 The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
 `9032`, targeting CLUSTER01-DC01 at `https://10.0.30.71:8006` / node
 `10.0.30.71`. Its installer config `fileserver-allinone-cloud-config` installs
-Samba AD/DC packages, Nextcloud web/PHP prerequisites, `nms-fileserver-agent`,
-and monitoring agents. The baked agent config uses
-`https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; clone-time
-user-data supplies the per-instance enrollment token.
+Samba AD/DC packages, Nextcloud web/PHP prerequisites, `python3-venv`, and
+monitoring agents. `nms-fileserver-agent` is installed from
+`NMS_FILESERVER_AGENT_PIP_SPEC`, not apt; the bake environment must provide that
+pip package or source spec. The image installs
+`nms-fileserver-agent-enroll.service` and
+`nms-fileserver-agent-heartbeat.timer`. The baked agent config uses
+`https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`;
+clone-time user-data supplies the per-instance enrollment token.
 
 ## Create VM Instances
 
