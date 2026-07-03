@@ -36,6 +36,14 @@ The PowerDNS co-hosted Authoritative + Recursor seed is
 networks such as `10.0.0.0/8` and `172.16.0.0/12`. Never expose recursion to
 `0.0.0.0/0`.
 
+The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
+`9032`, targeting CLUSTER01-DC01 at `https://10.0.30.71:8006` / node
+`10.0.30.71`. Its installer config `fileserver-allinone-cloud-config` installs
+Samba AD/DC packages, Nextcloud web/PHP prerequisites, `nms-fileserver-agent`,
+and monitoring agents. The baked agent config uses
+`https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; clone-time
+user-data supplies the per-instance enrollment token.
+
 ## Create VM Instances
 
 Each row in the Packer Templates table has a **Create new instance** action. The

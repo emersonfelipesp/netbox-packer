@@ -11,6 +11,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "netbox_packer"
 
@@ -269,6 +271,103 @@ def test_powerdns_auth_recursor_process_is_documented_for_operators_and_agents()
         "10.0.0.0/8",
         "172.16.0.0/12",
         "0.0.0.0/0",
+    )
+    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+
+def test_fileserver_allinone_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0014_seed_fileserver_allinone_cloud_init.py"
+    seed_rel = "netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml"
+    src = _read(rel)
+    seed = _read(seed_rel)
+    constants = _literal_assignments(rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+
+    assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
+    assert yaml.safe_load(seed)["package_update"] is True
+    assert seed.startswith("#cloud-config\n")
+
+    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
+    assert constants["CONFIG_VERSION"] == "1.0.0"
+    assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
+    assert constants["TEMPLATE_VMID"] == 9032
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
+    assert constants["PROXMOX_NODE"] == "10.0.30.71"
+    assert name == constants["TEMPLATE_NAME"]
+
+    assert defaults["os_family"] == "ubuntu"
+    assert defaults["os_version"] == "24.04"
+    assert defaults["proxmox_template_id"] == 9032
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
+    assert defaults["proxmox_node"] == "10.0.30.71"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+    assert defaults["install_qemu_guest_agent"] is True
+    assert defaults["install_zabbix_agent2"] is True
+    assert defaults["zabbix_server"] == "zabbix.nmulti.cloud"
+
+    assert '"installer_type": "cloud_config"' in src
+    for package in (
+        "samba",
+        "samba-dsdb-modules",
+        "samba-vfs-modules",
+        "winbind",
+        "libnss-winbind",
+        "libpam-winbind",
+        "krb5-user",
+        "acl",
+        "attr",
+        "chrony",
+        "nginx",
+        "php-fpm",
+        "php-ldap",
+        "php-smbclient",
+        "php-pgsql",
+        "php-gd",
+        "php-curl",
+        "php-zip",
+        "php-xml",
+        "php-mbstring",
+        "php-intl",
+        "php-bcmath",
+        "php-gmp",
+        "php-imagick",
+        "smbclient",
+        "cifs-utils",
+        "postgresql-client",
+        "qemu-guest-agent",
+        "zabbix-agent2",
+        "nms-fileserver-agent",
+    ):
+        assert package in seed
+
+    assert "NMS_BACKEND_URL=https://backend.nms.nmulti.cloud" in seed
+    assert "NETBOX_URL=https://netbox.nmulti.cloud" in seed
+    assert "NMS_FILESERVER_ENROLLMENT_TOKEN=" not in seed
+    assert "Server=zabbix.nmulti.cloud" in seed
+    assert "systemctl disable --now nginx || true" in seed
+    assert "systemctl mask smbd nmbd winbind || true" in seed
+    assert "samba-tool domain provision" not in seed
+    assert "occ maintenance:install" not in seed
+    assert "PackerTemplate.objects.filter(name=TEMPLATE_NAME).delete()" in src
+    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
+    assert '"netbox_packer", "0013_seed_powerdns_auth_recursor_cloud_init"' in src
+
+
+def test_fileserver_allinone_process_is_documented_for_operators_and_agents() -> None:
+    required = (
+        "tpl-fileserver-allinone-ubuntu-2404",
+        "fileserver-allinone-cloud-config",
+        "9032",
+        "https://10.0.30.71:8006",
+        "10.0.30.71",
+        "nms-fileserver-agent",
+        "https://backend.nms.nmulti.cloud",
+        "https://netbox.nmulti.cloud",
     )
     for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)

@@ -150,6 +150,41 @@ The recursor `allow-from` list is restricted to `127.0.0.1/8`, `10.0.0.0/8`,
 `172.16.0.0/12`, `192.168.0.0/16`, and `::1/128`. Do not set it to
 `0.0.0.0/0`; this template must not become an open resolver.
 
+## File Server All-in-One Template
+
+Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds the combined file
+server image used by File Server auto-provisioning.
+
+| Field | Value |
+| --- | --- |
+| Template name | `tpl-fileserver-allinone-ubuntu-2404` |
+| Installer config | `fileserver-allinone-cloud-config` |
+| Cloud-config source | `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml` |
+| OS | Ubuntu `24.04` |
+| Template VMID | `9032` |
+| Proxmox endpoint | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` |
+| Storage | `local` |
+| NMS backend URL | `https://backend.nms.nmulti.cloud` |
+| NetBox URL | `https://netbox.nmulti.cloud` |
+
+The default bake target is CLUSTER01-DC01. Operators may override the node or
+VMID at build dispatch when a different target is needed, but the seeded row is
+the production convention for this image.
+
+The cloud-config installs Samba AD/DC packages (`samba`, `samba-dsdb-modules`,
+`samba-vfs-modules`, `winbind`, `libnss-winbind`, `libpam-winbind`,
+`krb5-user`, `acl`, `attr`, `chrony`), Nextcloud web/PHP prerequisites
+(`nginx`, `php-fpm`, `php-ldap`, `php-smbclient`, `php-pgsql`, `php-gd`,
+`php-curl`, `php-zip`, `php-xml`, `php-mbstring`, `php-intl`, `php-bcmath`,
+`php-gmp`, `php-imagick`, `smbclient`, `cifs-utils`, `postgresql-client`),
+`qemu-guest-agent`, `zabbix-agent2`, and `nms-fileserver-agent`.
+
+This image is software-only. The bake does not create a Samba domain, does not
+run a Nextcloud tenant install, and does not include any tenant secret. `nginx`
+is disabled, `smbd`/`nmbd`/`winbind` are masked, and `nms-fileserver-agent` is
+disabled until clone-time user-data provides the one-time enrollment token.
+
 ## Build Verification
 
 After the build completes, the template row should have:
@@ -169,6 +204,12 @@ on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
 port 53, both PowerDNS API webservers should bind to localhost, and no
 configuration should expose recursion to `0.0.0.0/0`.
 
+For the File Server all-in-one template, VMID `9032` should be marked as a
+template on `10.0.30.71`. On a clone before tenant provisioning, Samba and
+nginx should remain inactive, `zabbix-agent2` should point at
+`zabbix.nmulti.cloud`, and `/etc/nms-fileserver-agent/config.env` should contain
+only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
+
 ## Regression Coverage
 
 `tests/test_cloud_config_build_static.py` locks the cloud-init build contract:
@@ -185,3 +226,7 @@ configuration should expose recursion to `0.0.0.0/0`.
 - the PowerDNS co-hosted seed keeps `pdns-server`, `pdns-recursor`,
   `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
   reversible seeded-row cleanup stable.
+- the File Server all-in-one seed keeps `tpl-fileserver-allinone-ubuntu-2404`,
+  `fileserver-allinone-cloud-config`, VMID `9032`, CLUSTER01-DC01 endpoint
+  `https://10.0.30.71:8006`, production NMS URLs, service-disabled defaults,
+  YAML parseability, and reversible seeded-row cleanup stable.
