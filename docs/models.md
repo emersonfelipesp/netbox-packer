@@ -116,6 +116,14 @@ A single build-run record for a `PackerTemplate`. Created by
     `"Jobs cannot be assigned to this object type"` and the Build button will
     silently do nothing.
 
+Build triggers must call the shared `dispatch_build(build)` helper immediately
+after creating the row and setting the template to `build_status="building"`.
+If enqueue fails, the helper marks the build `failed`, appends an error to the
+build log, and sets the template to `failed` unless another build remains active.
+Local Packer subprocesses enforce `PACKER_BUILD_TIMEOUT_SECONDS` with a watchdog
+that kills silent `packer init` / `packer build` stalls even when no new output
+arrives.
+
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `template` | FK → PackerTemplate | — | CASCADE |

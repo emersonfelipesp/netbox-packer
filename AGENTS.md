@@ -19,6 +19,18 @@ Do not point this seeded template process at the production
 `CLAUDE.md`, this file, and `tests/test_cloud_config_build_static.py` aligned
 when changing the cloud-init template image flow.
 
+## Build Dispatch Guardrail
+
+Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the
+shared `dispatch_build(build)` helper immediately after setting the template to
+`build_status="building"`. `dispatch_build()` must enqueue with
+`PackerBuildJob.enqueue(build_id=build.pk)` only; never pass `instance=build`.
+If enqueue fails, the build is marked `failed`, an error is written to the build
+log, and the template returns to `failed` unless another build is active.
+
+Local `packer init` / `packer build` subprocesses must enforce
+`PACKER_BUILD_TIMEOUT_SECONDS` even during silent stalls with no stdout.
+
 ## PowerDNS Co-hosted Resolver Seed
 
 Migration `0013_seed_powerdns_auth_recursor_cloud_init.py` seeds

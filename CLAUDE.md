@@ -118,13 +118,26 @@ dependency).
 
 ### Dispatch invariants (do not regress)
 
+- Every build trigger must create a `PackerBuild(status="queued")`, set the
+  template `build_status` to `"building"`, then immediately call the shared
+  `dispatch_build(build)` helper. Creating the row is not enough; no signal
+  auto-starts a build.
 - `dispatch_build()` MUST enqueue with `PackerBuildJob.enqueue(build_id=build.pk)`
   and **never** pass `instance=build`. `PackerBuild` is not a jobs-assignable
   object type, so `instance=build` raises *"Jobs cannot be assigned to this
   object type"* and the UI Build button silently no-ops.
+- If enqueue fails, `dispatch_build()` marks that `PackerBuild` as `failed`,
+  appends an error line to the build log, and sets the template back to
+  `failed` unless another build is still queued/running. UI and API callers must
+  surface the failure instead of reporting a false queued success.
+- Local `packer init` / `packer build` subprocesses must honor
+  `PACKER_BUILD_TIMEOUT_SECONDS` even when the process emits no stdout. The
+  watchdog in `_run_subprocess()` is intentionally independent of output
+  arrival.
 - `target_node` MUST collapse an unset value to `None`, never `""` — proxbox-api
   rejects an empty `target_node` with HTTP 422 (`min_length=1`).
-- Both are locked by `tests/test_cloud_config_build_static.py`.
+- These contracts are locked by `tests/test_cloud_config_build_static.py` and
+  `tests/test_build_dispatch_behavior.py`.
 
 ### Prerequisites (proxbox-api side)
 
