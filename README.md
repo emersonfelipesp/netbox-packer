@@ -68,6 +68,18 @@ wheel, source archive, or direct VCS/source spec. The image installs
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`, and the
 one-time enrollment token is injected only by clone-time user-data.
 
+## Build Dispatch and Timeouts
+
+Build triggers create a `PackerBuild` row, set the template to `building`, and
+immediately enqueue `PackerBuildJob` through the shared dispatcher using the
+`build_id` keyword argument. If the queue cannot accept the job, the build is
+marked `failed`, an error is appended to the build log, and the API/UI reports
+that the build was not queued.
+
+For local Packer builds, `PACKER_BUILD_TIMEOUT_SECONDS` is enforced by a
+watchdog that kills the subprocess even when `packer init` or `packer build`
+stalls without producing stdout.
+
 ## Create VM Instances from Templates
 
 The Packer Templates table includes a per-row **Create new instance** action.

@@ -3,7 +3,7 @@
 import logging
 import re
 import subprocess
-from datetime import timedelta
+import threading
 
 from django.conf import settings
 from django.utils import timezone
@@ -453,20 +453,40 @@ class PackerBuildJob(JobRunner):
             log_lines.append("[ERROR] packer executable not found in PATH")
             return 127
 
-        deadline = timezone.now() + timedelta(seconds=timeout)
+        timeout_seconds = int(timeout)
+        timed_out = threading.Event()
 
-        for line_count, line in enumerate(proc.stdout, start=1):
-            log_lines.append(line.rstrip())
-            # Partial save every 50 lines so logs appear incrementally
-            if line_count % 50 == 0:
-                build.log = "\n".join(log_lines)
-                build.save(update_fields=["log"])
-            if timezone.now() > deadline:
+        def kill_on_timeout():
+            if proc.poll() is not None:
+                return
+            try:
                 proc.kill()
-                log_lines.append(f"[ERROR] Timeout exceeded ({timeout}s) during {phase}")
-                return 124
+            except ProcessLookupError:
+                return
+            timed_out.set()
 
-        proc.wait()
+        timeout_timer = threading.Timer(timeout_seconds, kill_on_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
+
+        try:
+            for line_count, line in enumerate(proc.stdout, start=1):
+                log_lines.append(line.rstrip())
+                # Partial save every 50 lines so logs appear incrementally
+                if line_count % 50 == 0:
+                    build.log = "\n".join(log_lines)
+                    build.save(update_fields=["log"])
+
+            proc.wait()
+        finally:
+            timeout_timer.cancel()
+
+        if timed_out.is_set():
+            log_lines.append(f"[ERROR] Timeout exceeded ({timeout_seconds}s) during {phase}")
+            build.log = "\n".join(log_lines)
+            build.save(update_fields=["log"])
+            return 124
+
         return proc.returncode
 
 
@@ -589,14 +609,45 @@ class PackerStalenessCheckJob(JobRunner):
 def dispatch_build(build):
     """Enqueue a PackerBuildJob (RQ background) for an existing PackerBuild.
 
-    Logs and re-raises on failure so callers can decide how to surface it. This
-    is the single dispatch point used by both the REST API and the HTML build
-    action, fixing the gap where creating a PackerBuild never started a job.
+    Marks the build failed and re-raises on enqueue failure so callers can decide
+    how to surface it. This is the single dispatch point used by both the REST
+    API and the HTML build action, fixing the gap where creating a PackerBuild
+    never started a job.
     """
     try:
         # No `instance=`: PackerBuild is not a jobs-assignable object type in NetBox
         # ("Jobs cannot be assigned to this object type"); the job links via build_id.
         PackerBuildJob.enqueue(build_id=build.pk)
-    except Exception:
+    except Exception as exc:
+        _mark_enqueue_failed(build, exc)
         logger.exception("Failed to enqueue PackerBuildJob for build #%s", build.pk)
         raise
+
+
+def _mark_enqueue_failed(build, exc):
+    """Persist a failed build state when the RQ enqueue operation itself fails."""
+    build.status = "failed"
+    build.finished_at = timezone.now()
+    error_line = f"[ERROR] Failed to enqueue PackerBuildJob: {exc}"
+    build.log = f"{build.log or ''}\n{error_line}".strip()
+    build.save(update_fields=["status", "finished_at", "log"])
+
+    template_id = getattr(build, "template_id", None)
+    if not template_id:
+        template = getattr(build, "template", None)
+        template_id = getattr(template, "pk", None)
+    if not template_id:
+        return
+
+    from .models import PackerBuild, PackerTemplate
+
+    has_other_active_build = (
+        PackerBuild.objects.filter(
+            template_id=template_id,
+            status__in=("queued", "running"),
+        )
+        .exclude(pk=build.pk)
+        .exists()
+    )
+    if not has_other_active_build:
+        PackerTemplate.objects.filter(pk=template_id).update(build_status="failed")

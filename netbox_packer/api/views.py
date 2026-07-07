@@ -52,7 +52,18 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
 
         from ..jobs import dispatch_build
 
-        dispatch_build(build)
+        try:
+            dispatch_build(build)
+        except Exception as exc:
+            serializer = PackerBuildSerializer(build, context={"request": request})
+            return Response(
+                {
+                    "detail": f"Build #{build.pk} could not be queued: {exc}",
+                    "build": serializer.data,
+                },
+                status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         serializer = PackerBuildSerializer(build, context={"request": request})
         return Response(serializer.data, status=http_status.HTTP_202_ACCEPTED)
 
