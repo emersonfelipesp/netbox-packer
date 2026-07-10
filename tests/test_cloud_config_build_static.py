@@ -513,6 +513,39 @@ def test_jobs_has_monitoring_injection_functions() -> None:
     # Security: module-level regex guard prevents heredoc break-out via zabbix_server.
     assert "_ZABBIX_SERVER_RE" in src
     assert "raise ValueError" in src
+    # Password SSH: every baked image permits password auth (ssh_pwauth), unless
+    # the template already declares it. The password itself is never baked.
+    assert '"ssh_pwauth" not in user_data_yaml' in src
+    assert 'config["ssh_pwauth"] = True' in src
+
+
+def test_ubuntu_lts_base_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0015_seed_ubuntu_lts_base_cloud_init.py"
+    src = _read(rel)
+    constants = _literal_assignments(rel)
+
+    assert constants["CONFIG_NAME"] == "ubuntu-lts-base-cloud-config"
+    assert constants["CONFIG_VERSION"] == "1.0.0"
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
+    assert constants["PROXMOX_NODE"] == "10.0.30.71"
+    # Minimal base config; agents + ssh_pwauth are injected at build time.
+    assert constants["UBUNTU_LTS_BASE_CLOUD_CONFIG"].startswith("#cloud-config\n")
+
+    # The three most recent Ubuntu LTS releases on fresh, unused VMIDs.
+    assert '("ubuntu-2204-cloudinit-base", "22.04", 9040)' in src
+    assert '("ubuntu-2404-cloudinit-base", "24.04", 9041)' in src
+    assert '("ubuntu-2604-cloudinit-base", "26.04", 9042)' in src
+
+    assert '"installer_type": "cloud_config"' in src
+    assert '"storage_pool": "local"' in src
+    assert '"cloud_init_ready": True' in src
+    assert '"install_qemu_guest_agent": True' in src
+    assert '"install_zabbix_agent2": True' in src
+    assert '"zabbix_server": "zabbix.nmulti.cloud"' in src
+    # Idempotent + reversible seed (deletes only its own named rows on reverse).
+    assert "get_or_create" in src
+    assert "def unseed_ubuntu_lts_base" in src
+    assert '("netbox_packer", "0014_seed_fileserver_allinone_cloud_init")' in src
 
 
 def test_serializer_exposes_monitoring_agent_fields() -> None:
