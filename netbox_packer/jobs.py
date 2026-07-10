@@ -254,6 +254,16 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
         if not any(script_path in str(r) for r in runcmds):
             runcmds.append(["bash", script_path])
 
+    # --- Password SSH auth ---
+    # Every cloud-init template must support username+password SSH (key-based
+    # stays the default). This only *permits* password auth in the guest sshd;
+    # the per-VM password itself is supplied at clone time via Proxmox
+    # cloud-init (cipassword) and is never baked into the image. Check the
+    # parsed config (not the raw string) so an explicit `ssh_pwauth:` key wins
+    # while an unrelated comment mentioning it does not skip injection.
+    if "ssh_pwauth" not in config:
+        config["ssh_pwauth"] = True
+
     if pkgs:
         config["packages"] = pkgs
     if runcmds:
@@ -350,8 +360,7 @@ class PackerBuildJob(JobRunner):
             + (
                 str(endpoint_id)
                 if endpoint_id is not None
-                else "UNSET (required by proxbox-api when execute=true — pass "
-                "variable_overrides['endpoint_id'])"
+                else "UNSET (required by proxbox-api when execute=true — pass variable_overrides['endpoint_id'])"
             ),
         ]
 
