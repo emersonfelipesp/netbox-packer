@@ -644,7 +644,7 @@ def test_ubuntu_lts_base_seed_contract() -> None:
     # Idempotent + reversible seed (deletes only its own named rows on reverse).
     assert "get_or_create" in src
     assert "def unseed_ubuntu_lts_base" in src
-    assert '("netbox_packer", "0014_seed_fileserver_allinone_cloud_init")' in src
+    assert '("netbox_packer", "0015_seed_passbolt_cloud_init")' in src
 
 
 def test_serializer_exposes_monitoring_agent_fields() -> None:

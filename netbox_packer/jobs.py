@@ -360,8 +360,7 @@ class PackerBuildJob(JobRunner):
             + (
                 str(endpoint_id)
                 if endpoint_id is not None
-                else "UNSET (required by proxbox-api when execute=true — pass "
-                "variable_overrides['endpoint_id'])"
+                else "UNSET (required by proxbox-api when execute=true — pass variable_overrides['endpoint_id'])"
             ),
         ]
 
