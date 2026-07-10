@@ -239,9 +239,10 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
     # Every cloud-init template must support username+password SSH (key-based
     # stays the default). This only *permits* password auth in the guest sshd;
     # the per-VM password itself is supplied at clone time via Proxmox
-    # cloud-init (cipassword) and is never baked into the image. Skip if the
-    # template already declares ssh_pwauth so an explicit author intent wins.
-    if "ssh_pwauth" not in user_data_yaml:
+    # cloud-init (cipassword) and is never baked into the image. Check the
+    # parsed config (not the raw string) so an explicit `ssh_pwauth:` key wins
+    # while an unrelated comment mentioning it does not skip injection.
+    if "ssh_pwauth" not in config:
         config["ssh_pwauth"] = True
 
     if pkgs:

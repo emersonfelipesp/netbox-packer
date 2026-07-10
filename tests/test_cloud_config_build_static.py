@@ -515,7 +515,7 @@ def test_jobs_has_monitoring_injection_functions() -> None:
     assert "raise ValueError" in src
     # Password SSH: every baked image permits password auth (ssh_pwauth), unless
     # the template already declares it. The password itself is never baked.
-    assert '"ssh_pwauth" not in user_data_yaml' in src
+    assert '"ssh_pwauth" not in config' in src
     assert 'config["ssh_pwauth"] = True' in src
 
 

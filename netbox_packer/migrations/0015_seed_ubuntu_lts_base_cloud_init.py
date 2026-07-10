@@ -84,9 +84,7 @@ def unseed_ubuntu_lts_base(apps, schema_editor):
     PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
 
-    PackerTemplate.objects.filter(
-        name__in=[name for name, _os, _vmid in UBUNTU_LTS_TEMPLATES]
-    ).delete()
+    PackerTemplate.objects.filter(name__in=[name for name, _os, _vmid in UBUNTU_LTS_TEMPLATES]).delete()
     PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()
 
 
