@@ -90,7 +90,7 @@ def unseed_ubuntu_lts_base(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("netbox_packer", "0014_seed_fileserver_allinone_cloud_init"),
+        ("netbox_packer", "0015_seed_passbolt_cloud_init"),
     ]
 
     operations = [

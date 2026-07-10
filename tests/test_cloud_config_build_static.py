@@ -111,6 +111,17 @@ def test_jobs_target_node_unset_becomes_none() -> None:
     assert 'target_node = (node or template.proxmox_node or "").strip() or None' in src
 
 
+def test_jobs_forwards_endpoint_id_to_proxbox_build() -> None:
+    # proxbox-api requires endpoint_id when execute=true (it enforces the
+    # allow_writes + access_methods=api_ssh gates). jobs.py must resolve it from
+    # variable_overrides and forward it to call_proxbox_build, or every
+    # cloud_config bake fails with HTTP 422 "endpoint_id is required".
+    src = _read("netbox_packer/jobs.py")
+    assert "def _resolve_endpoint_id(overrides):" in src
+    assert "endpoint_id = _resolve_endpoint_id(build.variable_overrides)" in src
+    assert "endpoint_id=endpoint_id," in src
+
+
 def test_build_actions_dispatch_the_job() -> None:
     api_src = _read("netbox_packer/api/views.py")
     ui_src = _read("netbox_packer/views.py")
@@ -390,6 +401,94 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
             assert text in doc, f"{rel} must document {text}"
 
 
+def test_passbolt_ce_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0015_seed_passbolt_cloud_init.py"
+    seed_rel = "netbox_packer/seeds/passbolt-ce-ubuntu-2404.cloud-config.yaml"
+    src = _read(rel)
+    seed = _read(seed_rel)
+    constants = _literal_assignments(rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+
+    assert constants["PASSBOLT_CLOUD_CONFIG"] == seed
+    assert yaml.safe_load(seed)["package_update"] is True
+    assert seed.startswith("#cloud-config\n")
+
+    assert constants["CONFIG_NAME"] == "passbolt-ce-ubuntu-2404"
+    assert constants["CONFIG_VERSION"] == "1.0.0"
+    assert constants["TEMPLATE_NAME"] == "passbolt-ce-ubuntu-2404"
+    assert constants["TEMPLATE_VMID"] == 9060
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
+    assert constants["PROXMOX_NODE"] == "10.0.30.71"
+    assert name == constants["TEMPLATE_NAME"]
+
+    assert defaults["os_family"] == "ubuntu"
+    assert defaults["os_version"] == "24.04"
+    assert defaults["proxmox_template_id"] == 9060
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
+    assert defaults["proxmox_node"] == "10.0.30.71"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+    assert defaults["install_qemu_guest_agent"] is True
+    assert defaults["install_zabbix_agent2"] is True
+    assert defaults["zabbix_server"] == "zabbix.nmulti.cloud"
+
+    assert '"installer_type": "cloud_config"' in src
+
+    # Native Passbolt CE install via the official checksum-pinned repo setup.
+    assert "https://download.passbolt.com/ce/installer/passbolt-repo-setup.ce.sh" in seed
+    assert "passbolt-ce-SHA512SUM.txt" in seed
+    assert "sha512sum -c passbolt-ce-SHA512SUM.txt" in seed
+    assert "apt-get install -y passbolt-ce-server" in seed
+    assert "mariadb-server" in seed
+
+    # Reverse-proxy contract: plain HTTP, TLS terminated upstream (no SSL here).
+    assert "passbolt/nginx-configuration-three-choices select none" in seed
+    assert "passbolt/nginx-domain string credential.nmulti.cloud" in seed
+    assert "https://credential.nmulti.cloud" in seed
+    # JWT + base URL are injected as php-fpm pool env[] entries (effective at
+    # runtime despite clear_env), not an inert env drop-in.
+    assert "env[APP_FULL_BASE_URL]" in seed
+    assert "PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED" in seed
+    assert "create_jwt_keys" in seed
+
+    # No baked secret: the local DB password is generated on first boot.
+    assert "openssl rand -hex 24" in seed
+    assert "/etc/passbolt/.db_password" in seed
+
+    # Monitoring agents must be injected at build time, not present in the seed.
+    assert "zabbix-agent2" not in seed
+    assert "qemu-guest-agent" not in seed
+
+    # SMTP intentionally deferred.
+    assert "SMTP is intentionally unconfigured" in seed
+
+    # Installer config content is authoritative (self-healing) via update_or_create,
+    # so a stale row from an earlier seed iteration is refreshed, not left behind.
+    assert "PackerInstallerConfig.objects.update_or_create(" in src
+
+    # Reversible seed + correct dependency chain.
+    assert "PackerTemplate.objects.filter(name=TEMPLATE_NAME).delete()" in src
+    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
+    assert '"netbox_packer", "0014_seed_fileserver_allinone_cloud_init"' in src
+
+
+def test_passbolt_ce_process_is_documented_for_operators_and_agents() -> None:
+    required = (
+        "passbolt-ce-ubuntu-2404",
+        "9060",
+        "https://10.0.30.71:8006",
+        "10.0.30.71",
+        "credential.nmulti.cloud",
+        "passbolt-ce-server",
+        "PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED",
+    )
+    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+
 # ── Isolated functional test of the proxbox-api client ────────────────────────
 
 
@@ -520,7 +619,7 @@ def test_jobs_has_monitoring_injection_functions() -> None:
 
 
 def test_ubuntu_lts_base_seed_contract() -> None:
-    rel = "netbox_packer/migrations/0015_seed_ubuntu_lts_base_cloud_init.py"
+    rel = "netbox_packer/migrations/0016_seed_ubuntu_lts_base_cloud_init.py"
     src = _read(rel)
     constants = _literal_assignments(rel)
 

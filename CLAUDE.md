@@ -230,9 +230,10 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0012` | `pdns-recursor-ubuntu-2404` | 9018 | Ubuntu 24.04 | `https://10.0.30.71:8006` | PowerDNS Recursor 5.1 caching forwarder → `168.0.96.26`/`168.0.96.27`; allows RFC1918 clients |
 | `0013` | `powerdns-auth-recursor-ubuntu` | 9019 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Co-hosted PowerDNS Authoritative + Recursor; auth on `127.0.0.1:5300`, recursor on primary interface `:53`, private client ranges only |
 | `0014` | `tpl-fileserver-allinone-ubuntu-2404` | 9032 | Ubuntu 24.04 | `https://10.0.30.71:8006` | File Server all-in-one; Samba AD/DC packages + Nextcloud prerequisites + pip-installed `nms-fileserver-agent`; runtime provisioning supplies tenant state and enrollment token |
-| `0015` | `ubuntu-2204-cloudinit-base` | 9040 | Ubuntu 22.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template for the customer VM catalog; minimal `#cloud-config` (QGA + Zabbix + `ssh_pwauth` injected at build time). Shares installer config `ubuntu-lts-base-cloud-config` |
-| `0015` | `ubuntu-2404-cloudinit-base` | 9041 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above) |
-| `0015` | `ubuntu-2604-cloudinit-base` | 9042 | Ubuntu 26.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above). Verify the 26.04 cloud image URL resolves before baking |
+| `0015` | `passbolt-ce-ubuntu-2404` | 9060 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Passbolt CE native `passbolt-ce-server` (nginx + php-fpm + local MariaDB) for `credential.nmulti.cloud` on node `10.0.30.71`; `PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`, TLS upstream (HTTP :80); DB password generated first-boot, server key/JWT/DB from data migration |
+| `0016` | `ubuntu-2204-cloudinit-base` | 9040 | Ubuntu 22.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template for the customer VM catalog; minimal `#cloud-config` (QGA + Zabbix + `ssh_pwauth` injected at build time). Shares installer config `ubuntu-lts-base-cloud-config` |
+| `0016` | `ubuntu-2404-cloudinit-base` | 9041 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above) |
+| `0016` | `ubuntu-2604-cloudinit-base` | 9042 | Ubuntu 26.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above). Verify the 26.04 cloud image URL resolves before baking |
 
 #### Migration 0008 — monitoring-agent fields
 

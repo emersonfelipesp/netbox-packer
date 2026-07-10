@@ -54,6 +54,18 @@ authoritative listener. The resolver allow-list is locked to private ranges
 including `10.0.0.0/8` and `172.16.0.0/12`; it must never be changed to
 `0.0.0.0/0`.
 
+The Passbolt CE seed is `passbolt-ce-ubuntu-2404`, VMID `9060`, on CLUSTER01-DC01
+at `https://10.0.30.71:8006` / node `10.0.30.71` (storage `local`). It installs
+the native `passbolt-ce-server` package (nginx + php-fpm + local MariaDB) for
+`https://credential.nmulti.cloud` with
+`PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`. TLS is terminated upstream by
+nginx-nms, so the guest serves plain HTTP on `:80`
+(`passbolt/nginx-configuration-three-choices select none`). The QEMU guest agent
+and Zabbix Agent 2 are injected at bake time; the local MariaDB password is
+generated on first boot (no baked secret), and the production server OpenPGP key,
+JWT keys, and database are supplied by the data migration from the existing
+Passbolt instance.
+
 The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
 `9032`, using installer config `fileserver-allinone-cloud-config` on
 CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. It installs
