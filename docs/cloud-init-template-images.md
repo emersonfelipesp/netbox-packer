@@ -150,6 +150,35 @@ The recursor `allow-from` list is restricted to `127.0.0.1/8`, `10.0.0.0/8`,
 `172.16.0.0/12`, `192.168.0.0/16`, and `::1/128`. Do not set it to
 `0.0.0.0/0`; this template must not become an open resolver.
 
+## Passbolt CE Template
+
+Migration `0015_seed_passbolt_cloud_init.py` seeds the Passbolt CE secret-manager
+image that hosts `https://credential.nmulti.cloud`.
+
+| Field | Value |
+| --- | --- |
+| Template name | `passbolt-ce-ubuntu-2404` |
+| Installer config | `passbolt-ce-ubuntu-2404` |
+| Cloud-config source | `netbox_packer/seeds/passbolt-ce-ubuntu-2404.cloud-config.yaml` |
+| OS | Ubuntu `24.04` |
+| Template VMID | `9060` |
+| Proxmox endpoint | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` |
+| Storage | `local` |
+| App base URL | `https://credential.nmulti.cloud` |
+
+The cloud-config installs the native `passbolt-ce-server` package via the
+official checksum-pinned repo setup (nginx + php-fpm + a local MariaDB), sets
+`PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`, and configures nginx WITHOUT
+SSL (`passbolt/nginx-configuration-three-choices select none`) because nginx-nms
+terminates TLS upstream — the guest serves plain HTTP on `:80`. The QEMU guest
+agent and Zabbix Agent 2 (pointed at `zabbix.nmulti.cloud`) are injected at bake
+time, so they are intentionally absent from the seed. No secret is baked: the
+local DB password is generated on first boot into `/etc/passbolt/.db_password`,
+and the production server OpenPGP key, JWT keys, and database are supplied by the
+data migration from the existing Passbolt instance. SMTP is intentionally left
+unconfigured until an operator wires a relay.
+
 ## File Server All-in-One Template
 
 Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds the combined file

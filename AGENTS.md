@@ -47,6 +47,20 @@ ranges including `10.0.0.0/8` and `172.16.0.0/12`; never change it to
 The default bake target is CLUSTER01-DC01, `https://10.0.30.71:8006` / node
 `10.0.30.71`, with operator overrides still available at build dispatch.
 
+## Passbolt CE Seed
+
+Migration `0015_seed_passbolt_cloud_init.py` seeds `passbolt-ce-ubuntu-2404` with
+VMID `9060` for Ubuntu 24.04 on CLUSTER01-DC01, `https://10.0.30.71:8006` / node
+`10.0.30.71`. The installer config is `passbolt-ce-ubuntu-2404` and the verbatim
+cloud-config is `netbox_packer/seeds/passbolt-ce-ubuntu-2404.cloud-config.yaml`.
+It installs the native `passbolt-ce-server` package (nginx + php-fpm + local
+MariaDB) for `credential.nmulti.cloud` with
+`PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`; TLS terminates upstream so the
+guest serves plain HTTP on `:80`. The QEMU guest agent and Zabbix Agent 2 are
+injected at bake time. No secret is baked: the local DB password is generated on
+first boot, and the server key, JWT keys, and database come from the data
+migration off the existing instance.
+
 ## File Server All-in-One Seed
 
 Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds
