@@ -73,6 +73,25 @@ def _resolve_ssh_host(template, overrides):
     return template.proxmox_node or None
 
 
+def _resolve_endpoint_id(overrides):
+    """Resolve the proxbox-api backend ProxmoxEndpoint id for the bake.
+
+    proxbox-api requires ``endpoint_id`` when ``execute=true`` so it can enforce
+    the ``allow_writes`` + ``access_methods=api_ssh`` gates before any SSH. The
+    template's ``proxmox_endpoint`` is a URL string, NOT the proxbox-api backend
+    primary key (see CLAUDE.md "Important boundary"), so the id is taken from
+    ``variable_overrides['endpoint_id']`` — supplied per-build the same way the
+    create-instance modal collects it. Returns an ``int`` or ``None``.
+    """
+    raw = (overrides or {}).get("endpoint_id")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def select_build_node(template, skip_affinity_check=False):
     """
     Select the best build node for a template from its PackerBuildTarget list.
@@ -319,6 +338,7 @@ class PackerBuildJob(JobRunner):
         target_node = (node or template.proxmox_node or "").strip() or None
         image_url = _resolve_cloud_image_url(template, build.variable_overrides)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
+        endpoint_id = _resolve_endpoint_id(build.variable_overrides)
 
         log_lines = [
             f"[INFO] Cloud-init template image build for '{template.name}'",
@@ -326,6 +346,13 @@ class PackerBuildJob(JobRunner):
             f"[INFO] Installer config: {installer} ({installer.installer_type})",
             f"[INFO] Base image: {image_url}",
             f"[INFO] Proxmox SSH host: {ssh_host or 'UNSET'} | storage: {storage}",
+            "[INFO] proxbox-api endpoint_id: "
+            + (
+                str(endpoint_id)
+                if endpoint_id is not None
+                else "UNSET (required by proxbox-api when execute=true — pass "
+                "variable_overrides['endpoint_id'])"
+            ),
         ]
 
         if not api_url:
@@ -359,6 +386,7 @@ class PackerBuildJob(JobRunner):
                 storage=storage,
                 snippets_storage=storage,
                 ssh_host=ssh_host,
+                endpoint_id=endpoint_id,
                 timeout=int(timeout) + 300,
             )
         except ProxboxApiError as exc:

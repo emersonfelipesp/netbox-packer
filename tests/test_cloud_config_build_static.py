@@ -111,6 +111,17 @@ def test_jobs_target_node_unset_becomes_none() -> None:
     assert 'target_node = (node or template.proxmox_node or "").strip() or None' in src
 
 
+def test_jobs_forwards_endpoint_id_to_proxbox_build() -> None:
+    # proxbox-api requires endpoint_id when execute=true (it enforces the
+    # allow_writes + access_methods=api_ssh gates). jobs.py must resolve it from
+    # variable_overrides and forward it to call_proxbox_build, or every
+    # cloud_config bake fails with HTTP 422 "endpoint_id is required".
+    src = _read("netbox_packer/jobs.py")
+    assert "def _resolve_endpoint_id(overrides):" in src
+    assert "endpoint_id = _resolve_endpoint_id(build.variable_overrides)" in src
+    assert "endpoint_id=endpoint_id," in src
+
+
 def test_build_actions_dispatch_the_job() -> None:
     api_src = _read("netbox_packer/api/views.py")
     ui_src = _read("netbox_packer/views.py")
