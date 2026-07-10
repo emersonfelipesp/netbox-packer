@@ -51,8 +51,11 @@ write_files:
       # 2. Bring the local database up before Passbolt configures against it.
       systemctl enable --now mariadb
 
-      # 3. Official Passbolt CE APT repository, added via the checksum-pinned
-      #    setup script (downloaded to disk and sha512-verified; no 'curl | bash').
+      # 3. Official Passbolt CE APT repository, added via the setup script
+      #    (downloaded to disk and sha512-verified against the upstream sums
+      #    file before running; no 'curl | bash'). The script + sums are fetched
+      #    from upstream 'latest' the same way the official docs do, so a bake
+      #    always gets a matching script/checksum pair rather than a stale pin.
       if ! ls /etc/apt/sources.list.d/passbolt* >/dev/null 2>&1; then
         WORKDIR="$(mktemp -d)"
         cd "${WORKDIR}"
@@ -81,19 +84,24 @@ write_files:
       } | debconf-set-selections
       apt-get install -y passbolt-ce-server
 
-      # 5. Force the https base URL and enable JWT auth (required by the
-      #    nms-backend Passbolt bridge). SMTP is intentionally left unconfigured.
-      {
-        printf 'export APP_FULL_BASE_URL=%s\n' "${APP_FULL_BASE_URL}"
-        printf '%s\n' 'export PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true'
-        printf '%s\n' '# SMTP is intentionally unconfigured for now (wire later):'
-        printf '%s\n' '# export EMAIL_TRANSPORT_DEFAULT_HOST='
-        printf '%s\n' '# export EMAIL_TRANSPORT_DEFAULT_PORT=587'
-        printf '%s\n' '# export EMAIL_TRANSPORT_DEFAULT_USERNAME='
-        printf '%s\n' '# export EMAIL_TRANSPORT_DEFAULT_PASSWORD='
-        printf '%s\n' '# export EMAIL_DEFAULT_FROM=passbolt@nmulti.cloud'
-      } > /etc/passbolt/passbolt.env
-      chmod 0640 /etc/passbolt/passbolt.env
+      # 5. Make the https base URL and JWT authentication effective at RUNTIME.
+      #    Passbolt reads process env vars, but php-fpm pools default to
+      #    clear_env=on, so a shell/environment drop-in would be inert. Inject
+      #    the values as pool-level env[] entries (the reliable native path) so
+      #    the Passbolt workers actually see them. The nms-backend Passbolt
+      #    bridge requires JWT. SMTP is intentionally unconfigured for now (wire
+      #    a relay later via EMAIL_TRANSPORT_DEFAULT_HOST / _PORT / _USERNAME /
+      #    _PASSWORD / EMAIL_DEFAULT_FROM).
+      shopt -s nullglob
+      for pool in /etc/php/*/fpm/pool.d/*.conf; do
+        if ! grep -q 'env\[APP_FULL_BASE_URL\]' "${pool}"; then
+          {
+            printf 'env[APP_FULL_BASE_URL] = %s\n' "${APP_FULL_BASE_URL}"
+            printf '%s\n' 'env[PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED] = true'
+          } >> "${pool}"
+        fi
+      done
+      shopt -u nullglob
 
       # 6. Generate a JWT keypair (best-effort; the production keys are replaced
       #    by the data migration, so a failure here must never abort first boot).
@@ -102,9 +110,9 @@ write_files:
         su -s /bin/bash -c "${CAKE} passbolt create_jwt_keys" www-data || true
       fi
 
-      # 7. Ensure the web stack is enabled.
+      # 7. (Re)start the web stack so the pool env[] changes take effect.
       systemctl enable --now mariadb || true
-      systemctl enable --now php8.3-fpm || true
-      systemctl enable --now nginx || true
+      systemctl restart php8.3-fpm 2>/dev/null || systemctl enable --now php8.3-fpm || true
+      systemctl restart nginx 2>/dev/null || systemctl enable --now nginx || true
 runcmd:
   - [bash, /usr/local/sbin/passbolt-ce-bootstrap]

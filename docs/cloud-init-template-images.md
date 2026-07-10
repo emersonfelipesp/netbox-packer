@@ -168,8 +168,9 @@ image that hosts `https://credential.nmulti.cloud`.
 | App base URL | `https://credential.nmulti.cloud` |
 
 The cloud-config installs the native `passbolt-ce-server` package via the
-official checksum-pinned repo setup (nginx + php-fpm + a local MariaDB), sets
-`PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`, and configures nginx WITHOUT
+official checksum-verified repo setup (nginx + php-fpm + a local MariaDB), makes
+`PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true` effective via php-fpm pool
+`env[]` entries, and configures nginx WITHOUT
 SSL (`passbolt/nginx-configuration-three-choices select none`) because nginx-nms
 terminates TLS upstream — the guest serves plain HTTP on `:80`. The QEMU guest
 agent and Zabbix Agent 2 (pointed at `zabbix.nmulti.cloud`) are injected at bake

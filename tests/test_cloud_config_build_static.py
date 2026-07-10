@@ -435,7 +435,10 @@ def test_passbolt_ce_seed_contract() -> None:
     assert "passbolt/nginx-configuration-three-choices select none" in seed
     assert "passbolt/nginx-domain string credential.nmulti.cloud" in seed
     assert "https://credential.nmulti.cloud" in seed
-    assert "PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true" in seed
+    # JWT + base URL are injected as php-fpm pool env[] entries (effective at
+    # runtime despite clear_env), not an inert env drop-in.
+    assert "env[APP_FULL_BASE_URL]" in seed
+    assert "PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED" in seed
     assert "create_jwt_keys" in seed
 
     # No baked secret: the local DB password is generated on first boot.
