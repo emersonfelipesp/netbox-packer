@@ -452,6 +452,10 @@ def test_passbolt_ce_seed_contract() -> None:
     # SMTP intentionally deferred.
     assert "SMTP is intentionally unconfigured" in seed
 
+    # Installer config content is authoritative (self-healing) via update_or_create,
+    # so a stale row from an earlier seed iteration is refreshed, not left behind.
+    assert "PackerInstallerConfig.objects.update_or_create(" in src
+
     # Reversible seed + correct dependency chain.
     assert "PackerTemplate.objects.filter(name=TEMPLATE_NAME).delete()" in src
     assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src

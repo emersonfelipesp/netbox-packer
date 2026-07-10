@@ -136,7 +136,11 @@ def seed_passbolt(apps, schema_editor):
     PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
 
-    config, _ = PackerInstallerConfig.objects.get_or_create(
+    # update_or_create (not get_or_create) so the installer-config content +
+    # checksum are authoritative whenever this migration runs: a stale row left by
+    # an earlier iteration of this seed is refreshed to the current cloud-config
+    # instead of silently keeping outdated content.
+    config, _ = PackerInstallerConfig.objects.update_or_create(
         name=CONFIG_NAME,
         version=CONFIG_VERSION,
         defaults={
