@@ -24,7 +24,7 @@ flow, prerequisites, and seeded examples.
 
 The InfluxDB 2 Proxmox metrics collector seed is
 `influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, targeting only the
-development endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not
+development endpoint ID 11, `https://10.0.30.58:8006` / node `10.0.30.58`. Do not
 target the production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this
 seeded build process.
 

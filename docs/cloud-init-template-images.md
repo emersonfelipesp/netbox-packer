@@ -73,8 +73,8 @@ used for Proxmox cluster metrics collectors.
 | Installer config | `influxdb-2-ubuntu-2404-proxmox-collector` |
 | OS | Ubuntu `24.04` |
 | Template VMID | `9011` |
-| Proxmox endpoint | `https://10.0.30.139:8006` |
-| Proxmox node / SSH host | `10.0.30.139` |
+| Proxmox endpoint ID 11 | `https://10.0.30.58:8006` |
+| Proxmox node / SSH host | `10.0.30.58` |
 | Storage | `local` |
 | Default InfluxDB org | `nmulticloud` |
 | Default InfluxDB bucket | `proxmox` |
@@ -82,8 +82,8 @@ used for Proxmox cluster metrics collectors.
 
 Guardrail: `https://10.0.30.9:8006` / `10.0.30.9` is the production
 `netbox.nmulti.cloud` Proxmox cluster. Do not seed, bake, or retarget this
-collector template there. The seeded build target is the development endpoint
-`https://10.0.30.139:8006` only.
+collector template there. The seeded build target is the development endpoint ID
+11, `https://10.0.30.58:8006` only.
 
 The cloud-init payload installs `influxdb2` from the official InfluxData APT
 repository after verifying key fingerprint
@@ -198,12 +198,12 @@ After the build completes, the template row should have:
 
 - `build_status = "ready"`
 - `proxmox_template_id = 9011`
-- `proxmox_endpoint = "https://10.0.30.139:8006"`
-- `proxmox_node = "10.0.30.139"`
+- `proxmox_endpoint = "https://10.0.30.58:8006"`
+- `proxmox_node = "10.0.30.58"`
 
-On the Proxmox development endpoint, VMID `9011` should be marked as a template
-and include a cloud-init `cicustom` user-data snippet. The production endpoint
-`10.0.30.9` must remain untouched by this process.
+On ProxmoxEndpoint ID 11 (`10.0.30.58`), VMID `9011` should be marked as a
+template and include a cloud-init `cicustom` user-data snippet. The production
+endpoint `10.0.30.9` must remain untouched by this process.
 
 For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
 on `10.0.30.71`. On first boot from a clone, `pdns` should listen on

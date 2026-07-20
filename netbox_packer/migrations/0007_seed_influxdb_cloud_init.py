@@ -93,8 +93,9 @@ runcmd:
 CONFIG_NAME = "influxdb-2-ubuntu-2404-proxmox-collector"
 CONFIG_VERSION = "1.0.0"
 TEMPLATE_NAME = "influxdb-2-ubuntu-2404-proxmox-collector"
-# Development Proxmox endpoint only. Do not seed or build this template on 10.0.30.9.
-PROXMOX_ENDPOINT = "https://10.0.30.139:8006"
+# Development Proxmox endpoint only (NetBox ProxmoxEndpoint ID 11).
+# Do not seed or build this template on 10.0.30.9.
+PROXMOX_ENDPOINT = "https://10.0.30.58:8006"
 TEMPLATE_VMID = 9011
 
 
@@ -124,7 +125,7 @@ def seed_influxdb(apps, schema_editor):
             "os_version": "24.04",
             "proxmox_template_id": TEMPLATE_VMID,
             "proxmox_endpoint": PROXMOX_ENDPOINT,
-            "proxmox_node": "10.0.30.139",
+            "proxmox_node": "10.0.30.58",
             "storage_pool": "local",
             "cloud_init_ready": True,
             "build_status": "pending",
@@ -132,7 +133,7 @@ def seed_influxdb(apps, schema_editor):
             "installer_config": config,
             "description": (
                 "InfluxDB 2.x cloud-init template image (Ubuntu 24.04). Builds via "
-                "proxbox-api on the development ProxmoxEndpoint 10.0.30.139 using "
+                "proxbox-api on development ProxmoxEndpoint ID 11 (10.0.30.58) using "
                 "storage 'local'. Do not target the production 10.0.30.9 cluster."
             ),
         },

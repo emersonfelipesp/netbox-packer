@@ -196,7 +196,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | Migration | Template name | VMID | OS | ProxmoxEndpoint | Notes |
 |---|---|---|---|---|---|
 | `0006` | `zabbix-7.4-ubuntu-2604-pgsql-nginx` | 9010 | Ubuntu 26.04 | `https://10.0.30.139:8006` (dev) | Zabbix 7.4 + PostgreSQL + nginx; dev host only |
-| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only; do **not** target production endpoint `10.0.30.9` |
+| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | Proxmox endpoint ID 11, `https://10.0.30.58:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only; do **not** target production endpoint `10.0.30.9` |
 | `0008` | *(schema only — adds monitoring-agent fields)* | — | — | — | Adds `install_qemu_guest_agent`, `install_zabbix_agent2`, `zabbix_server` to `PackerTemplate` |
 | `0009` | `k8s-1.31-ubuntu-2404-node` | 9012 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Kubernetes 1.31 base node (containerd + kubelet/kubeadm/kubectl, pre-pulls CP images) |
 | `0010` | *(schema only — adds RegexValidator to `zabbix_server` field)* | — | — | — | `AlterField` on `PackerTemplate.zabbix_server`; no data changes |

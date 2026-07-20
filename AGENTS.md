@@ -11,8 +11,8 @@ This file mirrors the sibling `CLAUDE.md` guidance for agents that read
 
 The seeded InfluxDB 2 collector template is
 `influxdb-2-ubuntu-2404-proxmox-collector` with VMID `9011`. The seed and bake
-process target only the development Proxmox endpoint
-`https://10.0.30.139:8006` / node `10.0.30.139`.
+process target only the development Proxmox endpoint ID 11,
+`https://10.0.30.58:8006` / node `10.0.30.58`.
 
 Do not point this seeded template process at the production
 `https://10.0.30.9:8006` / `10.0.30.9` cluster. Keep the project docs,

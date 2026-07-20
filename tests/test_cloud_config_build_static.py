@@ -155,14 +155,14 @@ def test_influxdb_seed_targets_development_endpoint_only() -> None:
     assert constants["CONFIG_VERSION"] == "1.0.0"
     assert constants["TEMPLATE_NAME"] == "influxdb-2-ubuntu-2404-proxmox-collector"
     assert constants["TEMPLATE_VMID"] == 9011
-    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.139:8006"
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.58:8006"
     assert name == constants["TEMPLATE_NAME"]
 
     assert defaults["os_family"] == "ubuntu"
     assert defaults["os_version"] == "24.04"
     assert defaults["proxmox_template_id"] == 9011
-    assert defaults["proxmox_endpoint"] == "https://10.0.30.139:8006"
-    assert defaults["proxmox_node"] == "10.0.30.139"
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.58:8006"
+    assert defaults["proxmox_node"] == "10.0.30.58"
     assert defaults["storage_pool"] == "local"
     assert defaults["cloud_init_ready"] is True
     assert defaults["build_status"] == "pending"
@@ -192,8 +192,9 @@ def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
     required = (
         "influxdb-2-ubuntu-2404-proxmox-collector",
         "9011",
-        "https://10.0.30.139:8006",
-        "10.0.30.139",
+        "https://10.0.30.58:8006",
+        "10.0.30.58",
+        "endpoint ID 11",
         "10.0.30.9",
     )
     for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
