@@ -19,10 +19,11 @@
    snippet as Proxmox `cicustom` user-data, converts the VM to a template with
    `qm template`, and returns the resulting VMID.
 
-The plugin settings must include `proxbox_api_url` and an encrypted
-`proxbox_api_key`. The target `ProxmoxEndpoint` in netbox-proxbox must allow
-writes, and the selected Proxmox storage must support `snippets`, `import`, and
-`images`.
+The `PackerPluginSettings` singleton row must include `proxbox_api_url` and an
+encrypted proxbox-api key (see [Configuration](configuration.md) — today this
+is set via the Python shell only, not a UI page or REST endpoint). The target
+`ProxmoxEndpoint` in netbox-proxbox must allow writes, and the selected Proxmox
+storage must support `snippets`, `import`, and `images`.
 
 ## Creating a template from the web form
 
@@ -61,6 +62,58 @@ OS_VERSIONS_BY_FAMILY = {
     # ...
 }
 ```
+
+## Zabbix 7.4 Monitoring Stack Template
+
+Migration `0006_seed_zabbix_cloud_init.py` seeds the Zabbix 7.4 monitoring
+server image.
+
+| Field | Value |
+| --- | --- |
+| Template name | `zabbix-7.4-ubuntu-2604-pgsql-nginx` |
+| Installer config | `zabbix-7.4-ubuntu-2604-pgsql-nginx` |
+| OS | Ubuntu `26.04` |
+| Template VMID | `9010` |
+| Proxmox endpoint | `https://10.0.30.139:8006` |
+| Proxmox node / SSH host | `10.0.30.139` |
+| Storage | `local` |
+
+Guardrail: `https://10.0.30.9:8006` / `10.0.30.9` is the production
+`netbox.nmulti.cloud` Proxmox cluster. Do not seed, bake, or retarget this
+monitoring-server template there. The seeded build target is the development
+endpoint `https://10.0.30.139:8006` only.
+
+The cloud-init payload installs Zabbix Server 7.4, the PHP frontend, and Agent
+2 on Ubuntu 26.04, backed by a local PostgreSQL database and nginx (PHP 8.5),
+and initializes the Zabbix database schema on first boot. Because the seed
+content already contains `"zabbix-agent2"`, the build-time monitoring-agent
+injection in `jobs.py` skips adding a second Zabbix Agent 2 install for this
+template.
+
+## Kubernetes 1.31 Node Templates
+
+Migrations `0009_seed_kubernetes_cloud_init.py` and
+`0011_seed_k8s_role_templates.py` seed three Kubernetes 1.31 node images on
+CLUSTER01-DC01.
+
+| Field | Base node | Control plane | Worker |
+| --- | --- | --- | --- |
+| Template name | `k8s-1.31-ubuntu-2404-node` | `k8s-1.31-control-plane-ubuntu-2404` | `k8s-1.31-worker-node-ubuntu-2404` |
+| Template VMID | `9012` | `9013` | `9014` |
+| OS | Ubuntu `24.04` | Ubuntu `24.04` | Ubuntu `24.04` |
+| Proxmox endpoint | `https://10.0.30.71:8006` | `https://10.0.30.71:8006` | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` | `10.0.30.71` | `10.0.30.71` |
+| Storage | `local` | `local` | `local` |
+
+All three cloud-init payloads install `containerd` and
+`kubelet`/`kubeadm`/`kubectl` pinned to `1.31`. The base node and control-plane
+images additionally run `kubeadm config images pull` to pre-pull the
+control-plane container images for a faster `kubeadm init`; the worker image
+skips that pre-pull. `qemu-guest-agent` is enabled on all three.
+
+These are pre-staged node images, not a running cluster: an operator still
+runs `kubeadm init` on the control-plane clone and `kubeadm join` on worker
+clones after provisioning.
 
 ## InfluxDB 2 Collector Template
 
@@ -221,6 +274,30 @@ is disabled, `smbd`/`nmbd`/`winbind` are masked,
 golden template, and `nms-fileserver-agent-heartbeat.timer` is disabled until
 clone-time user-data provides the one-time enrollment token and starts the agent
 lifecycle.
+
+## Base Ubuntu LTS Cloud-init Templates
+
+Migration `0016_seed_ubuntu_lts_base_cloud_init.py` seeds three minimal base
+images that serve as the starting templates for the customer VM catalog.
+
+| Field | Value |
+| --- | --- |
+| Template names | `ubuntu-2204-cloudinit-base` (VMID `9040`), `ubuntu-2404-cloudinit-base` (VMID `9041`), `ubuntu-2604-cloudinit-base` (VMID `9042`) |
+| Installer config | `ubuntu-lts-base-cloud-config` (shared by all three) |
+| OS | Ubuntu `22.04`, `24.04`, `26.04` respectively |
+| Proxmox endpoint | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` |
+| Storage | `local` |
+
+This is the only seed migration with a fully reversible reverse function —
+rolling it back deletes the three seeded rows.
+
+The cloud-config content is intentionally minimal. `qemu-guest-agent`,
+`zabbix-agent2`, and `ssh_pwauth: true` are all added by the build-time
+monitoring-agent injection in `jobs.py` rather than baked into the seed
+content directly. No secret is baked into the image: per-VM username,
+password (`cipassword`), and SSH keys are supplied by Proxmox cloud-init at
+clone time.
 
 ## Build Verification
 

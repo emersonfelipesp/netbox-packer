@@ -7,6 +7,18 @@ This file mirrors the sibling `CLAUDE.md` guidance for agents that read
 
 @CLAUDE.md
 
+## Zabbix Monitoring Stack Image Guardrail
+
+The seeded Zabbix 7.4 monitoring server template is
+`zabbix-7.4-ubuntu-2604-pgsql-nginx` with VMID `9010`. The seed and bake
+process target only the development Proxmox endpoint
+`https://10.0.30.139:8006` / node `10.0.30.139`.
+
+Do not point this seeded template process at the production
+`https://10.0.30.9:8006` / `10.0.30.9` cluster. Keep the project docs,
+`CLAUDE.md`, this file, and `tests/test_cloud_config_build_static.py` aligned
+when changing the cloud-init template image flow.
+
 ## InfluxDB Collector Image Guardrail
 
 The seeded InfluxDB 2 collector template is
@@ -78,3 +90,22 @@ spec. The image installs `nms-fileserver-agent-enroll.service` and
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; do not
 bake a tenant enrollment token into the image. The default bake target is
 CLUSTER01-DC01, `https://10.0.30.71:8006` / node `10.0.30.71`.
+
+## Base Ubuntu LTS Cloud-init Seed
+
+Migration `0016_seed_ubuntu_lts_base_cloud_init.py` seeds the customer VM
+catalog's starting templates: `ubuntu-2204-cloudinit-base` (VMID `9040`),
+`ubuntu-2404-cloudinit-base` (VMID `9041`), and `ubuntu-2604-cloudinit-base`
+(VMID `9042`), all on CLUSTER01-DC01, `https://10.0.30.71:8006` / node
+`10.0.30.71`, sharing installer config `ubuntu-lts-base-cloud-config`. This is
+a **production** endpoint, unlike the InfluxDB/Zabbix dev-only seeds above —
+do not confuse it with the development host `10.0.30.139`.
+
+The cloud-config content is intentionally minimal: `qemu-guest-agent`,
+`zabbix-agent2`, and `ssh_pwauth: true` are added by the build-time
+monitoring-agent injection in `jobs.py`, not baked into the seed. No secret is
+baked into the image — per-VM username, password (Proxmox `cipassword`), and
+SSH keys are supplied at clone time by Proxmox cloud-init. This is also the
+only seed migration whose reverse function is fully reversible (it deletes the
+three seeded rows on rollback); every other seed migration's reverse function
+is a no-op to avoid destroying operator data.
