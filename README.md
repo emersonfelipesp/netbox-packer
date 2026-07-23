@@ -16,7 +16,7 @@ resolve image IDs from the HCP Packer registry via `proxbox-api`.
 
 ## Status
 
-`netbox-packer` v0.0.4 ships Packer template, build, installer-config,
+`netbox-packer` v0.0.5 ships Packer template, build, installer-config,
 build-target, staleness, and HCP Packer registry sync support, plus a
 **cloud-init template image** path (see below).
 
@@ -34,9 +34,19 @@ cloud-init template image" dialog + per-row Build button).
 Requirements: `proxbox-api >= 0.0.18` with
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
-`snippets,import,images`. Configure `proxbox_api_url` + an encrypted API key on
-the plugin settings page. Seeded examples include Zabbix 7.4, InfluxDB 2, and
-PowerDNS service images.
+`snippets,import,images`. Configure `proxbox_api_url` and an encrypted API key
+on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
+(there is no NetBox UI page or REST endpoint for this settings model yet — see
+[`docs/configuration.md`](docs/configuration.md)). Seeded examples include
+Zabbix 7.4, InfluxDB 2, Kubernetes 1.31, PowerDNS, Passbolt CE, a File Server
+all-in-one image, and base Ubuntu LTS cloud-init templates.
+
+The Zabbix 7.4 monitoring stack seed is
+`zabbix-7.4-ubuntu-2604-pgsql-nginx`, VMID `9010`, on the development endpoint
+`https://10.0.30.139:8006`. It installs Zabbix Server 7.4 + frontend + Agent 2
+with a local PostgreSQL database and nginx (PHP 8.5), and initializes the
+Zabbix database schema on first boot. Do not target the production
+`https://10.0.30.9:8006` / `10.0.30.9` cluster with this seed.
 
 The InfluxDB 2 Proxmox metrics collector seed is
 `influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, on the development
@@ -44,6 +54,14 @@ endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not target the
 production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seeded bake
 process. See [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md),
 `CLAUDE.md`, and the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
+
+The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
+node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)
+that installs containerd + kubelet/kubeadm/kubectl 1.31 and pre-pulls
+control-plane images, plus a dedicated `k8s-1.31-control-plane-ubuntu-2404`
+(VMID `9013`) and `k8s-1.31-worker-node-ubuntu-2404` (VMID `9014`) pair. Run
+`kubeadm init`/`kubeadm join` after cloning; these images are pre-staged nodes,
+not a running cluster.
 
 The PowerDNS co-hosted Authoritative + Recursor seed is
 `powerdns-auth-recursor-ubuntu`, VMID `9019`, on Ubuntu 24.04. It installs
@@ -79,6 +97,16 @@ wheel, source archive, or direct VCS/source spec. The image installs
 `nms-fileserver-agent-heartbeat.timer`; the baked config points at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`, and the
 one-time enrollment token is injected only by clone-time user-data.
+
+The base Ubuntu LTS cloud-init seeds are the customer VM catalog's starting
+templates: `ubuntu-2204-cloudinit-base` (VMID `9040`), `ubuntu-2404-cloudinit-base`
+(VMID `9041`), and `ubuntu-2604-cloudinit-base` (VMID `9042`), all on
+CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`, sharing
+installer config `ubuntu-lts-base-cloud-config`. The cloud-config is
+intentionally minimal — QEMU Guest Agent, Zabbix Agent 2, and `ssh_pwauth` are
+all injected at build time rather than baked into the seed content. No secret
+is baked into the image: per-VM username, password (Proxmox `cipassword`), and
+SSH keys are supplied at clone time by Proxmox cloud-init.
 
 ## Build Dispatch and Timeouts
 
