@@ -1,0 +1,1621 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="NetBox plugin for HashiCorp Packer image-build inventory through proxbox-api">
+      
+      
+      
+        <link rel="canonical" href="https://emersonfelipesp.github.io/netbox-packer/cloud-init-template-images/">
+      
+      
+        <link rel="prev" href="../models/">
+      
+      
+        <link rel="next" href="../certification/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Cloud-init Template Images - netbox-packer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cloud-init-template-images" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="netbox-packer" class="md-header__button md-logo" aria-label="netbox-packer" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            netbox-packer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cloud-init Template Images
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="deep-orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7M9 21v-1h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1m3-17a5 5 0 0 0-5 5c0 2.05 1.23 3.81 3 4.58V16h4v-2.42c1.77-.77 3-2.53 3-4.58a5 5 0 0 0-5-5"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/emersonfelipesp/netbox-packer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    emersonfelipesp/netbox-packer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="netbox-packer" class="md-nav__button md-logo" aria-label="netbox-packer" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    netbox-packer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/emersonfelipesp/netbox-packer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    emersonfelipesp/netbox-packer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cloud-init Template Images
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cloud-init Template Images
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creating-a-template-from-the-web-form" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating a template from the web form
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating a template from the web form">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-new-os-version-to-the-dropdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a new OS version to the dropdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zabbix-74-monitoring-stack-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zabbix 7.4 Monitoring Stack Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubernetes-131-node-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes 1.31 Node Templates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#influxdb-2-collector-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InfluxDB 2 Collector Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#powerdns-authoritative-recursor-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PowerDNS Authoritative + Recursor Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passbolt-ce-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passbolt CE Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-server-all-in-one-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File Server All-in-One Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#base-ubuntu-lts-cloud-init-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Base Ubuntu LTS Cloud-init Templates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regression-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression Coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Release Notes
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Summary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-notes/version-0.0.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version 0.0.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-notes/version-0.0.2.post2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version 0.0.2.post2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creating-a-template-from-the-web-form" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating a template from the web form
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating a template from the web form">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-new-os-version-to-the-dropdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a new OS version to the dropdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zabbix-74-monitoring-stack-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zabbix 7.4 Monitoring Stack Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubernetes-131-node-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes 1.31 Node Templates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#influxdb-2-collector-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InfluxDB 2 Collector Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#powerdns-authoritative-recursor-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PowerDNS Authoritative + Recursor Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passbolt-ce-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passbolt CE Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-server-all-in-one-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File Server All-in-One Template
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#base-ubuntu-lts-cloud-init-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Base Ubuntu LTS Cloud-init Templates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regression-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression Coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cloud-init-template-images">Cloud-init Template Images<a class="headerlink" href="#cloud-init-template-images" title="Permanent link">&para;</a></h1>
+<p><code>netbox-packer</code> can store a cloud-init user-data document in
+<code>PackerInstallerConfig</code> and bake it into a Proxmox VM template through
+<code>proxbox-api</code>. The plugin does not run local Packer for this path. It creates a
+<code>PackerBuild</code>, queues <code>PackerBuildJob</code>, and delegates the real Proxmox work to
+<code>POST /cloud/templates/images</code> on <code>proxbox-api</code>.</p>
+<h2 id="flow">Flow<a class="headerlink" href="#flow" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Create or select a <code>PackerInstallerConfig</code> where
+   <code>installer_type = "cloud_config"</code>.</li>
+<li>Create or select a <code>PackerTemplate</code> that references the installer config.</li>
+<li>Trigger the template build from NetBox, the API, or the NMS page at
+   <code>/virtualization/packer</code>.</li>
+<li><code>PackerBuildJob</code> resolves the build node, base cloud image URL, storage, and
+   SSH host.</li>
+<li><code>proxbox-api</code> downloads the base image, creates the VM, writes the cloud-init
+   snippet as Proxmox <code>cicustom</code> user-data, converts the VM to a template with
+   <code>qm template</code>, and returns the resulting VMID.</li>
+</ol>
+<p>The <code>PackerPluginSettings</code> singleton row must include <code>proxbox_api_url</code> and an
+encrypted proxbox-api key (see <a href="../configuration/">Configuration</a> — today this
+is set via the Python shell only, not a UI page or REST endpoint). The target
+<code>ProxmoxEndpoint</code> in netbox-proxbox must allow writes, and the selected Proxmox
+storage must support <code>snippets</code>, <code>import</code>, and <code>images</code>.</p>
+<h2 id="creating-a-template-from-the-web-form">Creating a template from the web form<a class="headerlink" href="#creating-a-template-from-the-web-form" title="Permanent link">&para;</a></h2>
+<p>The template add/edit form (<code>/plugins/packer/templates/add/</code>) is optimised for
+creating cloud-init images:</p>
+<ul>
+<li><strong>OS family</strong> and <strong>OS version</strong> are both dropdowns. OS version is grouped by
+  OS family (Ubuntu / Debian / RHEL / Proxmox) and, with JavaScript enabled,
+  narrows to the family you pick. It works without JavaScript too — every
+  version stays listed under its optgroup. An existing template whose stored
+  version is not in the offered list keeps that value selectable, so editing an
+  older template never fails validation.</li>
+<li><strong>Machine-managed fields are hidden.</strong> <code>built_at</code>, <code>packer_template_ref</code>, and
+  <code>installer_config_checksum_at_build</code> are written by <code>PackerBuildJob</code>, so the
+  form no longer asks operators to fill them in. They remain available via the
+  REST API.</li>
+<li><strong>Guidance help text</strong> is shown on <code>os_version</code>, <code>proxmox_template_id</code>,
+  <code>storage_pool</code>, <code>cloud_init_ready</code>, and <code>installer_config</code> to make picking the
+  right values for a cloud-init bake obvious.</li>
+</ul>
+<h3 id="adding-a-new-os-version-to-the-dropdown">Adding a new OS version to the dropdown<a class="headerlink" href="#adding-a-new-os-version-to-the-dropdown" title="Permanent link">&para;</a></h3>
+<p>Offered versions live in a single mapping,
+<code>OS_VERSIONS_BY_FAMILY</code>, in <code>netbox_packer/choices.py</code>. Add a
+<code>("&lt;version&gt;", "&lt;label&gt;")</code> tuple to the relevant family list — no database
+migration is required, because the model field stays a free-form <code>CharField</code>
+(the REST API keeps accepting any version string for automation).</p>
+<div class="highlight"><pre><span></span><code><span class="n">OS_VERSIONS_BY_FAMILY</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">OSFamilyChoices</span><span class="o">.</span><span class="n">CHOICE_UBUNTU</span><span class="p">:</span> <span class="p">[</span>
+        <span class="p">(</span><span class="s2">&quot;26.04&quot;</span><span class="p">,</span> <span class="s2">&quot;Ubuntu 26.04 LTS&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;24.04&quot;</span><span class="p">,</span> <span class="s2">&quot;Ubuntu 24.04 LTS (Noble)&quot;</span><span class="p">),</span>
+        <span class="c1"># add new Ubuntu releases here</span>
+    <span class="p">],</span>
+    <span class="c1"># ...</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="zabbix-74-monitoring-stack-template">Zabbix 7.4 Monitoring Stack Template<a class="headerlink" href="#zabbix-74-monitoring-stack-template" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0006_seed_zabbix_cloud_init.py</code> seeds the Zabbix 7.4 monitoring
+server image.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>zabbix-7.4-ubuntu-2604-pgsql-nginx</code></td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>zabbix-7.4-ubuntu-2604-pgsql-nginx</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>26.04</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9010</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.139:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.139</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+</tbody>
+</table>
+<p>Guardrail: <code>https://10.0.30.9:8006</code> / <code>10.0.30.9</code> is the production
+<code>netbox.nmulti.cloud</code> Proxmox cluster. Do not seed, bake, or retarget this
+monitoring-server template there. The seeded build target is the development
+endpoint <code>https://10.0.30.139:8006</code> only.</p>
+<p>The cloud-init payload installs Zabbix Server 7.4, the PHP frontend, and Agent
+2 on Ubuntu 26.04, backed by a local PostgreSQL database and nginx (PHP 8.5),
+and initializes the Zabbix database schema on first boot. Because the seed
+content already contains <code>"zabbix-agent2"</code>, the build-time monitoring-agent
+injection in <code>jobs.py</code> skips adding a second Zabbix Agent 2 install for this
+template.</p>
+<h2 id="kubernetes-131-node-templates">Kubernetes 1.31 Node Templates<a class="headerlink" href="#kubernetes-131-node-templates" title="Permanent link">&para;</a></h2>
+<p>Migrations <code>0009_seed_kubernetes_cloud_init.py</code> and
+<code>0011_seed_k8s_role_templates.py</code> seed three Kubernetes 1.31 node images on
+CLUSTER01-DC01.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Base node</th>
+<th>Control plane</th>
+<th>Worker</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>k8s-1.31-ubuntu-2404-node</code></td>
+<td><code>k8s-1.31-control-plane-ubuntu-2404</code></td>
+<td><code>k8s-1.31-worker-node-ubuntu-2404</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9012</code></td>
+<td><code>9013</code></td>
+<td><code>9014</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>24.04</code></td>
+<td>Ubuntu <code>24.04</code></td>
+<td>Ubuntu <code>24.04</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.71:8006</code></td>
+<td><code>https://10.0.30.71:8006</code></td>
+<td><code>https://10.0.30.71:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.71</code></td>
+<td><code>10.0.30.71</code></td>
+<td><code>10.0.30.71</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+<td><code>local</code></td>
+<td><code>local</code></td>
+</tr>
+</tbody>
+</table>
+<p>All three cloud-init payloads install <code>containerd</code> and
+<code>kubelet</code>/<code>kubeadm</code>/<code>kubectl</code> pinned to <code>1.31</code>. The base node and control-plane
+images additionally run <code>kubeadm config images pull</code> to pre-pull the
+control-plane container images for a faster <code>kubeadm init</code>; the worker image
+skips that pre-pull. <code>qemu-guest-agent</code> is enabled on all three.</p>
+<p>These are pre-staged node images, not a running cluster: an operator still
+runs <code>kubeadm init</code> on the control-plane clone and <code>kubeadm join</code> on worker
+clones after provisioning.</p>
+<h2 id="influxdb-2-collector-template">InfluxDB 2 Collector Template<a class="headerlink" href="#influxdb-2-collector-template" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0007_seed_influxdb_cloud_init.py</code> seeds the InfluxDB collector image
+used for Proxmox cluster metrics collectors.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>influxdb-2-ubuntu-2404-proxmox-collector</code></td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>influxdb-2-ubuntu-2404-proxmox-collector</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>24.04</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9011</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.139:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.139</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+<tr>
+<td>Default InfluxDB org</td>
+<td><code>nmulticloud</code></td>
+</tr>
+<tr>
+<td>Default InfluxDB bucket</td>
+<td><code>proxmox</code></td>
+</tr>
+<tr>
+<td>Default retention</td>
+<td><code>2592000</code> seconds</td>
+</tr>
+</tbody>
+</table>
+<p>Guardrail: <code>https://10.0.30.9:8006</code> / <code>10.0.30.9</code> is the production
+<code>netbox.nmulti.cloud</code> Proxmox cluster. Do not seed, bake, or retarget this
+collector template there. The seeded build target is the development endpoint
+<code>https://10.0.30.139:8006</code> only.</p>
+<p>The cloud-init payload installs <code>influxdb2</code> from the official InfluxData APT
+repository after verifying key fingerprint
+<code>24C975CBA61A024EE1B631787C3D57159FC2F927</code>. It enables <code>influxdb</code> and
+<code>qemu-guest-agent</code>, initializes the local InfluxDB setup API when setup is
+still allowed, and writes generated connection material to
+<code>/etc/nmulticloud/influxdb-collector.env</code> with mode <code>0600</code>.</p>
+<p>Per-clone overrides can be provided before first boot with these environment
+variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INFLUXDB_USERNAME</code></td>
+<td>Initial admin user, default <code>admin</code></td>
+</tr>
+<tr>
+<td><code>INFLUXDB_PASSWORD</code></td>
+<td>Initial admin password, default random</td>
+</tr>
+<tr>
+<td><code>INFLUXDB_ORG</code></td>
+<td>Initial org, default <code>nmulticloud</code></td>
+</tr>
+<tr>
+<td><code>INFLUXDB_BUCKET</code></td>
+<td>Initial bucket, default <code>proxmox</code></td>
+</tr>
+<tr>
+<td><code>INFLUXDB_RETENTION_SECONDS</code></td>
+<td>Bucket retention, default <code>2592000</code></td>
+</tr>
+<tr>
+<td><code>INFLUXDB_ADMIN_TOKEN</code></td>
+<td>Admin token, default random</td>
+</tr>
+</tbody>
+</table>
+<h2 id="powerdns-authoritative-recursor-template">PowerDNS Authoritative + Recursor Template<a class="headerlink" href="#powerdns-authoritative-recursor-template" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0013_seed_powerdns_auth_recursor_cloud_init.py</code> seeds a co-hosted
+PowerDNS image for internal DNS service VMs.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>powerdns-auth-recursor-ubuntu</code></td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>powerdns-auth-recursor-ubuntu</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>24.04</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9019</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.71:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.71</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+<tr>
+<td>Authoritative listener</td>
+<td><code>127.0.0.1:5300</code></td>
+</tr>
+<tr>
+<td>Recursor listener</td>
+<td>VM primary IPv4 address on port <code>53</code></td>
+</tr>
+</tbody>
+</table>
+<p>The default bake target is the CLUSTER01-DC01 PVE cluster host
+<code>10.0.30.71</code>. Operators may override the node or VMID at build dispatch when a
+different target is needed.</p>
+<p>The cloud-init payload installs <code>pdns-server</code>, <code>pdns-backend-sqlite3</code>,
+<code>pdns-recursor</code>, <code>qemu-guest-agent</code>, <code>sqlite3</code>, and <code>iproute2</code>. The
+authoritative service uses the bundled SQLite3 backend and initializes the
+<code>gsqlite3</code> schema at <code>/var/lib/powerdns/pdns.sqlite3</code>.</p>
+<p>Authoritative is loopback-only:</p>
+<ul>
+<li>DNS: <code>local-address=127.0.0.1</code>, <code>local-port=5300</code></li>
+<li>API: <code>webserver=yes</code>, <code>webserver-address=127.0.0.1</code>, <code>webserver-port=8081</code></li>
+<li>API key placeholder: <code>PDNS_AUTH_API_KEY</code></li>
+</ul>
+<p>Recursor is the resolver surface:</p>
+<ul>
+<li>DNS: VM primary IPv4 on port 53</li>
+<li>API: <code>webserver=yes</code>, <code>webserver-address=127.0.0.1</code>, <code>webserver-port=8082</code></li>
+<li>Local-zone forwarding: <code>PDNS_LOCAL_FORWARD_ZONES</code>, default
+  <code>nmulti.cloud=127.0.0.1:5300</code></li>
+<li>Optional recursive forwarding: <code>PDNS_LOCAL_FORWARD_ZONES_RECURSE</code> appends a
+  <code>forward-zones-recurse</code> entry when provided</li>
+<li>API key placeholder: <code>PDNS_RECURSOR_API_KEY</code></li>
+</ul>
+<p>The recursor <code>allow-from</code> list is restricted to <code>127.0.0.1/8</code>, <code>10.0.0.0/8</code>,
+<code>172.16.0.0/12</code>, <code>192.168.0.0/16</code>, and <code>::1/128</code>. Do not set it to
+<code>0.0.0.0/0</code>; this template must not become an open resolver.</p>
+<h2 id="passbolt-ce-template">Passbolt CE Template<a class="headerlink" href="#passbolt-ce-template" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0015_seed_passbolt_cloud_init.py</code> seeds the Passbolt CE secret-manager
+image that hosts <code>https://credential.nmulti.cloud</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>passbolt-ce-ubuntu-2404</code></td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>passbolt-ce-ubuntu-2404</code></td>
+</tr>
+<tr>
+<td>Cloud-config source</td>
+<td><code>netbox_packer/seeds/passbolt-ce-ubuntu-2404.cloud-config.yaml</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>24.04</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9060</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.71:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.71</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+<tr>
+<td>App base URL</td>
+<td><code>https://credential.nmulti.cloud</code></td>
+</tr>
+</tbody>
+</table>
+<p>The cloud-config installs the native <code>passbolt-ce-server</code> package via the
+official checksum-verified repo setup (nginx + php-fpm + a local MariaDB), makes
+<code>PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true</code> effective via php-fpm pool
+<code>env[]</code> entries, and configures nginx WITHOUT
+SSL (<code>passbolt/nginx-configuration-three-choices select none</code>) because nginx-nms
+terminates TLS upstream — the guest serves plain HTTP on <code>:80</code>. The QEMU guest
+agent and Zabbix Agent 2 (pointed at <code>zabbix.nmulti.cloud</code>) are injected at bake
+time, so they are intentionally absent from the seed. No secret is baked: the
+local DB password is generated on first boot into <code>/etc/passbolt/.db_password</code>,
+and the production server OpenPGP key, JWT keys, and database are supplied by the
+data migration from the existing Passbolt instance. SMTP is intentionally left
+unconfigured until an operator wires a relay.</p>
+<h2 id="file-server-all-in-one-template">File Server All-in-One Template<a class="headerlink" href="#file-server-all-in-one-template" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0014_seed_fileserver_allinone_cloud_init.py</code> seeds the combined file
+server image used by File Server auto-provisioning.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template name</td>
+<td><code>tpl-fileserver-allinone-ubuntu-2404</code></td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>fileserver-allinone-cloud-config</code></td>
+</tr>
+<tr>
+<td>Cloud-config source</td>
+<td><code>netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml</code></td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>24.04</code></td>
+</tr>
+<tr>
+<td>Template VMID</td>
+<td><code>9032</code></td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.71:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.71</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+<tr>
+<td>NMS backend URL</td>
+<td><code>https://backend.nms.nmulti.cloud</code></td>
+</tr>
+<tr>
+<td>NetBox URL</td>
+<td><code>https://netbox.nmulti.cloud</code></td>
+</tr>
+</tbody>
+</table>
+<p>The default bake target is CLUSTER01-DC01. Operators may override the node or
+VMID at build dispatch when a different target is needed, but the seeded row is
+the production convention for this image.</p>
+<p>The cloud-config installs Samba AD/DC packages (<code>samba</code>, <code>samba-dsdb-modules</code>,
+<code>samba-vfs-modules</code>, <code>winbind</code>, <code>libnss-winbind</code>, <code>libpam-winbind</code>,
+<code>krb5-user</code>, <code>acl</code>, <code>attr</code>, <code>chrony</code>), Nextcloud web/PHP prerequisites
+(<code>nginx</code>, <code>php-fpm</code>, <code>php-ldap</code>, <code>php-smbclient</code>, <code>php-pgsql</code>, <code>php-gd</code>,
+<code>php-curl</code>, <code>php-zip</code>, <code>php-xml</code>, <code>php-mbstring</code>, <code>php-intl</code>, <code>php-bcmath</code>,
+<code>php-gmp</code>, <code>php-imagick</code>, <code>smbclient</code>, <code>cifs-utils</code>, <code>postgresql-client</code>),
+<code>qemu-guest-agent</code>, <code>zabbix-agent2</code>, and <code>python3-venv</code>.
+<code>nms-fileserver-agent</code> is installed into <code>/opt/nms-fileserver-agent/venv</code> from
+<code>NMS_FILESERVER_AGENT_PIP_SPEC</code> (default <code>nms-fileserver-agent==0.1.0</code>), not
+through apt. The bake environment must provide that package through an
+accessible pip index, wheel, source archive, or direct source/VCS spec.</p>
+<p>This image is software-only. The bake does not create a Samba domain, does not
+run a Nextcloud tenant install, and does not include any tenant secret. <code>nginx</code>
+is disabled, <code>smbd</code>/<code>nmbd</code>/<code>winbind</code> are masked,
+<code>nms-fileserver-agent-enroll.service</code> is installed but disabled/not run on the
+golden template, and <code>nms-fileserver-agent-heartbeat.timer</code> is disabled until
+clone-time user-data provides the one-time enrollment token and starts the agent
+lifecycle.</p>
+<h2 id="base-ubuntu-lts-cloud-init-templates">Base Ubuntu LTS Cloud-init Templates<a class="headerlink" href="#base-ubuntu-lts-cloud-init-templates" title="Permanent link">&para;</a></h2>
+<p>Migration <code>0016_seed_ubuntu_lts_base_cloud_init.py</code> seeds three minimal base
+images that serve as the starting templates for the customer VM catalog.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template names</td>
+<td><code>ubuntu-2204-cloudinit-base</code> (VMID <code>9040</code>), <code>ubuntu-2404-cloudinit-base</code> (VMID <code>9041</code>), <code>ubuntu-2604-cloudinit-base</code> (VMID <code>9042</code>)</td>
+</tr>
+<tr>
+<td>Installer config</td>
+<td><code>ubuntu-lts-base-cloud-config</code> (shared by all three)</td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu <code>22.04</code>, <code>24.04</code>, <code>26.04</code> respectively</td>
+</tr>
+<tr>
+<td>Proxmox endpoint</td>
+<td><code>https://10.0.30.71:8006</code></td>
+</tr>
+<tr>
+<td>Proxmox node / SSH host</td>
+<td><code>10.0.30.71</code></td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>local</code></td>
+</tr>
+</tbody>
+</table>
+<p>This is the only seed migration with a fully reversible reverse function —
+rolling it back deletes the three seeded rows.</p>
+<p>The cloud-config content is intentionally minimal. <code>qemu-guest-agent</code>,
+<code>zabbix-agent2</code>, and <code>ssh_pwauth: true</code> are all added by the build-time
+monitoring-agent injection in <code>jobs.py</code> rather than baked into the seed
+content directly. No secret is baked into the image: per-VM username,
+password (<code>cipassword</code>), and SSH keys are supplied by Proxmox cloud-init at
+clone time.</p>
+<h2 id="build-verification">Build Verification<a class="headerlink" href="#build-verification" title="Permanent link">&para;</a></h2>
+<p>After the build completes, the template row should have:</p>
+<ul>
+<li><code>build_status = "ready"</code></li>
+<li><code>proxmox_template_id = 9011</code></li>
+<li><code>proxmox_endpoint = "https://10.0.30.139:8006"</code></li>
+<li><code>proxmox_node = "10.0.30.139"</code></li>
+</ul>
+<p>On the Proxmox development endpoint, VMID <code>9011</code> should be marked as a template
+and include a cloud-init <code>cicustom</code> user-data snippet. The production endpoint
+<code>10.0.30.9</code> must remain untouched by this process.</p>
+<p>For the PowerDNS co-hosted template, VMID <code>9019</code> should be marked as a template
+on <code>10.0.30.71</code>. On first boot from a clone, <code>pdns</code> should listen on
+<code>127.0.0.1:5300</code>, <code>pdns-recursor</code> should listen on the primary IPv4 address on
+port 53, both PowerDNS API webservers should bind to localhost, and no
+configuration should expose recursion to <code>0.0.0.0/0</code>.</p>
+<p>For the File Server all-in-one template, VMID <code>9032</code> should be marked as a
+template on <code>10.0.30.71</code>. On a clone before tenant provisioning, Samba and
+nginx should remain inactive, <code>zabbix-agent2</code> should point at
+<code>zabbix.nmulti.cloud</code>, and <code>/etc/nms-fileserver-agent/config.env</code> should contain
+only the production <code>NMS_BACKEND_URL</code> and <code>NETBOX_URL</code> values.</p>
+<h2 id="regression-coverage">Regression Coverage<a class="headerlink" href="#regression-coverage" title="Permanent link">&para;</a></h2>
+<p><code>tests/test_cloud_config_build_static.py</code> locks the cloud-init build contract:</p>
+<ul>
+<li>the cloud-config branch delegates to <code>proxbox-api /cloud/templates/images</code>;</li>
+<li>unset target nodes are sent as <code>None</code>, not an empty string;</li>
+<li>the InfluxDB seed keeps template name, VMID, development endpoint, node, and
+  storage stable;</li>
+<li>the InfluxDB cloud-config keeps the InfluxData key verification, package
+  install, setup API call, org/bucket/retention defaults, guest agent, and
+  credential file;</li>
+<li>project docs and LLM files mention the template identity and production
+  endpoint guardrail.</li>
+<li>the PowerDNS co-hosted seed keeps <code>pdns-server</code>, <code>pdns-recursor</code>,
+  <code>qemu-guest-agent</code>, <code>127.0.0.1:5300</code>, private <code>allow-from</code> ranges, and
+  reversible seeded-row cleanup stable.</li>
+<li>the File Server all-in-one seed keeps <code>tpl-fileserver-allinone-ubuntu-2404</code>,
+  <code>fileserver-allinone-cloud-config</code>, VMID <code>9032</code>, CLUSTER01-DC01 endpoint
+  <code>https://10.0.30.71:8006</code>, production NMS URLs, service-disabled defaults,
+  YAML parseability, and reversible seeded-row cleanup stable.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../models/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Data Models">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Data Models
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../certification/" class="md-footer__link md-footer__link--next" aria-label="Next: Certification">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Certification
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
