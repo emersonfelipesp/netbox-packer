@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import traceback
 from pathlib import Path
 
 import yaml
@@ -94,6 +95,9 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
+    assert "render_fileserver_package_index(user_data_yaml)" in src
+    assert "redact_fileserver_package_token(str(value))" in src
+    assert "raise sanitized_fileserver_package_error(exc) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
     # Gap 1: PackerBuild creation must enqueue the job.
     assert "def dispatch_build(build):" in src
@@ -297,7 +301,8 @@ def test_fileserver_allinone_seed_contract() -> None:
     constants = _literal_assignments(rel)
     name, defaults = _packer_template_seed_defaults(rel)
 
-    assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
+    upgrade_constants = _literal_assignments("netbox_packer/migrations/0017_update_fileserver_agent_package_index.py")
+    assert upgrade_constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
     assert yaml.safe_load(seed)["package_update"] is True
     assert seed.startswith("#cloud-config\n")
 
@@ -359,8 +364,24 @@ def test_fileserver_allinone_seed_contract() -> None:
     assert "apt-get install -y zabbix-agent2" in seed
     assert "apt-get install -y zabbix-agent2 nms-fileserver-agent" not in seed
     assert "python3 -m venv \"${NMS_FILESERVER_AGENT_VENV_DIR}\"" in seed
-    assert "pip install \"${NMS_FILESERVER_AGENT_PIP_SPEC}\"" in seed
+    assert "pip install --no-deps" in seed
+    assert "\"${NMS_FILESERVER_AGENT_PIP_SPEC}\"" in seed
     assert "NMS_FILESERVER_AGENT_PIP_SPEC=\"${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}\"" in seed
+    config = yaml.safe_load(seed)
+    pip_config = next(item for item in config["write_files"] if item["path"] == "/etc/nms-fileserver-agent/pip.conf")
+    assert pip_config["permissions"] == "0600"
+    assert "https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@" in pip_config[
+        "content"
+    ]
+    assert "git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/" in pip_config["content"]
+    assert "extra-index-url =" in pip_config["content"]
+    assert "NMS_FILESERVER_PACKAGE_READ_TOKEN" in pip_config["content"]
+    assert "dedicated non-human Gitea package-Read token" in pip_config["content"]
+    assert 'PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL=""' in seed
+    assert 'pip install "httpx>=0.27"' in seed
+    assert 'PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf"' in seed
+    assert 'env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL=""' in seed
+    assert "--extra-index-url" not in seed
     assert "systemctl enable nms-fileserver-agent-enroll.service" in seed
     assert "systemctl enable --now nms-fileserver-agent-heartbeat.timer" in seed
     assert "systemctl disable --now nms-fileserver-agent-enroll.service || true" in seed
@@ -389,6 +410,9 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
         "10.0.30.71",
         "nms-fileserver-agent",
         "NMS_FILESERVER_AGENT_PIP_SPEC",
+        "NMS_FILESERVER_PACKAGE_READ_USER",
+        "NMS_FILESERVER_PACKAGE_READ_TOKEN",
+        "package-Read",
         "python3-venv",
         "nms-fileserver-agent-enroll.service",
         "nms-fileserver-agent-heartbeat.timer",
@@ -399,6 +423,95 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
         doc = _read(rel)
         for text in required:
             assert text in doc, f"{rel} must document {text}"
+
+
+def test_fileserver_package_index_upgrade_migration_contract() -> None:
+    rel = "netbox_packer/migrations/0017_update_fileserver_agent_package_index.py"
+    src = _read(rel)
+    constants = _literal_assignments(rel)
+
+    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
+    assert constants["PREVIOUS_CONFIG_VERSION"] == "1.0.0"
+    assert constants["CONFIG_VERSION"] == "1.0.1"
+    assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
+    seed = _read("netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml")
+    assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
+    assert "PackerInstallerConfig.objects.update_or_create(" in src
+    assert 'update(installer_config=config, build_status="pending")' in src
+    assert 'update(installer_config=previous, build_status="pending")' in src
+    assert 'PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()' in src
+    assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
+
+
+def _load_package_index():
+    """Load package_index.py in isolation (it only imports the stdlib)."""
+    path = PKG / "package_index.py"
+    spec = importlib.util.spec_from_file_location("netbox_packer_package_index_iso", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_fileserver_package_index_credentials_are_required_and_url_encoded(monkeypatch) -> None:
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+
+    monkeypatch.delenv(mod.PACKAGE_READ_USER_ENV, raising=False)
+    monkeypatch.delenv(mod.PACKAGE_READ_TOKEN_ENV, raising=False)
+    try:
+        mod.render_fileserver_package_index(config)
+    except RuntimeError as exc:
+        assert mod.PACKAGE_READ_USER_ENV in str(exc)
+        assert mod.PACKAGE_READ_TOKEN_ENV in str(exc)
+    else:  # pragma: no cover - a credentialed bake must fail closed
+        raise AssertionError("expected missing package-index credentials to fail")
+
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+    rendered = mod.render_fileserver_package_index(config)
+    assert "fileserver%20reader:read%2Ftoken%3Fonly@" in rendered
+    assert "read/token?only" not in rendered
+
+
+def test_fileserver_package_index_non_target_passthrough_and_log_redaction(monkeypatch) -> None:
+    mod = _load_package_index()
+    unrelated = "#cloud-config\npackages:\n  - qemu-guest-agent\n"
+    assert mod.render_fileserver_package_index(unrelated) == unrelated
+
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+    output = "raw=read/token?only encoded=read%2Ftoken%3Fonly"
+    redacted = mod.redact_fileserver_package_token(output)
+    assert "read/token?only" not in redacted
+    assert "read%2Ftoken%3Fonly" not in redacted
+    assert redacted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
+
+    try:
+        raise RuntimeError(output)
+    except RuntimeError as original:
+        try:
+            raise mod.sanitized_fileserver_package_error(original) from None
+        except RuntimeError as safe_error:
+            formatted = "".join(traceback.format_exception(safe_error))
+    assert "read/token?only" not in formatted
+    assert "read%2Ftoken%3Fonly" not in formatted
+    assert formatted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
+
+
+def test_fileserver_package_index_target_without_placeholders_fails_closed() -> None:
+    mod = _load_package_index()
+    target_without_placeholders = f"#cloud-config\npath: {mod.FILESERVER_PIP_CONFIG_PATH}\n"
+    try:
+        mod.render_fileserver_package_index(target_without_placeholders)
+    except RuntimeError as exc:
+        assert "placeholders are missing" in str(exc)
+    else:  # pragma: no cover - the target config must never fall back to public PyPI
+        raise AssertionError("expected missing File Server placeholders to fail")
 
 
 def test_passbolt_ce_seed_contract() -> None:

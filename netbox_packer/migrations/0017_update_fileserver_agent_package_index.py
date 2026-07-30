@@ -1,4 +1,10 @@
-#cloud-config
+"""Update the File Server template to use the authenticated agent index."""
+
+import hashlib
+
+from django.db import migrations
+
+FILESERVER_ALLINONE_CLOUD_CONFIG = """#cloud-config
 # File Server all-in-one golden template on Ubuntu 24.04.
 # Bakes only shared software and production agent endpoints. Tenant-specific
 # Samba domain provisioning, Nextcloud installation, and enrollment tokens are
@@ -152,13 +158,13 @@ write_files:
       apt-get install -y zabbix-agent2
 
       python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"
-      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \
+      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \\
         "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --upgrade pip
-      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \
+      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \\
         "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install "httpx>=0.27"
-      env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL="" \
-        PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf" \
-        "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --no-deps \
+      env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL="" \\
+        PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf" \\
+        "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --no-deps \\
         "${NMS_FILESERVER_AGENT_PIP_SPEC}"
 
       cat > /etc/zabbix/zabbix_agent2.conf <<'ZABBIX_CONF'
@@ -204,3 +210,54 @@ write_files:
       echo "fileserver all-in-one software bake complete"
 runcmd:
   - [bash, /opt/fileserver-allinone-bootstrap.sh]
+"""
+
+CONFIG_NAME = "fileserver-allinone-cloud-config"
+PREVIOUS_CONFIG_VERSION = "1.0.0"
+CONFIG_VERSION = "1.0.1"
+TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"
+
+
+def update_fileserver_package_index(apps, schema_editor):
+    PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
+    PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
+
+    config, _ = PackerInstallerConfig.objects.update_or_create(
+        name=CONFIG_NAME,
+        version=CONFIG_VERSION,
+        defaults={
+            "os_family": "ubuntu",
+            "installer_type": "cloud_config",
+            "content": FILESERVER_ALLINONE_CLOUD_CONFIG,
+            "checksum": hashlib.sha256(FILESERVER_ALLINONE_CLOUD_CONFIG.encode()).hexdigest(),
+            "description": (
+                "File Server all-in-one cloud-config with authenticated, read-only "
+                "N-MultiCloud Gitea package-index installation for nms-fileserver-agent."
+            ),
+        },
+    )
+    PackerTemplate.objects.filter(name=TEMPLATE_NAME).update(installer_config=config, build_status="pending")
+
+
+def restore_previous_fileserver_config(apps, schema_editor):
+    PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
+    PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
+
+    previous = PackerInstallerConfig.objects.filter(
+        name=CONFIG_NAME,
+        version=PREVIOUS_CONFIG_VERSION,
+    ).first()
+    if previous is not None:
+        PackerTemplate.objects.filter(name=TEMPLATE_NAME).update(installer_config=previous, build_status="pending")
+    PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()
+
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init"),
+    ]
+
+    operations = [
+        migrations.RunPython(update_fileserver_package_index, restore_previous_fileserver_config),
+    ]
+

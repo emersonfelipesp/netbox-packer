@@ -9,6 +9,12 @@ from django.conf import settings
 from django.utils import timezone
 from netbox.jobs import JobRunner
 
+from .package_index import (
+    redact_fileserver_package_token,
+    render_fileserver_package_index,
+    sanitized_fileserver_package_error,
+)
+
 logger = logging.getLogger("netbox_packer.jobs")
 
 # Zabbix ServerActive= value: hostname/IP (optional IPv6 brackets) with optional :port,
@@ -373,6 +379,7 @@ class PackerBuildJob(JobRunner):
             )
 
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
+        user_data_yaml = render_fileserver_package_index(user_data_yaml)
         zabbix_status = "disabled"
         if template.install_zabbix_agent2:
             zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"
@@ -399,10 +406,11 @@ class PackerBuildJob(JobRunner):
                 timeout=int(timeout) + 300,
             )
         except ProxboxApiError as exc:
-            log_lines.append(f"[ERROR] {exc}")
+            safe_error = redact_fileserver_package_token(str(exc))
+            log_lines.append(f"[ERROR] {safe_error}")
             build.log = "\n".join(log_lines)
             build.save(update_fields=["log"])
-            raise RuntimeError(str(exc)) from exc
+            raise sanitized_fileserver_package_error(exc) from None
 
         status = str(response.get("status", "")).lower()
         result_vmid = response.get("vmid") or response.get("template_vmid")
@@ -410,7 +418,8 @@ class PackerBuildJob(JobRunner):
         for key in ("build_script", "stdout", "stderr"):
             value = response.get(key)
             if value:
-                log_lines.append(f"[{key.upper()}]\n{value}")
+                safe_value = redact_fileserver_package_token(str(value))
+                log_lines.append(f"[{key.upper()}]\n{safe_value}")
 
         build.finished_at = timezone.now()
         if status in {"created", "completed", "already_exists"}:
