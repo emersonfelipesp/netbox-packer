@@ -73,9 +73,11 @@ class GoldenTemplateFlagIsReadOnlyToUserInputTest(TestCase):
 
     ``test_form_input_cannot_set_the_flag`` is deliberately a fields-membership
     check rather than a full ``is_valid()``/``save()`` round trip: NetBox core's
-    ``CheckLastUpdatedMixin.clean()`` (``netbox/forms/mixins.py``) returns
-    ``None`` for any new-instance form submission that omits ``_init_time``,
-    which breaks ``PackerTemplateForm.clean()``'s ``super().clean()`` chain
+    ``CheckLastUpdatedMixin.clean()`` (``utilities/forms/mixins.py``, imported
+    into ``netbox/forms/model_forms.py``) omits a ``return`` on every one of
+    its normal paths (including, but not only, a new-instance submission that
+    omits ``_init_time``), so it returns ``None`` instead of ``cleaned_data``.
+    That breaks ``PackerTemplateForm.clean()``'s ``super().clean()`` chain
     independently of this plugin's code — the identical, pre-existing failure
     reproduces on ``main`` in ``PackerTemplateFormOSPairingTest`` (this same
     package). A Django ``ModelForm`` can only populate ``cleaned_data``/save an

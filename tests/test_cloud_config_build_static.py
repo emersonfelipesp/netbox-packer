@@ -449,12 +449,16 @@ def test_fileserver_package_index_upgrade_migration_contract() -> None:
 
 
 def test_packertemplate_name_is_unique_at_the_db_level() -> None:
-    """The File Server credential guard trusts `PackerTemplate.name` alone.
+    """Historical/defense-in-depth: `name` uniqueness, not the current credential boundary.
 
-    Without a DB-level uniqueness constraint, a differently-owned template
-    could be renamed to `FILESERVER_TEMPLATE_NAME` and pass
-    `render_fileserver_package_index`'s identity check, exfiltrating the
-    package-read credential. Migration 0018 closes that gap.
+    At the time migration 0018 landed, the File Server credential guard
+    trusted `PackerTemplate.name` alone, so without a DB-level uniqueness
+    constraint a differently-owned template could be renamed to
+    `FILESERVER_TEMPLATE_NAME` and pass `render_fileserver_package_index`'s
+    identity check, exfiltrating the package-read credential. Migration 0019
+    replaced `name` with the immutable `is_fileserver_golden_template` flag as
+    the actual trust boundary; this constraint remains as defense in depth
+    against two rows sharing the trusted name simultaneously.
     """
     models_src = _read("netbox_packer/models.py")
     tree = ast.parse(models_src)
