@@ -114,7 +114,8 @@ def test_jobs_target_node_unset_becomes_none() -> None:
     # proxbox-api rejects an empty target_node (min_length=1); an unset node must
     # collapse to None, never "".
     src = _read("netbox_packer/jobs.py")
-    assert 'target_node = (node or template.proxmox_node or "").strip() or None' in src
+    assert "def _resolve_target_node(template, selected_node, overrides):" in src
+    assert "target_node = _resolve_target_node(template, node, build.variable_overrides)" in src
 
 
 def test_jobs_forwards_endpoint_id_to_proxbox_build() -> None:
@@ -151,20 +152,24 @@ def test_migrations_present_for_settings_and_seed() -> None:
     assert 'installer_type": "cloud_config"' in seed or '"installer_type": "cloud_config"' in seed
     assert '"storage_pool": "local"' in seed
 
-    influx_seed = _read("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
-    assert "influxdb-2-ubuntu-2404-proxmox-collector" in influx_seed
+    influx_seed = _read("netbox_packer/migrations/0020_seed_influxdb_profiles.py")
+    assert "influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics" in influx_seed
+    assert "influxdb-core-3.11.0-ubuntu-2404" in influx_seed
     assert "https://repos.influxdata.com/influxdata-archive.key" in influx_seed
     assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in influx_seed
-    assert "apt-get install -y influxdb2" in influx_seed
-    assert "curl -fsS http://127.0.0.1:8086/health" in influx_seed
-    assert "curl -fsS -X POST http://127.0.0.1:8086/api/v2/setup" in influx_seed
-    assert "retentionPeriodSeconds" in influx_seed
-    assert "INFLUXDB_ADMIN_TOKEN" in influx_seed
-    assert '"proxmox_endpoint": PROXMOX_ENDPOINT' in influx_seed
-    assert '"proxmox_template_id": TEMPLATE_VMID' in influx_seed
+    assert '"influxdb2=${package_version}"' in influx_seed
+    assert '"influxdb3-core=${package_version}"' in influx_seed
+    assert "2.9.1|2.9.1[-+~]*" in influx_seed
+    assert "3.11.0|3.11.0[-+~]*" in influx_seed
+    assert "http://127.0.0.1:8086/health" in influx_seed
+    assert "http://127.0.0.1:8181/ready" in influx_seed
+    assert "/api/v2/setup" not in influx_seed
+    assert "INFLUXDB_ADMIN_TOKEN" not in influx_seed
+    assert '"proxmox_endpoint": ""' in influx_seed
+    assert '"proxmox_node": "select-at-build"' in influx_seed
 
 
-def test_influxdb_seed_targets_development_endpoint_only() -> None:
+def test_historical_influxdb_seed_is_immutable_and_retired_additively() -> None:
     constants = _literal_assignments("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
     name, defaults = _packer_template_seed_defaults("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
 
@@ -186,32 +191,67 @@ def test_influxdb_seed_targets_development_endpoint_only() -> None:
     assert defaults["proxmox_endpoint"] != "https://10.0.30.9:8006"
     assert defaults["proxmox_node"] != "10.0.30.9"
 
+    additive = _read("netbox_packer/migrations/0020_seed_influxdb_profiles.py")
+    assert 'name="influxdb-2-ubuntu-2404-proxmox-collector"' in additive
+    assert "legacy.content = INFLUXDB_OSS2_CLOUD_CONFIG" in additive
+    assert 'build_status="pending"' in additive
+
 
 def test_influxdb_cloud_config_bootstrap_contract() -> None:
-    migration = _read("netbox_packer/migrations/0007_seed_influxdb_cloud_init.py")
+    migration = _read("netbox_packer/migrations/0020_seed_influxdb_profiles.py")
     assert "packages:" in migration
-    assert "qemu-guest-agent" in migration
     assert "https://repos.influxdata.com/influxdata-archive.key" in migration
     assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in migration
-    assert "apt-get install -y influxdb2" in migration
-    assert "systemctl enable --now qemu-guest-agent" in migration
-    assert "systemctl enable --now influxdb" in migration
-    assert "curl -fsS http://127.0.0.1:8086/health" in migration
-    assert "curl -fsS -X POST http://127.0.0.1:8086/api/v2/setup" in migration
-    assert 'ORG="${INFLUXDB_ORG:-nmulticloud}"' in migration
-    assert 'BUCKET="${INFLUXDB_BUCKET:-proxmox}"' in migration
-    assert 'RETENTION_SECONDS="${INFLUXDB_RETENTION_SECONDS:-2592000}"' in migration
-    assert "/etc/nmulticloud/influxdb-collector.env" in migration
-    assert "chmod 600 /etc/nmulticloud/influxdb-collector.env" in migration
+    assert "apt-mark hold influxdb2" in migration
+    assert "apt-mark hold influxdb3-core" in migration
+    assert "systemctl enable --now influxdb.service" in migration
+    assert "systemctl enable --now influxdb3-core.service" in migration
+    assert "Credentials and initial setup are intentionally deferred to typed NMS RPC" in migration
+    for forbidden in (
+        "/api/v2/setup",
+        "password:",
+        "operator_token",
+        "INFLUXDB_ADMIN_TOKEN",
+        "openssl rand",
+    ):
+        assert forbidden not in migration
+
+
+def test_influxdb_profile_cloud_configs_parse_and_catalog_matches_seed() -> None:
+    rel = "netbox_packer/migrations/0020_seed_influxdb_profiles.py"
+    constants = _literal_assignments(rel)
+    for key in ("INFLUXDB_OSS2_CLOUD_CONFIG", "INFLUXDB_CORE3_CLOUD_CONFIG"):
+        content = constants[key]
+        assert isinstance(content, str)
+        parsed = yaml.safe_load(content)
+        assert parsed["package_update"] is False
+        assert parsed["package_upgrade"] is False
+        assert parsed["write_files"][0]["content"].startswith("#!/usr/bin/env bash")
+
+    spec = importlib.util.spec_from_file_location(
+        "influxdb_profiles",
+        PKG / "influxdb_profiles.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    migration = _read(rel)
+    assert {profile["family"] for profile in module.INFLUXDB_PROFILES} == {"oss2", "core3"}
+    for profile in module.INFLUXDB_PROFILES:
+        assert profile["template_name"] in migration
+        assert profile["installer_config_name"] in migration
+        assert str(profile["default_vmid"]) in migration
 
 
 def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
     required = (
-        "influxdb-2-ubuntu-2404-proxmox-collector",
-        "9011",
-        "https://10.0.30.139:8006",
-        "10.0.30.139",
-        "10.0.30.9",
+        "2.9.1",
+        "3.11.0",
+        "9050",
+        "9051",
+        "endpoint_id",
+        "target_node",
+        "nms-secret",
     )
     for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)

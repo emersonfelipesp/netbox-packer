@@ -1,13 +1,17 @@
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import status as http_status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .. import filtersets, models
+from ..influxdb_profiles import INFLUXDB_PROFILES
 from .serializers import (
     PackerBuildSerializer,
     PackerBuildTargetSerializer,
     PackerInstallerConfigSerializer,
+    PackerTemplateBuildRequestSerializer,
     PackerTemplateSerializer,
 )
 
@@ -16,6 +20,31 @@ class PackerInstallerConfigViewSet(NetBoxModelViewSet):
     queryset = models.PackerInstallerConfig.objects.prefetch_related("tags")
     serializer_class = PackerInstallerConfigSerializer
     filterset_class = filtersets.PackerInstallerConfigFilterSet
+
+
+class InfluxDBProfileListView(APIView):
+    """Expose supported InfluxDB profiles joined to their seeded template rows."""
+
+    def get(self, request):
+        if not request.user.has_perm("netbox_packer.view_packertemplate"):
+            raise PermissionDenied("view_packertemplate permission is required.")
+        template_names = [profile["template_name"] for profile in INFLUXDB_PROFILES]
+        templates = {
+            template.name: template
+            for template in models.PackerTemplate.objects.filter(name__in=template_names)
+        }
+        profiles = []
+        for profile in INFLUXDB_PROFILES:
+            template = templates.get(profile["template_name"])
+            profiles.append(
+                {
+                    **profile,
+                    "template_id": template.pk if template else None,
+                    "build_status": template.build_status if template else "missing",
+                    "ready": bool(template and template.build_status == "ready"),
+                }
+            )
+        return Response({"profiles": profiles})
 
 
 class PackerTemplateViewSet(NetBoxModelViewSet):
@@ -31,9 +60,26 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
         from ..validators import NodeAffinityValidator
 
         template = self.get_object()
-        skip_validation = request.data.get("skip_node_validation", False)
+        request_serializer = PackerTemplateBuildRequestSerializer(data=request.data)
+        request_serializer.is_valid(raise_exception=True)
+        variable_overrides = request_serializer.validated_data["variable_overrides"]
+        endpoint_id = variable_overrides.get("endpoint_id")
+        target_node = variable_overrides.get("target_node")
+        endpoint_agnostic = not template.proxmox_endpoint or template.proxmox_node == "select-at-build"
+        if endpoint_agnostic and (not endpoint_id or not target_node):
+            return Response(
+                {
+                    "detail": (
+                        "Endpoint-agnostic templates require positive variable_overrides.endpoint_id "
+                        "and variable_overrides.target_node."
+                    )
+                },
+                status=http_status.HTTP_400_BAD_REQUEST,
+            )
+        skip_validation = request_serializer.validated_data["skip_node_validation"]
+        selector_is_explicit = bool(endpoint_id and target_node)
 
-        if not skip_validation:
+        if not skip_validation and not selector_is_explicit:
             validator = NodeAffinityValidator(template)
             is_valid, errors, warnings = validator.validate()
             if not is_valid:
@@ -45,7 +91,7 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
         build = models.PackerBuild.objects.create(
             template=template,
             triggered_by=str(request.user),
-            variable_overrides=request.data.get("variable_overrides", {}),
+            variable_overrides=variable_overrides,
             status="queued",
         )
         models.PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")

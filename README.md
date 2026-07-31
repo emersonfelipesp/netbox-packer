@@ -38,7 +38,7 @@ Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 (there is no NetBox UI page or REST endpoint for this settings model yet — see
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
-Zabbix 7.4, InfluxDB 2, Kubernetes 1.31, PowerDNS, Passbolt CE, a File Server
+Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, a File Server
 all-in-one image, and base Ubuntu LTS cloud-init templates.
 
 The Zabbix 7.4 monitoring stack seed is
@@ -48,12 +48,17 @@ with a local PostgreSQL database and nginx (PHP 8.5), and initializes the
 Zabbix database schema on first boot. Do not target the production
 `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seed.
 
-The InfluxDB 2 Proxmox metrics collector seed is
-`influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, on the development
-endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not target the
-production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seeded bake
-process. See [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md),
-`CLAUDE.md`, and the host bootstrap doc in `nmulticloud-context/deploy/docs/`.
+Migration `0020` adds endpoint-agnostic, credential-free InfluxDB profiles:
+`influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` (VMID `9050`) for Proxmox
+metrics/Flux and `influxdb-core-3.11.0-ubuntu-2404` (VMID `9051`) for general
+SQL/InfluxQL workloads. Build requests must supply the proxbox-api
+`endpoint_id` and `target_node`, with optional typed `template_vmid` and
+`storage` overrides; proxbox-api derives the SSH host from that same endpoint.
+Package versions are pinned and held. Initial users, databases, and
+tokens are created only through typed NMS RPC and stored as `nms-secret:`
+references—never in cloud-init. The legacy VMID `9011` development profile is
+hardened in place and marked pending by additive migration `0020`, while the
+historical `0007` migration remains immutable; the row stays development-only.
 
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)

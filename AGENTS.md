@@ -19,17 +19,21 @@ Do not point this seeded template process at the production
 `CLAUDE.md`, this file, and `tests/test_cloud_config_build_static.py` aligned
 when changing the cloud-init template image flow.
 
-## InfluxDB Collector Image Guardrail
+## InfluxDB Profile Guardrail
 
-The seeded InfluxDB 2 collector template is
-`influxdb-2-ubuntu-2404-proxmox-collector` with VMID `9011`. The seed and bake
-process target only the development Proxmox endpoint
-`https://10.0.30.139:8006` / node `10.0.30.139`.
+Migration `0020` seeds OSS 2.9.1 (VMID `9050`) and Core 3.11.0 (VMID `9051`)
+profiles. They are endpoint-agnostic: every build must provide a proxbox-api
+`endpoint_id` and `target_node`, and the SSH host must be derived from that same
+endpoint. Optional `template_vmid` and `storage` overrides select destination
+identifiers. Never put a password, token, setup request, or private key in an
+installer config or build override. Initial setup, database creation, and token
+creation are typed NMS RPC operations backed by netbox-nms secret references.
+RPC responses may expose `nms-secret:` references, never plaintext values.
 
-Do not point this seeded template process at the production
-`https://10.0.30.9:8006` / `10.0.30.9` cluster. Keep the project docs,
-`CLAUDE.md`, this file, and `tests/test_cloud_config_build_static.py` aligned
-when changing the cloud-init template image flow.
+The immutable historical VMID `9011` seed remains scoped to its development
+endpoint (`10.0.30.139`) and must never be retargeted to production. Additive
+migration `0020` replaces the database row's credential-generating content and
+marks it pending without deleting any existing artifact.
 
 ## Build Dispatch Guardrail
 

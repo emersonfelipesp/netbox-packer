@@ -115,47 +115,47 @@ These are pre-staged node images, not a running cluster: an operator still
 runs `kubeadm init` on the control-plane clone and `kubeadm join` on worker
 clones after provisioning.
 
-## InfluxDB 2 Collector Template
+## InfluxDB OSS 2 and Core 3 Profiles
 
-Migration `0007_seed_influxdb_cloud_init.py` seeds the InfluxDB collector image
-used for Proxmox cluster metrics collectors.
+Migration `0020_seed_influxdb_profiles.py` seeds two current, endpoint-agnostic
+profiles and hardens the legacy collector row without deleting its Proxmox
+artifact.
 
-| Field | Value |
-| --- | --- |
-| Template name | `influxdb-2-ubuntu-2404-proxmox-collector` |
-| Installer config | `influxdb-2-ubuntu-2404-proxmox-collector` |
-| OS | Ubuntu `24.04` |
-| Template VMID | `9011` |
-| Proxmox endpoint | `https://10.0.30.139:8006` |
-| Proxmox node / SSH host | `10.0.30.139` |
-| Storage | `local` |
-| Default InfluxDB org | `nmulticloud` |
-| Default InfluxDB bucket | `proxmox` |
-| Default retention | `2592000` seconds |
+| Profile | Version | VMID | Port | Intended workload |
+| --- | --- | --- | --- | --- |
+| `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | OSS `2.9.1` | `9050` | `8086` | Proxmox external metrics and Flux |
+| `influxdb-core-3.11.0-ubuntu-2404` | Core `3.11.0` | `9051` | `8181` | SQL, InfluxQL, and processing-engine workloads |
 
-Guardrail: `https://10.0.30.9:8006` / `10.0.30.9` is the production
-`netbox.nmulti.cloud` Proxmox cluster. Do not seed, bake, or retarget this
-collector template there. The seeded build target is the development endpoint
-`https://10.0.30.139:8006` only.
+Both rows store an empty `proxmox_endpoint` and `select-at-build` as the model
+placeholder node. Each build request must provide a positive proxbox-api
+`variable_overrides.endpoint_id` and a validated
+`variable_overrides.target_node`. Optional validated `template_vmid` and
+`storage` overrides select the destination identifiers. When an endpoint ID is present,
+netbox-packer suppresses all legacy `ssh_host` values so proxbox-api derives
+transport from the same selected endpoint it authorizes.
 
-The cloud-init payload installs `influxdb2` from the official InfluxData APT
-repository after verifying key fingerprint
-`24C975CBA61A024EE1B631787C3D57159FC2F927`. It enables `influxdb` and
-`qemu-guest-agent`, initializes the local InfluxDB setup API when setup is
-still allowed, and writes generated connection material to
-`/etc/nmulticloud/influxdb-collector.env` with mode `0600`.
+The cloud-init profiles:
 
-Per-clone overrides can be provided before first boot with these environment
-variables:
+- verify InfluxData key fingerprint
+  `24C975CBA61A024EE1B631787C3D57159FC2F927`;
+- select only APT package versions matching `2.9.1` or `3.11.0`, verify the
+  installed version, and apply `apt-mark hold`;
+- enable the correct fixed systemd service and wait for `/health` or `/ready`;
+- contain no user, password, token, organization, bucket/database, setup API
+  request, private key, or endpoint-specific Proxmox data.
 
-| Variable | Purpose |
-| --- | --- |
-| `INFLUXDB_USERNAME` | Initial admin user, default `admin` |
-| `INFLUXDB_PASSWORD` | Initial admin password, default random |
-| `INFLUXDB_ORG` | Initial org, default `nmulticloud` |
-| `INFLUXDB_BUCKET` | Initial bucket, default `proxmox` |
-| `INFLUXDB_RETENTION_SECONDS` | Bucket retention, default `2592000` |
-| `INFLUXDB_ADMIN_TOKEN` | Admin token, default random |
+After a clone completes cloud-init, use the typed
+`service.influxdb.1.bootstrap`, `database_create`, and `token_create` RPC
+procedures through NMS or nms-cli. The backend generates/resolves one-time
+plaintext only in memory and stores it through netbox-nms as `nms-secret:`
+references. Routine config, managed/plugin files, service state, health, and
+journal operations use the remaining typed InfluxDB RPC procedures.
+
+The immutable historical `influxdb-2-ubuntu-2404-proxmox-collector` / VMID
+`9011` seed remains development-only on `10.0.30.139`. Additive migration
+`0020` replaces the database row's former credential-generating installer
+content with the safe OSS profile and marks it pending. Existing artifacts are
+never deleted automatically.
 
 ## PowerDNS Authoritative + Recursor Template
 
@@ -317,16 +317,11 @@ clone time.
 
 ## Build Verification
 
-After the build completes, the template row should have:
-
-- `build_status = "ready"`
-- `proxmox_template_id = 9011`
-- `proxmox_endpoint = "https://10.0.30.139:8006"`
-- `proxmox_node = "10.0.30.139"`
-
-On the Proxmox development endpoint, VMID `9011` should be marked as a template
-and include a cloud-init `cicustom` user-data snippet. The production endpoint
-`10.0.30.9` must remain untouched by this process.
+After either current InfluxDB build completes, the template row should be
+`ready` with result VMID `9050` or `9051`; the selected target cluster should
+contain a template with a `cicustom` user-data snippet. Clone verification must
+confirm the exact package version, held package state, systemd state, and local
+health/readiness endpoint before typed RPC onboarding begins.
 
 For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
 on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
@@ -346,13 +341,15 @@ only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
 
 - the cloud-config branch delegates to `proxbox-api /cloud/templates/images`;
 - unset target nodes are sent as `None`, not an empty string;
-- the InfluxDB seed keeps template name, VMID, development endpoint, node, and
-  storage stable;
-- the InfluxDB cloud-config keeps the InfluxData key verification, package
-  install, setup API call, org/bucket/retention defaults, guest agent, and
-  credential file;
-- project docs and LLM files mention the template identity and production
-  endpoint guardrail.
+- historical migration `0007` remains byte-for-byte unchanged while additive
+  migration `0020` safely retires its database row;
+- OSS 2.9.1 and Core 3.11.0 cloud-configs parse as YAML, pin and hold exact
+  package versions, verify the InfluxData signing key, and contain no setup
+  request or credential material;
+- build requests validate explicit endpoint, node, VMID, and storage selectors
+  and suppress legacy SSH-host metadata when an endpoint ID is selected;
+- project docs and LLM files cover both profiles, typed RPC onboarding, and the
+  `nms-secret:` boundary.
 - the PowerDNS co-hosted seed keeps `pdns-server`, `pdns-recursor`,
   `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
   reversible seeded-row cleanup stable.

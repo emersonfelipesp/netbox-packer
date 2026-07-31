@@ -135,10 +135,11 @@ def test_packer_build_target_model_fields() -> None:
 
 
 def test_api_routes_registered() -> None:
-    """API router must register all four viewsets."""
+    """API router must register all viewsets and InfluxDB profile discovery."""
     api_urls = _read("netbox_packer/api/urls.py")
     for route in ("packer-templates", "build-jobs", "installer-configs", "build-targets"):
         assert f'"{route}"' in api_urls, f"Missing route '{route}' in api/urls.py"
+    assert '"influxdb-profiles/"' in api_urls
 
 
 def test_build_action_endpoint_exists() -> None:

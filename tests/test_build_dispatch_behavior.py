@@ -82,6 +82,40 @@ def _import_jobs_module():
     return importlib.import_module("netbox_packer.jobs")
 
 
+def _import_api_serializers_module():
+    _install_package()
+
+    class Field:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class Serializer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    netbox_serializers = types.ModuleType("netbox.api.serializers")
+    netbox_serializers.NetBoxModelSerializer = Serializer
+    rest_serializers = types.ModuleType("rest_framework.serializers")
+    rest_serializers.Serializer = Serializer
+    rest_serializers.BooleanField = Field
+    rest_serializers.JSONField = Field
+    rest_serializers.HyperlinkedIdentityField = Field
+    rest_serializers.ValidationError = ValueError
+    rest_framework = types.ModuleType("rest_framework")
+    rest_framework.serializers = rest_serializers
+    models = types.ModuleType("netbox_packer.models")
+    for name in ("PackerBuild", "PackerBuildTarget", "PackerInstallerConfig", "PackerTemplate"):
+        setattr(models, name, type(name, (), {}))
+
+    sys.modules["netbox"] = types.ModuleType("netbox")
+    sys.modules["netbox.api"] = types.ModuleType("netbox.api")
+    sys.modules["netbox.api.serializers"] = netbox_serializers
+    sys.modules["rest_framework"] = rest_framework
+    sys.modules["rest_framework.serializers"] = rest_serializers
+    sys.modules["netbox_packer.models"] = models
+    return importlib.import_module("netbox_packer.api.serializers")
+
+
 def test_dispatch_build_enqueues_with_build_id_keyword(isolated_imports) -> None:
     jobs = _import_jobs_module()
     enqueue = Mock()
@@ -148,6 +182,79 @@ def test_run_subprocess_timeout_kills_silent_process(isolated_imports) -> None:
     assert elapsed < 4
     assert "[ERROR] Timeout exceeded (1s) during silent-test" in log_lines
     build.save.assert_called_with(update_fields=["log"])
+
+
+def test_explicit_endpoint_keeps_target_and_ssh_resolution_on_same_boundary(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+    template = SimpleNamespace(
+        proxmox_endpoint="https://legacy-pve.example:8006",
+        proxmox_node="legacy-node",
+        proxmox_template_id=9050,
+        storage_pool="local",
+    )
+    overrides = {
+        "endpoint_id": 11,
+        "target_node": "pve-selected",
+        "ssh_host": "must-not-bypass-endpoint.example",
+    }
+
+    assert jobs._resolve_target_node(template, "affinity-node", overrides) == "pve-selected"
+    assert jobs._resolve_ssh_host(template, overrides) is None
+    assert jobs._resolve_template_vmid(template, {"template_vmid": 19050}) == 19050
+    assert jobs._resolve_storage(template, {"storage": "fast-zfs"}) == "fast-zfs"
+
+
+def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    template = SimpleNamespace(
+        proxmox_endpoint="https://legacy-pve.example:8006",
+        proxmox_node="legacy-node",
+        proxmox_template_id=9050,
+        storage_pool="local",
+    )
+
+    assert jobs._resolve_target_node(template, None, {}) == "legacy-node"
+    assert jobs._resolve_ssh_host(template, {}) == "legacy-pve.example"
+    assert jobs._resolve_template_vmid(template, {}) == 9050
+    assert jobs._resolve_storage(template, {}) == "local"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"nested": {"api-token": "do-not-persist"}},
+        {"content": '{"token":"do-not-persist"}'},
+        {"content": "password: do-not-persist"},
+        {"content": "Authorization: Bearer do-not-persist"},
+        {"content": "https://operator:do-not-persist@example.invalid/config"},
+        {"content": "-----BEGIN OPENSSH PRIVATE KEY-----"},
+        {"content": "safe\x00unsafe"},
+    ),
+)
+def test_build_overrides_reject_nested_or_embedded_secrets(
+    isolated_imports,
+    overrides,
+) -> None:
+    serializers = _import_api_serializers_module()
+    assert serializers._contains_secret_material(overrides) is True
+
+
+def test_build_overrides_allow_typed_non_secret_selectors(isolated_imports) -> None:
+    serializers = _import_api_serializers_module()
+    assert (
+        serializers._contains_secret_material(
+            {
+                "endpoint_id": 11,
+                "target_node": "pve-selected",
+                "template_vmid": 19050,
+                "storage": "fast-zfs",
+                "image_url": "https://cloud-images.ubuntu.com/image.qcow2",
+            }
+        )
+        is False
+    )
 
 
 class ChainManager:
@@ -314,6 +421,12 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
 
     response_mod.Response = Response
 
+    exceptions_mod = types.ModuleType("rest_framework.exceptions")
+    exceptions_mod.PermissionDenied = type("PermissionDenied", (Exception,), {})
+
+    rest_views = types.ModuleType("rest_framework.views")
+    rest_views.APIView = type("APIView", (), {})
+
     viewsets = types.ModuleType("netbox.api.viewsets")
 
     class NetBoxModelViewSet:
@@ -329,6 +442,16 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
             self.instance = instance
             self.data = {"id": instance.pk, "status": instance.status}
 
+    class PackerTemplateBuildRequestSerializer:
+        def __init__(self, data):
+            self.validated_data = {
+                "skip_node_validation": bool(data.get("skip_node_validation", False)),
+                "variable_overrides": data.get("variable_overrides", {}),
+            }
+
+        def is_valid(self, raise_exception=False):
+            return True
+
     for name in (
         "PackerBuildTargetSerializer",
         "PackerInstallerConfigSerializer",
@@ -336,6 +459,7 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
     ):
         setattr(serializers, name, object)
     serializers.PackerBuildSerializer = PackerBuildSerializer
+    serializers.PackerTemplateBuildRequestSerializer = PackerTemplateBuildRequestSerializer
 
     validators = types.ModuleType("netbox_packer.validators")
 
@@ -352,6 +476,8 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
     sys.modules["rest_framework.status"] = status_mod
     sys.modules["rest_framework.decorators"] = decorators
     sys.modules["rest_framework.response"] = response_mod
+    sys.modules["rest_framework.exceptions"] = exceptions_mod
+    sys.modules["rest_framework.views"] = rest_views
     sys.modules["netbox"] = types.ModuleType("netbox")
     sys.modules["netbox.api"] = types.ModuleType("netbox.api")
     sys.modules["netbox.api.viewsets"] = viewsets
@@ -360,7 +486,12 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
 
 
 def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> None:
-    template = SimpleNamespace(pk=12, name="ubuntu-template")
+    template = SimpleNamespace(
+        pk=12,
+        name="ubuntu-template",
+        proxmox_endpoint="https://pve.example:8006",
+        proxmox_node="pve01",
+    )
     build = SimpleNamespace(pk=88, status="queued")
     build_manager = ChainManager()
     build_manager.create.return_value = build
