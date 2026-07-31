@@ -12,20 +12,40 @@ PACKAGE_READ_TOKEN_PLACEHOLDER = "__NMS_FILESERVER_PACKAGE_READ_TOKEN__"  # noqa
 REDACTED_PACKAGE_TOKEN = "[REDACTED_PACKAGE_READ_TOKEN]"
 FILESERVER_PIP_CONFIG_PATH = "/etc/nms-fileserver-agent/pip.conf"
 
+# Must match the `TEMPLATE_NAME` seeded by migrations 0014/0017 exactly. Kept as
+# its own copy (not imported from a migration module) per Django migration
+# immutability convention — migrations must never import from live app code,
+# and the converse would tie an already-applied migration's identity to code
+# that can change.
+FILESERVER_TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"
 
-def render_fileserver_package_index(user_data_yaml: str) -> str:
+
+def render_fileserver_package_index(user_data_yaml: str, *, template_name: str) -> str:
     """Replace File Server package-index placeholders from the service environment.
 
     Cloud-configs without the File Server placeholders pass through unchanged.
     A File Server bake fails closed when either placeholder or required runtime
     secret is missing, preventing pip from silently falling back to public PyPI.
+
+    Substitution is scoped to ``FILESERVER_TEMPLATE_NAME`` specifically: any
+    other template's cloud-config that happens to contain the placeholder
+    strings (an operator can set arbitrary installer content on any template)
+    is rejected rather than silently receiving the real credentials, closing a
+    credential exfiltration path.
     """
     has_user_placeholder = PACKAGE_READ_USER_PLACEHOLDER in user_data_yaml
     has_token_placeholder = PACKAGE_READ_TOKEN_PLACEHOLDER in user_data_yaml
     if not has_user_placeholder and not has_token_placeholder:
-        if FILESERVER_PIP_CONFIG_PATH in user_data_yaml:
+        if FILESERVER_PIP_CONFIG_PATH in user_data_yaml and template_name == FILESERVER_TEMPLATE_NAME:
             raise RuntimeError("File Server package-index credential placeholders are missing")
         return user_data_yaml
+    if template_name != FILESERVER_TEMPLATE_NAME:
+        raise RuntimeError(
+            "File Server package-index credential placeholders were found in the "
+            f"cloud-config for template {template_name!r}, which is not the File "
+            f"Server golden template ({FILESERVER_TEMPLATE_NAME!r}); refusing to "
+            "inject the package-read credential into an unexpected template"
+        )
     if not has_user_placeholder or not has_token_placeholder:
         raise RuntimeError("File Server package-index credential placeholders are incomplete")
 

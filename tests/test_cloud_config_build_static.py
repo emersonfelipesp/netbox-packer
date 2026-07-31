@@ -95,7 +95,7 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
-    assert "render_fileserver_package_index(user_data_yaml)" in src
+    assert "render_fileserver_package_index(user_data_yaml, template_name=template.name)" in src
     assert "redact_fileserver_package_token(str(value))" in src
     assert "raise sanitized_fileserver_package_error(exc) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
@@ -437,6 +437,10 @@ def test_fileserver_package_index_upgrade_migration_contract() -> None:
     assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
     assert "PackerInstallerConfig.objects.update_or_create(" in src
     assert "proxmox_template_id=TEMPLATE_VMID" in src
+    # The template's own description must be corrected alongside proxmox_template_id —
+    # otherwise it keeps advertising the superseded VMID 9032 after this migration runs.
+    assert "VMID 9300" in src
+    assert "VMID 9032" not in src.split("def update_fileserver_package_index", 1)[1].split("def ", 1)[0]
     assert 'update(installer_config=previous, build_status="pending")' in src
     assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
     assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
@@ -464,7 +468,7 @@ def test_fileserver_package_index_credentials_are_required_and_url_encoded(monke
     monkeypatch.delenv(mod.PACKAGE_READ_USER_ENV, raising=False)
     monkeypatch.delenv(mod.PACKAGE_READ_TOKEN_ENV, raising=False)
     try:
-        mod.render_fileserver_package_index(config)
+        mod.render_fileserver_package_index(config, template_name=mod.FILESERVER_TEMPLATE_NAME)
     except RuntimeError as exc:
         assert mod.PACKAGE_READ_USER_ENV in str(exc)
         assert mod.PACKAGE_READ_TOKEN_ENV in str(exc)
@@ -473,15 +477,37 @@ def test_fileserver_package_index_credentials_are_required_and_url_encoded(monke
 
     monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
     monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
-    rendered = mod.render_fileserver_package_index(config)
+    rendered = mod.render_fileserver_package_index(config, template_name=mod.FILESERVER_TEMPLATE_NAME)
     assert "fileserver%20reader:read%2Ftoken%3Fonly@" in rendered
     assert "read/token?only" not in rendered
+
+
+def test_fileserver_package_index_rejects_placeholders_on_other_templates(monkeypatch) -> None:
+    """An unrelated template embedding the placeholder strings must never receive credentials."""
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+
+    try:
+        mod.render_fileserver_package_index(config, template_name="some-other-template")
+    except RuntimeError as exc:
+        assert "not the File Server golden template" in str(exc)
+    else:  # pragma: no cover - credential injection must be scoped to the File Server template
+        raise AssertionError("expected placeholders on an unrelated template to be rejected")
 
 
 def test_fileserver_package_index_non_target_passthrough_and_log_redaction(monkeypatch) -> None:
     mod = _load_package_index()
     unrelated = "#cloud-config\npackages:\n  - qemu-guest-agent\n"
-    assert mod.render_fileserver_package_index(unrelated) == unrelated
+    assert mod.render_fileserver_package_index(unrelated, template_name="some-other-template") == unrelated
+    assert mod.render_fileserver_package_index(unrelated, template_name=mod.FILESERVER_TEMPLATE_NAME) == unrelated
 
     monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
     output = "raw=read/token?only encoded=read%2Ftoken%3Fonly"
@@ -506,7 +532,7 @@ def test_fileserver_package_index_target_without_placeholders_fails_closed() -> 
     mod = _load_package_index()
     target_without_placeholders = f"#cloud-config\npath: {mod.FILESERVER_PIP_CONFIG_PATH}\n"
     try:
-        mod.render_fileserver_package_index(target_without_placeholders)
+        mod.render_fileserver_package_index(target_without_placeholders, template_name=mod.FILESERVER_TEMPLATE_NAME)
     except RuntimeError as exc:
         assert "placeholders are missing" in str(exc)
     else:  # pragma: no cover - the target config must never fall back to public PyPI

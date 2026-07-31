@@ -241,6 +241,12 @@ def update_fileserver_package_index(apps, schema_editor):
         installer_config=config,
         proxmox_template_id=TEMPLATE_VMID,
         build_status="pending",
+        description=(
+            "File Server all-in-one template (Ubuntu 24.04, VMID 9300). Bakes "
+            "via proxbox-api on CLUSTER01-DC01 host 10.0.30.71 using storage "
+            "'local'. Runtime automation provisions Samba, Nextcloud, and "
+            "the one-time nms-fileserver-agent enrollment token per clone."
+        ),
     )
 
 
