@@ -235,6 +235,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0016` | `ubuntu-2404-cloudinit-base` | 9041 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above) |
 | `0016` | `ubuntu-2604-cloudinit-base` | 9042 | Ubuntu 26.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above). Verify the 26.04 cloud image URL resolves before baking |
 | `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1, corrects its current VMID to 9300, injects the authenticated package-Read index, and marks it pending for rebake |
+| `0018` | *(schema only — `AlterField` on `PackerTemplate.name`)* | — | — | — | Adds a DB-level `unique=True` constraint to `name`; the File Server package-index credential guard in `package_index.py` trusts an exact `name` match, so without this constraint a differently-owned template could be renamed to `FILESERVER_TEMPLATE_NAME` and receive the same credential injection |
 
 #### Migration 0008 — monitoring-agent fields
 

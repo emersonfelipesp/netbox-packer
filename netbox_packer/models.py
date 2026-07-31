@@ -82,7 +82,12 @@ class PackerInstallerConfig(NetBoxModel):
 class PackerTemplate(NetBoxModel):
     """A Packer-managed Proxmox VM template with lifecycle tracking."""
 
-    name = models.CharField(max_length=100)
+    # unique=True: the File Server package-index credential guard in
+    # package_index.py binds solely to this field matching
+    # FILESERVER_TEMPLATE_NAME; without a DB-level uniqueness constraint a
+    # differently-owned template could be renamed to the same string and
+    # receive the same credential injection.
+    name = models.CharField(max_length=100, unique=True)
     os_family = models.CharField(
         max_length=20,
         choices=OSFamilyChoices,

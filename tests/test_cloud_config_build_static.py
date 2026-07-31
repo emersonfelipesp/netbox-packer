@@ -446,6 +446,38 @@ def test_fileserver_package_index_upgrade_migration_contract() -> None:
     assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
 
 
+def test_packertemplate_name_is_unique_at_the_db_level() -> None:
+    """The File Server credential guard trusts `PackerTemplate.name` alone.
+
+    Without a DB-level uniqueness constraint, a differently-owned template
+    could be renamed to `FILESERVER_TEMPLATE_NAME` and pass
+    `render_fileserver_package_index`'s identity check, exfiltrating the
+    package-read credential. Migration 0018 closes that gap.
+    """
+    models_src = _read("netbox_packer/models.py")
+    tree = ast.parse(models_src)
+    packer_template = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplate"
+    )
+    name_assign = next(
+        node
+        for node in packer_template.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and node.targets[0].id == "name"
+    )
+    field_call = name_assign.value
+    assert isinstance(field_call, ast.Call)
+    unique_kwarg = next((kw for kw in field_call.keywords if kw.arg == "unique"), None)
+    assert unique_kwarg is not None, "PackerTemplate.name must declare unique=True"
+    assert ast.literal_eval(unique_kwarg.value) is True
+
+    migration_rel = "netbox_packer/migrations/0018_alter_packertemplate_name_unique.py"
+    migration_src = _read(migration_rel)
+    assert '("netbox_packer", "0017_update_fileserver_agent_package_index")' in migration_src
+    assert 'model_name="packertemplate"' in migration_src
+    assert 'name="name"' in migration_src
+    assert "unique=True" in migration_src
+
+
 def _load_package_index():
     """Load package_index.py in isolation (it only imports the stdlib)."""
     path = PKG / "package_index.py"

@@ -31,7 +31,10 @@ def render_fileserver_package_index(user_data_yaml: str, *, template_name: str) 
     other template's cloud-config that happens to contain the placeholder
     strings (an operator can set arbitrary installer content on any template)
     is rejected rather than silently receiving the real credentials, closing a
-    credential exfiltration path.
+    credential exfiltration path. This is only a safe boundary because
+    ``PackerTemplate.name`` carries a DB-level ``unique=True`` constraint
+    (migration 0018) — without it, an unrelated template could be renamed to
+    the exact trusted string and pass this check.
     """
     has_user_placeholder = PACKAGE_READ_USER_PLACEHOLDER in user_data_yaml
     has_token_placeholder = PACKAGE_READ_TOKEN_PLACEHOLDER in user_data_yaml
