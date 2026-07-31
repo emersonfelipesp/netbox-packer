@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import traceback
 from pathlib import Path
 
 import yaml
@@ -94,6 +95,11 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
+    assert "user_data_yaml = render_fileserver_package_index(" in src
+    assert "template_name=template.name," in src
+    assert "is_fileserver_golden_template=template.is_fileserver_golden_template," in src
+    assert "redact_fileserver_package_token(str(value))" in src
+    assert "raise sanitized_fileserver_package_error(exc) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
     # Gap 1: PackerBuild creation must enqueue the job.
     assert "def dispatch_build(build):" in src
@@ -297,21 +303,20 @@ def test_fileserver_allinone_seed_contract() -> None:
     constants = _literal_assignments(rel)
     name, defaults = _packer_template_seed_defaults(rel)
 
-    assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
+    upgrade_constants = _literal_assignments("netbox_packer/migrations/0017_update_fileserver_agent_package_index.py")
+    assert upgrade_constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
     assert yaml.safe_load(seed)["package_update"] is True
     assert seed.startswith("#cloud-config\n")
 
     assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
     assert constants["CONFIG_VERSION"] == "1.0.0"
     assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
-    assert constants["TEMPLATE_VMID"] == 9032
     assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
     assert constants["PROXMOX_NODE"] == "10.0.30.71"
     assert name == constants["TEMPLATE_NAME"]
 
     assert defaults["os_family"] == "ubuntu"
     assert defaults["os_version"] == "24.04"
-    assert defaults["proxmox_template_id"] == 9032
     assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
     assert defaults["proxmox_node"] == "10.0.30.71"
     assert defaults["storage_pool"] == "local"
@@ -358,9 +363,25 @@ def test_fileserver_allinone_seed_contract() -> None:
 
     assert "apt-get install -y zabbix-agent2" in seed
     assert "apt-get install -y zabbix-agent2 nms-fileserver-agent" not in seed
-    assert "python3 -m venv \"${NMS_FILESERVER_AGENT_VENV_DIR}\"" in seed
-    assert "pip install \"${NMS_FILESERVER_AGENT_PIP_SPEC}\"" in seed
-    assert "NMS_FILESERVER_AGENT_PIP_SPEC=\"${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}\"" in seed
+    assert 'python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"' in seed
+    assert "pip install --no-deps" in seed
+    assert '"${NMS_FILESERVER_AGENT_PIP_SPEC}"' in seed
+    assert 'NMS_FILESERVER_AGENT_PIP_SPEC="${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}"' in seed
+    config = yaml.safe_load(seed)
+    pip_config = next(item for item in config["write_files"] if item["path"] == "/etc/nms-fileserver-agent/pip.conf")
+    assert pip_config["permissions"] == "0600"
+    assert (
+        "https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@" in pip_config["content"]
+    )
+    assert "git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/" in pip_config["content"]
+    assert "extra-index-url =" in pip_config["content"]
+    assert "NMS_FILESERVER_PACKAGE_READ_TOKEN" in pip_config["content"]
+    assert "dedicated non-human Gitea package-Read token" in pip_config["content"]
+    assert 'PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL=""' in seed
+    assert 'pip install "httpx>=0.27"' in seed
+    assert 'PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf"' in seed
+    assert 'env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL=""' in seed
+    assert "--extra-index-url" not in seed
     assert "systemctl enable nms-fileserver-agent-enroll.service" in seed
     assert "systemctl enable --now nms-fileserver-agent-heartbeat.timer" in seed
     assert "systemctl disable --now nms-fileserver-agent-enroll.service || true" in seed
@@ -384,11 +405,14 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
     required = (
         "tpl-fileserver-allinone-ubuntu-2404",
         "fileserver-allinone-cloud-config",
-        "9032",
+        "9300",
         "https://10.0.30.71:8006",
         "10.0.30.71",
         "nms-fileserver-agent",
         "NMS_FILESERVER_AGENT_PIP_SPEC",
+        "NMS_FILESERVER_PACKAGE_READ_USER",
+        "NMS_FILESERVER_PACKAGE_READ_TOKEN",
+        "package-Read",
         "python3-venv",
         "nms-fileserver-agent-enroll.service",
         "nms-fileserver-agent-heartbeat.timer",
@@ -399,6 +423,268 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
         doc = _read(rel)
         for text in required:
             assert text in doc, f"{rel} must document {text}"
+
+
+def test_fileserver_package_index_upgrade_migration_contract() -> None:
+    rel = "netbox_packer/migrations/0017_update_fileserver_agent_package_index.py"
+    src = _read(rel)
+    constants = _literal_assignments(rel)
+
+    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
+    assert constants["PREVIOUS_CONFIG_VERSION"] == "1.0.0"
+    assert constants["CONFIG_VERSION"] == "1.0.1"
+    assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
+    assert constants["TEMPLATE_VMID"] == 9300
+    seed = _read("netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml")
+    assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
+    assert "PackerInstallerConfig.objects.update_or_create(" in src
+    assert "proxmox_template_id=TEMPLATE_VMID" in src
+    # The template's own description must be corrected alongside proxmox_template_id —
+    # otherwise it keeps advertising the superseded VMID 9032 after this migration runs.
+    assert "VMID 9300" in src
+    assert "VMID 9032" not in src.split("def update_fileserver_package_index", 1)[1].split("def ", 1)[0]
+    assert 'update(installer_config=previous, build_status="pending")' in src
+    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
+    assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
+
+
+def test_packertemplate_name_is_unique_at_the_db_level() -> None:
+    """Historical/defense-in-depth: `name` uniqueness, not the current credential boundary.
+
+    At the time migration 0018 landed, the File Server credential guard
+    trusted `PackerTemplate.name` alone, so without a DB-level uniqueness
+    constraint a differently-owned template could be renamed to
+    `FILESERVER_TEMPLATE_NAME` and pass `render_fileserver_package_index`'s
+    identity check, exfiltrating the package-read credential. Migration 0019
+    replaced `name` with the immutable `is_fileserver_golden_template` flag as
+    the actual trust boundary; this constraint remains as defense in depth
+    against two rows sharing the trusted name simultaneously.
+    """
+    models_src = _read("netbox_packer/models.py")
+    tree = ast.parse(models_src)
+    packer_template = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplate"
+    )
+    name_assign = next(
+        node
+        for node in packer_template.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and node.targets[0].id == "name"
+    )
+    field_call = name_assign.value
+    assert isinstance(field_call, ast.Call)
+    unique_kwarg = next((kw for kw in field_call.keywords if kw.arg == "unique"), None)
+    assert unique_kwarg is not None, "PackerTemplate.name must declare unique=True"
+    assert ast.literal_eval(unique_kwarg.value) is True
+
+    migration_rel = "netbox_packer/migrations/0018_alter_packertemplate_name_unique.py"
+    migration_src = _read(migration_rel)
+    assert '("netbox_packer", "0017_update_fileserver_agent_package_index")' in migration_src
+    assert 'model_name="packertemplate"' in migration_src
+    assert 'name="name"' in migration_src
+    assert "unique=True" in migration_src
+
+
+def test_packertemplate_has_immutable_golden_template_flag() -> None:
+    """`unique=True` on `name` (migration 0018) stops two rows sharing the trusted
+    name *simultaneously*, but not the trusted row being renamed away and a
+    different row later reclaiming the freed name. `is_fileserver_golden_template`
+    must be `editable=False` so it can only be set by a migration, never through
+    `PackerTemplateForm` or the DRF serializer.
+    """
+    models_src = _read("netbox_packer/models.py")
+    tree = ast.parse(models_src)
+    packer_template = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplate"
+    )
+    flag_assign = next(
+        node
+        for node in packer_template.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and node.targets[0].id == "is_fileserver_golden_template"
+    )
+    field_call = flag_assign.value
+    assert isinstance(field_call, ast.Call)
+    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in field_call.keywords}
+    assert kwargs.get("editable") is False, "is_fileserver_golden_template must declare editable=False"
+    assert kwargs.get("default") is False
+
+    forms_src = _read("netbox_packer/forms.py")
+    form_tree = ast.parse(forms_src)
+    packer_template_form = next(
+        node for node in form_tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplateForm"
+    )
+    meta = next(node for node in packer_template_form.body if isinstance(node, ast.ClassDef) and node.name == "Meta")
+    fields_assign = next(node for node in meta.body if isinstance(node, ast.Assign) and node.targets[0].id == "fields")
+    form_fields = ast.literal_eval(fields_assign.value)
+    assert "is_fileserver_golden_template" not in form_fields
+
+    serializers_src = _read("netbox_packer/api/serializers.py")
+    assert (
+        "is_fileserver_golden_template"
+        not in serializers_src.split("class PackerTemplateSerializer", 1)[1].split("class ", 1)[0]
+    )
+
+    migration_rel = "netbox_packer/migrations/0019_stamp_fileserver_golden_template.py"
+    migration_src = _read(migration_rel)
+    assert '("netbox_packer", "0018_alter_packertemplate_name_unique")' in migration_src
+    assert 'name="is_fileserver_golden_template"' in migration_src
+    assert "editable=False" in migration_src
+    assert "migrations.RunPython(stamp_golden_template, unstamp_golden_template)" in migration_src
+    assert 'TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"' in migration_src
+
+
+def test_fileserver_package_index_authorizes_by_flag_not_name(monkeypatch) -> None:
+    """Simulate the rename-then-reclaim bypass the flag exists to close.
+
+    `render_fileserver_package_index` must authorize on
+    `is_fileserver_golden_template` alone, independent of `template_name` — so a
+    row that still carries the trusted name after being reclaimed (flag False)
+    is rejected, and the real golden row keeps working even if renamed away from
+    `FILESERVER_TEMPLATE_NAME` (flag True survives renames).
+    """
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+
+    # A new row that reclaimed the trusted name after the original was renamed
+    # away must NOT receive credentials merely because the name matches.
+    try:
+        mod.render_fileserver_package_index(
+            config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=False
+        )
+    except RuntimeError as exc:
+        assert "not the File Server golden template" in str(exc)
+    else:  # pragma: no cover - name alone must never authorize credential injection
+        raise AssertionError("expected a reclaimed name with flag=False to be rejected")
+
+    # The original golden template, renamed away, must keep working because the
+    # flag (not the name) is what carries trust.
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "token")
+    rendered = mod.render_fileserver_package_index(
+        config, template_name="renamed-golden-template", is_fileserver_golden_template=True
+    )
+    assert mod.PACKAGE_READ_USER_PLACEHOLDER not in rendered
+    assert mod.PACKAGE_READ_TOKEN_PLACEHOLDER not in rendered
+
+
+def _load_package_index():
+    """Load package_index.py in isolation (it only imports the stdlib)."""
+    path = PKG / "package_index.py"
+    spec = importlib.util.spec_from_file_location("netbox_packer_package_index_iso", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_fileserver_package_index_credentials_are_required_and_url_encoded(monkeypatch) -> None:
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+
+    monkeypatch.delenv(mod.PACKAGE_READ_USER_ENV, raising=False)
+    monkeypatch.delenv(mod.PACKAGE_READ_TOKEN_ENV, raising=False)
+    try:
+        mod.render_fileserver_package_index(
+            config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+        )
+    except RuntimeError as exc:
+        assert mod.PACKAGE_READ_USER_ENV in str(exc)
+        assert mod.PACKAGE_READ_TOKEN_ENV in str(exc)
+    else:  # pragma: no cover - a credentialed bake must fail closed
+        raise AssertionError("expected missing package-index credentials to fail")
+
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+    rendered = mod.render_fileserver_package_index(
+        config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+    )
+    assert "fileserver%20reader:read%2Ftoken%3Fonly@" in rendered
+    assert "read/token?only" not in rendered
+
+
+def test_fileserver_package_index_rejects_placeholders_on_other_templates(monkeypatch) -> None:
+    """An unrelated template embedding the placeholder strings must never receive credentials."""
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+
+    try:
+        mod.render_fileserver_package_index(
+            config, template_name="some-other-template", is_fileserver_golden_template=False
+        )
+    except RuntimeError as exc:
+        assert "not the File Server golden template" in str(exc)
+    else:  # pragma: no cover - credential injection must be scoped to the File Server template
+        raise AssertionError("expected placeholders on an unrelated template to be rejected")
+
+
+def test_fileserver_package_index_non_target_passthrough_and_log_redaction(monkeypatch) -> None:
+    mod = _load_package_index()
+    unrelated = "#cloud-config\npackages:\n  - qemu-guest-agent\n"
+    assert (
+        mod.render_fileserver_package_index(
+            unrelated, template_name="some-other-template", is_fileserver_golden_template=False
+        )
+        == unrelated
+    )
+    assert (
+        mod.render_fileserver_package_index(
+            unrelated, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+        )
+        == unrelated
+    )
+
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
+    output = "raw=read/token?only encoded=read%2Ftoken%3Fonly"
+    redacted = mod.redact_fileserver_package_token(output)
+    assert "read/token?only" not in redacted
+    assert "read%2Ftoken%3Fonly" not in redacted
+    assert redacted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
+
+    try:
+        raise RuntimeError(output)
+    except RuntimeError as original:
+        try:
+            raise mod.sanitized_fileserver_package_error(original) from None
+        except RuntimeError as safe_error:
+            formatted = "".join(traceback.format_exception(safe_error))
+    assert "read/token?only" not in formatted
+    assert "read%2Ftoken%3Fonly" not in formatted
+    assert formatted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
+
+
+def test_fileserver_package_index_target_without_placeholders_fails_closed() -> None:
+    mod = _load_package_index()
+    target_without_placeholders = f"#cloud-config\npath: {mod.FILESERVER_PIP_CONFIG_PATH}\n"
+    try:
+        mod.render_fileserver_package_index(
+            target_without_placeholders,
+            template_name=mod.FILESERVER_TEMPLATE_NAME,
+            is_fileserver_golden_template=True,
+        )
+    except RuntimeError as exc:
+        assert "placeholders are missing" in str(exc)
+    else:  # pragma: no cover - the target config must never fall back to public PyPI
+        raise AssertionError("expected missing File Server placeholders to fail")
 
 
 def test_passbolt_ce_seed_contract() -> None:

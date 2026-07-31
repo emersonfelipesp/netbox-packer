@@ -85,14 +85,24 @@ JWT keys, and database are supplied by the data migration from the existing
 Passbolt instance.
 
 The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
-`9032`, using installer config `fileserver-allinone-cloud-config` on
+`9300`, using installer config `fileserver-allinone-cloud-config` version
+`1.0.1` on
 CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. It installs
 Samba AD/DC packages, Nextcloud web/PHP prerequisites, monitoring agents, and
 `python3-venv`. `nms-fileserver-agent` is not installed through apt; the bake
-creates `/opt/nms-fileserver-agent/venv` and installs the Python package from
-`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), so the
-bake environment must provide that package through an accessible pip index,
-wheel, source archive, or direct VCS/source spec. The image installs
+creates `/opt/nms-fileserver-agent/venv` and installs
+`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`) from the
+N-MultiCloud Gitea PyPI index. The NetBox/netbox-packer service environment must
+provide `NMS_FILESERVER_PACKAGE_READ_USER` and
+`NMS_FILESERVER_PACKAGE_READ_TOKEN`. Use a dedicated non-human identity whose
+token has only Gitea package-Read permission; never use a personal token or
+`PACKAGE_WRITE_TOKEN`. Build dispatch URL-encodes the values, fails closed when
+they are missing, and writes the authenticated index to the golden image as the
+root-only `/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is installed from
+PyPI first, and the pinned agent is then installed from the sole private index
+with `--no-deps`. Operators manage and rotate the two variables in the secret
+store that supplies the NetBox worker process environment, then rebake VMID
+`9300` so future clones inherit the replacement read-only token. The image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; the baked config points at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`, and the

@@ -82,7 +82,7 @@ class PackerInstallerConfig(NetBoxModel):
 class PackerTemplate(NetBoxModel):
     """A Packer-managed Proxmox VM template with lifecycle tracking."""
 
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     os_family = models.CharField(
         max_length=20,
         choices=OSFamilyChoices,
@@ -170,6 +170,18 @@ class PackerTemplate(NetBoxModel):
         related_name="templates",
     )
     installer_config_checksum_at_build = models.CharField(max_length=64, blank=True)
+
+    # Authorization boundary for the File Server package-index credential
+    # injection in package_index.py. editable=False keeps it out of
+    # PackerTemplateForm (explicit Meta.fields tuple) and out of the DRF
+    # serializer's writable fields (also an explicit Meta.fields tuple, and
+    # DRF marks a non-editable model field read_only even if listed) — it can
+    # only be set by a migration. Renaming the row leaves this True (the
+    # trusted template keeps its trust); deleting it and having another row
+    # reclaim the freed name leaves this False on the new row (fails closed).
+    # `unique=True` on `name` above prevents two rows sharing the name
+    # *simultaneously*; this flag is what prevents *reclaiming* the name.
+    is_fileserver_golden_template = models.BooleanField(default=False, editable=False)
 
     class Meta:
         ordering = ["name"]

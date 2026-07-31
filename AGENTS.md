@@ -75,17 +75,28 @@ migration off the existing instance.
 
 ## File Server All-in-One Seed
 
-Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds
-`tpl-fileserver-allinone-ubuntu-2404` with VMID `9032` for Ubuntu 24.04. The
-installer config is `fileserver-allinone-cloud-config`, and the verbatim
-cloud-config source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
+Migration `0014_seed_fileserver_allinone_cloud_init.py` initially seeded
+`tpl-fileserver-allinone-ubuntu-2404` for Ubuntu 24.04. Migration
+`0017_update_fileserver_agent_package_index.py` corrects its current VMID to
+`9300` and creates the current installer config,
+`fileserver-allinone-cloud-config` version `1.0.1`; the verbatim cloud-config
+source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
 
 The image installs Samba AD/DC packages, Nextcloud web/PHP prerequisites,
 `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
-through apt. The bake source must provide that pip package or direct source
-spec. The image installs `nms-fileserver-agent-enroll.service` and
+through apt. The NetBox/netbox-packer service environment must provide
+`NMS_FILESERVER_PACKAGE_READ_USER` and
+`NMS_FILESERVER_PACKAGE_READ_TOKEN` for a dedicated non-human Gitea identity
+with package-Read permission only; never use a personal token or
+`PACKAGE_WRITE_TOKEN`. Dispatch fails closed when either value is missing,
+redacts the token from persisted output, and bakes the sole private index into
+root-only `/etc/nms-fileserver-agent/pip.conf`. Public dependencies are resolved
+before the pinned agent is installed with `--no-deps`. Rotate the variables in
+the secret store supplying the NetBox worker environment and rebake VMID `9300`
+so future clones receive the new read-only credential. The image installs
+`nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; it points the agent at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; do not
 bake a tenant enrollment token into the image. The default bake target is

@@ -235,16 +235,17 @@ unconfigured until an operator wires a relay.
 
 ## File Server All-in-One Template
 
-Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds the combined file
-server image used by File Server auto-provisioning.
+Migration `0014_seed_fileserver_allinone_cloud_init.py` originally seeded the
+combined file server image used by File Server auto-provisioning. Migration
+`0017_update_fileserver_agent_package_index.py` updates the current record.
 
 | Field | Value |
 | --- | --- |
 | Template name | `tpl-fileserver-allinone-ubuntu-2404` |
-| Installer config | `fileserver-allinone-cloud-config` |
+| Installer config | `fileserver-allinone-cloud-config` version `1.0.1` |
 | Cloud-config source | `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml` |
 | OS | Ubuntu `24.04` |
-| Template VMID | `9032` |
+| Template VMID | `9300` |
 | Proxmox endpoint | `https://10.0.30.71:8006` |
 | Proxmox node / SSH host | `10.0.30.71` |
 | Storage | `local` |
@@ -264,8 +265,23 @@ The cloud-config installs Samba AD/DC packages (`samba`, `samba-dsdb-modules`,
 `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
-through apt. The bake environment must provide that package through an
-accessible pip index, wheel, source archive, or direct source/VCS spec.
+through apt. Set `NMS_FILESERVER_PACKAGE_READ_USER` and
+`NMS_FILESERVER_PACKAGE_READ_TOKEN` in the secret store that supplies the
+NetBox/netbox-packer worker service environment. The credentials must belong to
+a dedicated non-human Gitea identity, and the token must have package-Read
+permission only—never use a personal token or `PACKAGE_WRITE_TOKEN`. Dispatch
+fails closed if either value is absent, URL-encodes them, and redacts the raw or
+encoded token from persisted build output. The rendered golden image stores the
+authenticated N-MultiCloud PyPI index in root-only
+`/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is installed from PyPI
+before the agent is installed from the sole private index with `--no-deps`.
+
+Because every clone inherits that root-only credential, rotate both service
+environment values and rebake VMID `9300` whenever the read token is replaced;
+retire prior images and clones according to the credential-rotation policy.
+Migration `0017_update_fileserver_agent_package_index.py` repoints installations
+that already ran migration 0014 at this v1.0.1 config and marks the template
+pending for a replacement bake.
 
 This image is software-only. The bake does not create a Samba domain, does not
 run a Nextcloud tenant install, and does not include any tenant secret. `nginx`
@@ -318,7 +334,7 @@ on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
 port 53, both PowerDNS API webservers should bind to localhost, and no
 configuration should expose recursion to `0.0.0.0/0`.
 
-For the File Server all-in-one template, VMID `9032` should be marked as a
+For the File Server all-in-one template, VMID `9300` should be marked as a
 template on `10.0.30.71`. On a clone before tenant provisioning, Samba and
 nginx should remain inactive, `zabbix-agent2` should point at
 `zabbix.nmulti.cloud`, and `/etc/nms-fileserver-agent/config.env` should contain
@@ -341,6 +357,7 @@ only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
   `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
   reversible seeded-row cleanup stable.
 - the File Server all-in-one seed keeps `tpl-fileserver-allinone-ubuntu-2404`,
-  `fileserver-allinone-cloud-config`, VMID `9032`, CLUSTER01-DC01 endpoint
+  `fileserver-allinone-cloud-config`, VMID `9300`, CLUSTER01-DC01 endpoint
   `https://10.0.30.71:8006`, production NMS URLs, service-disabled defaults,
+  root-only package-index configuration, package-Read credential placeholders,
   YAML parseability, and reversible seeded-row cleanup stable.

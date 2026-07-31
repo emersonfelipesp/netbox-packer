@@ -234,6 +234,9 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0016` | `ubuntu-2204-cloudinit-base` | 9040 | Ubuntu 22.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template for the customer VM catalog; minimal `#cloud-config` (QGA + Zabbix + `ssh_pwauth` injected at build time). Shares installer config `ubuntu-lts-base-cloud-config` |
 | `0016` | `ubuntu-2404-cloudinit-base` | 9041 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above) |
 | `0016` | `ubuntu-2604-cloudinit-base` | 9042 | Ubuntu 26.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above). Verify the 26.04 cloud image URL resolves before baking |
+| `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1, corrects its current VMID to 9300, injects the authenticated package-Read index, and marks it pending for rebake |
+| `0018` | *(schema only — `AlterField` on `PackerTemplate.name`)* | — | — | — | Adds a DB-level `unique=True` constraint to `name`. Historical/defense-in-depth: at the time this migration landed, the File Server package-index credential guard in `package_index.py` trusted an exact `name` match, so this stopped two rows sharing `FILESERVER_TEMPLATE_NAME` simultaneously. Migration 0019 replaced `name` as the actual credential-injection trust boundary — see below |
+| `0019` | *(schema + data — `AddField` + `RunPython` on `PackerTemplate`)* | — | — | — | Adds `is_fileserver_golden_template` (`BooleanField`, `editable=False`) and stamps it `True` on the row named `tpl-fileserver-allinone-ubuntu-2404`. `unique=True` (0018) only stops two rows sharing the trusted name *simultaneously* — it does not stop the trusted row being renamed away and a different row later reclaiming the freed name. `package_index.py` now authorizes credential injection on this immutable flag instead of on `name`; the flag is settable only by a migration (excluded from `PackerTemplateForm` and the DRF serializer's explicit `fields` tuples) |
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -304,23 +307,39 @@ placeholders before production use.
 
 #### Migration 0014 — File Server all-in-one
 
-Seeds `tpl-fileserver-allinone-ubuntu-2404` (VMID 9032) on ProxmoxEndpoint
+Migration 0014 historically seeded `tpl-fileserver-allinone-ubuntu-2404`
+(VMID 9032) on ProxmoxEndpoint
 `https://10.0.30.71:8006` / node `10.0.30.71`, using installer config
-`fileserver-allinone-cloud-config`. The verbatim cloud-config source is tracked
-at `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`, and
-`tests/test_cloud_config_build_static.py` asserts the migration constant matches
-that file exactly.
+`fileserver-allinone-cloud-config`. Migration 0014 remains the immutable v1.0.0
+history. The current verbatim cloud-config source is tracked at
+`netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`, and
+`tests/test_cloud_config_build_static.py` asserts the migration 0017 constant
+matches that file exactly.
 
 The cloud-config installs Samba AD/DC packages, Nextcloud web/PHP
 prerequisites, `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is not an apt package in this image. The bake creates
-`/opt/nms-fileserver-agent/venv` and installs the Python package from
-`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), so the
-bake environment must provide that agent package through an accessible pip
-index, wheel, source archive, or direct source/VCS spec. It writes
+`/opt/nms-fileserver-agent/venv` and installs
+`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`) from the
+N-MultiCloud Gitea PyPI index. The NetBox/netbox-packer service environment must
+provide `NMS_FILESERVER_PACKAGE_READ_USER` and
+`NMS_FILESERVER_PACKAGE_READ_TOKEN` for a dedicated non-human identity whose
+token has only Gitea package-Read permission. Never supply a personal token or
+`PACKAGE_WRITE_TOKEN`. The dispatch path fails closed when either secret is
+missing, URL-encodes both values, and redacts the raw and encoded token from
+persisted build output. Public `httpx` is installed from PyPI first; the pinned
+agent is installed with `--no-deps` from the authenticated sole private index in
+root-only `/etc/nms-fileserver-agent/pip.conf`. Operators rotate the variables
+in the secret store that supplies the NetBox worker environment and rebake VMID
+9300; every clone otherwise retains the credential baked into that file. It writes
 `/etc/nms-fileserver-agent/config.env` with
 `NMS_BACKEND_URL=https://backend.nms.nmulti.cloud` and
 `NETBOX_URL=https://netbox.nmulti.cloud`.
+
+Migration `0017_update_fileserver_agent_package_index.py` creates installer
+config version `1.0.1`, repoints the existing template row, corrects its current
+VMID to 9300, and marks it pending so deployments that already applied migration
+0014 receive the new bootstrap.
 
 The image is software-only: tenant provisioning is deferred to clone-time
 automation, no enrollment token is baked, `nginx` is disabled,
