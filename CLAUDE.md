@@ -231,7 +231,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | Migration | Template name | VMID | OS | ProxmoxEndpoint | Notes |
 |---|---|---|---|---|---|
 | `0006` | `zabbix-7.4-ubuntu-2604-pgsql-nginx` | 9010 | Ubuntu 26.04 | `https://10.0.30.139:8006` (dev) | Zabbix 7.4 + PostgreSQL + nginx; dev host only |
-| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (dev) | InfluxDB 2.x Proxmox metrics; dev host only; do **not** target production endpoint `10.0.30.9` |
+| `0007` | `influxdb-2-ubuntu-2404-proxmox-collector` | 9011 | Ubuntu 24.04 | `https://10.0.30.139:8006` (historical dev endpoint) | Immutable historical seed; additive migration `0020` replaces the row's credential-generating content and marks it pending; development only |
 | `0008` | *(schema only — adds monitoring-agent fields)* | — | — | — | Adds `install_qemu_guest_agent`, `install_zabbix_agent2`, `zabbix_server` to `PackerTemplate` |
 | `0009` | `k8s-1.31-ubuntu-2404-node` | 9012 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Kubernetes 1.31 base node (containerd + kubelet/kubeadm/kubectl, pre-pulls CP images) |
 | `0010` | *(schema only — adds RegexValidator to `zabbix_server` field)* | — | — | — | `AlterField` on `PackerTemplate.zabbix_server`; no data changes |
@@ -248,6 +248,23 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1, corrects its current VMID to 9300, injects the authenticated package-Read index, and marks it pending for rebake |
 | `0018` | *(schema only — `AlterField` on `PackerTemplate.name`)* | — | — | — | Adds a DB-level `unique=True` constraint to `name`. Historical/defense-in-depth: at the time this migration landed, the File Server package-index credential guard in `package_index.py` trusted an exact `name` match, so this stopped two rows sharing `FILESERVER_TEMPLATE_NAME` simultaneously. Migration 0019 replaced `name` as the actual credential-injection trust boundary — see below |
 | `0019` | *(schema + data — `AddField` + `RunPython` on `PackerTemplate`)* | — | — | — | Adds `is_fileserver_golden_template` (`BooleanField`, `editable=False`) and stamps it `True` on the row named `tpl-fileserver-allinone-ubuntu-2404`. `unique=True` (0018) only stops two rows sharing the trusted name *simultaneously* — it does not stop the trusted row being renamed away and a different row later reclaiming the freed name. `package_index.py` now authorizes credential injection on this immutable flag instead of on `name`; the flag is settable only by a migration (excluded from `PackerTemplateForm` and the DRF serializer's explicit `fields` tuples) |
+| `0020` | `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | 9050 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned OSS 2.9.1 profile for Proxmox metrics/Flux; requires `endpoint_id` + `target_node` |
+| `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires `endpoint_id` + `target_node` |
+
+#### Migration 0020 — InfluxDB profiles
+
+The two current InfluxDB profiles have no baked endpoint, user, password,
+token, organization, bucket, or database. Their cloud-init verifies the
+InfluxData signing-key fingerprint, selects only the requested semantic patch
+version from APT, verifies the installed version, and applies `apt-mark hold`.
+Build requests provide proxbox-api `endpoint_id` and `target_node`, with
+optional `template_vmid` and `storage` selectors; when an
+endpoint ID is present, netbox-packer never forwards a legacy `ssh_host` and
+proxbox-api derives transport from the selected endpoint. Product bootstrap,
+database/bucket creation, tokens, configs, files, services, health, and journal
+operations are performed through typed NMS RPC; plaintext credentials are
+stored only by the netbox-nms secret bridge and RPC results contain
+`nms-secret:` references.
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -324,7 +341,7 @@ Migration 0014 historically seeded `tpl-fileserver-allinone-ubuntu-2404`
 `fileserver-allinone-cloud-config`. Migration 0014 remains the immutable v1.0.0
 history. The current verbatim cloud-config source is tracked at
 `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`, and
-`tests/test_cloud_config_build_static.py` asserts the migration 0017 constant
+`tests/test_cloud_config_build_static.py` asserts the migration 0020 constant
 matches that file exactly.
 
 The cloud-config installs Samba AD/DC packages, Nextcloud web/PHP

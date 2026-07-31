@@ -29,11 +29,14 @@ a local PostgreSQL database and nginx (PHP 8.5), initializing the Zabbix
 database schema on first boot. Do not target the production
 `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seed.
 
-The InfluxDB 2 Proxmox metrics collector seed is
-`influxdb-2-ubuntu-2404-proxmox-collector`, VMID `9011`, targeting only the
-development endpoint `https://10.0.30.139:8006` / node `10.0.30.139`. Do not
-target the production `https://10.0.30.9:8006` / `10.0.30.9` cluster with this
-seeded build process.
+InfluxDB is available as two endpoint-agnostic profiles: OSS `2.9.1` for
+Proxmox metrics/Flux (VMID `9050`) and Core `3.11.0` for general-purpose
+SQL/InfluxQL workloads (VMID `9051`). Build dispatch supplies proxbox-api
+`endpoint_id` and `target_node` explicitly. Cloud-init contains no credentials or
+product setup call; typed NMS RPC owns onboarding and netbox-nms owns encrypted
+secret material exposed only as `nms-secret:` references. The legacy VMID
+`9011` profile remains development-only and is
+hardened/marked pending by migration `0020`.
 
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)

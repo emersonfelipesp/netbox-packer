@@ -66,6 +66,11 @@ def _resolve_ssh_host(template, overrides):
     template's ``proxmox_endpoint`` (the netbox-proxbox ProxmoxEndpoint URL),
     then ``proxmox_node``.
     """
+    # When a proxbox-api endpoint id is selected, proxbox-api must derive the
+    # SSH host from that same endpoint.  Sending legacy template metadata could
+    # otherwise gate one endpoint while connecting to another host.
+    if _resolve_endpoint_id(overrides) is not None:
+        return None
     override = (overrides or {}).get("ssh_host")
     if override:
         return str(override)
@@ -96,6 +101,32 @@ def _resolve_endpoint_id(overrides):
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_target_node(template, selected_node, overrides):
+    """Prefer the explicitly selected per-build node over template metadata."""
+
+    override = str((overrides or {}).get("target_node") or "").strip()
+    if override:
+        return override
+    value = str(selected_node or template.proxmox_node or "").strip()
+    return value or None
+
+
+def _resolve_template_vmid(template, overrides):
+    """Resolve a validated per-build destination VMID or the profile default."""
+
+    raw = (overrides or {}).get("template_vmid")
+    if raw in (None, ""):
+        return int(template.proxmox_template_id)
+    return int(raw)
+
+
+def _resolve_storage(template, overrides):
+    """Resolve target storage without accepting an empty proxbox-api value."""
+
+    value = str((overrides or {}).get("storage") or template.storage_pool or "local").strip()
+    return value or "local"
 
 
 def select_build_node(template, skip_affinity_check=False):
@@ -317,8 +348,17 @@ class PackerBuildJob(JobRunner):
         build.started_at = timezone.now()
         build.save(update_fields=["status", "started_at"])
 
-        # Select build node
-        endpoint, node = select_build_node(template)
+        # Endpoint-agnostic profiles carry their cluster and node selectors in
+        # variable_overrides.  Legacy templates retain affinity-based fallback.
+        requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
+        endpoint, node = select_build_node(
+            template,
+            skip_affinity_check=bool(
+                requested_node and _resolve_endpoint_id(build.variable_overrides)
+            ),
+        )
+        if requested_node:
+            node = requested_node
         build.selected_node = node or ""
         build.save(update_fields=["selected_node"])
 
@@ -349,19 +389,21 @@ class PackerBuildJob(JobRunner):
         settings_row = PackerPluginSettings.get_solo()
         api_url = (settings_row.proxbox_api_url or "").strip()
         installer = template.installer_config
-        storage = template.storage_pool or "local"
+        storage = _resolve_storage(template, build.variable_overrides)
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
-        target_node = (node or template.proxmox_node or "").strip() or None
+        target_node = _resolve_target_node(template, node, build.variable_overrides)
         image_url = _resolve_cloud_image_url(template, build.variable_overrides)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
         endpoint_id = _resolve_endpoint_id(build.variable_overrides)
+        template_vmid = _resolve_template_vmid(template, build.variable_overrides)
 
         log_lines = [
             f"[INFO] Cloud-init template image build for '{template.name}'",
             f"[INFO] Delegating real Proxmox bake to proxbox-api: {api_url or 'UNSET'}",
             f"[INFO] Installer config: {installer} ({installer.installer_type})",
             f"[INFO] Base image: {image_url}",
-            f"[INFO] Proxmox SSH host: {ssh_host or 'UNSET'} | storage: {storage}",
+            f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
+            f"[INFO] Destination template VMID: {template_vmid}",
             "[INFO] proxbox-api endpoint_id: "
             + (
                 str(endpoint_id)
@@ -397,7 +439,7 @@ class PackerBuildJob(JobRunner):
                 proxbox_api_url=api_url,
                 proxbox_api_key=settings_row.get_proxbox_api_key(),
                 name=template.name,
-                vmid=template.proxmox_template_id,
+                vmid=template_vmid,
                 target_node=target_node,
                 image_url=image_url,
                 user_data_yaml=user_data_yaml,
