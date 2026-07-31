@@ -67,6 +67,17 @@ The template add/edit form is tuned for creating cloud-init templates:
     `os_version` that is not in `OS_VERSIONS_BY_FAMILY[os_family]` (covering
     JavaScript-disabled submits), while still allowing an instance's
     originally-stored (off-list) value on edit. Scope is this **UI form only**.
+  - **`clean()` reads `super().clean() or self.cleaned_data`, not just
+    `super().clean()`.** Under NetBox 4.6.4, `CheckLastUpdatedMixin.clean()`
+    (in the `NetBoxModelForm` MRO between this form and `forms.ModelForm`)
+    returns `None` unconditionally for any new/unsaved-instance form, which
+    crashed every "create new PackerTemplate" submission with
+    `AttributeError: 'NoneType' object has no attribute 'get'`. Django's
+    `BaseForm._clean_form()` only overwrites `self.cleaned_data` when an
+    overridden `clean()` returns non-`None`, so falling back to
+    `self.cleaned_data` is safe and keeps the `_clean_fields()`-populated
+    data. If NetBox fixes the core mixin, the `or self.cleaned_data` fallback
+    becomes a no-op — leave it in place rather than reverting it.
   - The model field and REST API stay a plain `CharField` — **no migration** and
     automation can still POST any version string (the free-form contract is
     intentional; do not add serializer validation).
