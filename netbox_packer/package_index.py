@@ -20,29 +20,35 @@ FILESERVER_PIP_CONFIG_PATH = "/etc/nms-fileserver-agent/pip.conf"
 FILESERVER_TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"
 
 
-def render_fileserver_package_index(user_data_yaml: str, *, template_name: str) -> str:
+def render_fileserver_package_index(
+    user_data_yaml: str, *, template_name: str, is_fileserver_golden_template: bool
+) -> str:
     """Replace File Server package-index placeholders from the service environment.
 
     Cloud-configs without the File Server placeholders pass through unchanged.
     A File Server bake fails closed when either placeholder or required runtime
     secret is missing, preventing pip from silently falling back to public PyPI.
 
-    Substitution is scoped to ``FILESERVER_TEMPLATE_NAME`` specifically: any
-    other template's cloud-config that happens to contain the placeholder
+    Substitution is scoped to ``is_fileserver_golden_template`` specifically:
+    any other template's cloud-config that happens to contain the placeholder
     strings (an operator can set arbitrary installer content on any template)
     is rejected rather than silently receiving the real credentials, closing a
-    credential exfiltration path. This is only a safe boundary because
-    ``PackerTemplate.name`` carries a DB-level ``unique=True`` constraint
-    (migration 0018) — without it, an unrelated template could be renamed to
-    the exact trusted string and pass this check.
+    credential exfiltration path. Authorization is bound to
+    ``PackerTemplate.is_fileserver_golden_template`` — an ``editable=False``
+    flag only a migration can set (migration 0019) — rather than to
+    ``template_name``: name alone is user-editable, and even with the
+    DB-level ``unique=True`` constraint on ``name`` (migration 0018) a
+    rename-then-reclaim could otherwise hand the trusted name, and the
+    credential, to an unrelated template. ``template_name`` is accepted only
+    for diagnostic error messages.
     """
     has_user_placeholder = PACKAGE_READ_USER_PLACEHOLDER in user_data_yaml
     has_token_placeholder = PACKAGE_READ_TOKEN_PLACEHOLDER in user_data_yaml
     if not has_user_placeholder and not has_token_placeholder:
-        if FILESERVER_PIP_CONFIG_PATH in user_data_yaml and template_name == FILESERVER_TEMPLATE_NAME:
+        if FILESERVER_PIP_CONFIG_PATH in user_data_yaml and is_fileserver_golden_template:
             raise RuntimeError("File Server package-index credential placeholders are missing")
         return user_data_yaml
-    if template_name != FILESERVER_TEMPLATE_NAME:
+    if not is_fileserver_golden_template:
         raise RuntimeError(
             "File Server package-index credential placeholders were found in the "
             f"cloud-config for template {template_name!r}, which is not the File "

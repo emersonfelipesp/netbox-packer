@@ -379,7 +379,11 @@ class PackerBuildJob(JobRunner):
             )
 
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
-        user_data_yaml = render_fileserver_package_index(user_data_yaml, template_name=template.name)
+        user_data_yaml = render_fileserver_package_index(
+            user_data_yaml,
+            template_name=template.name,
+            is_fileserver_golden_template=template.is_fileserver_golden_template,
+        )
         zabbix_status = "disabled"
         if template.install_zabbix_agent2:
             zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"

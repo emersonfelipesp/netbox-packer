@@ -95,7 +95,9 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
-    assert "render_fileserver_package_index(user_data_yaml, template_name=template.name)" in src
+    assert "user_data_yaml = render_fileserver_package_index(" in src
+    assert "template_name=template.name," in src
+    assert "is_fileserver_golden_template=template.is_fileserver_golden_template," in src
     assert "redact_fileserver_package_token(str(value))" in src
     assert "raise sanitized_fileserver_package_error(exc) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
@@ -478,6 +480,96 @@ def test_packertemplate_name_is_unique_at_the_db_level() -> None:
     assert "unique=True" in migration_src
 
 
+def test_packertemplate_has_immutable_golden_template_flag() -> None:
+    """`unique=True` on `name` (migration 0018) stops two rows sharing the trusted
+    name *simultaneously*, but not the trusted row being renamed away and a
+    different row later reclaiming the freed name. `is_fileserver_golden_template`
+    must be `editable=False` so it can only be set by a migration, never through
+    `PackerTemplateForm` or the DRF serializer.
+    """
+    models_src = _read("netbox_packer/models.py")
+    tree = ast.parse(models_src)
+    packer_template = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplate"
+    )
+    flag_assign = next(
+        node
+        for node in packer_template.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and node.targets[0].id == "is_fileserver_golden_template"
+    )
+    field_call = flag_assign.value
+    assert isinstance(field_call, ast.Call)
+    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in field_call.keywords}
+    assert kwargs.get("editable") is False, "is_fileserver_golden_template must declare editable=False"
+    assert kwargs.get("default") is False
+
+    forms_src = _read("netbox_packer/forms.py")
+    form_tree = ast.parse(forms_src)
+    packer_template_form = next(
+        node for node in form_tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplateForm"
+    )
+    meta = next(node for node in packer_template_form.body if isinstance(node, ast.ClassDef) and node.name == "Meta")
+    fields_assign = next(node for node in meta.body if isinstance(node, ast.Assign) and node.targets[0].id == "fields")
+    form_fields = ast.literal_eval(fields_assign.value)
+    assert "is_fileserver_golden_template" not in form_fields
+
+    serializers_src = _read("netbox_packer/api/serializers.py")
+    assert (
+        "is_fileserver_golden_template"
+        not in serializers_src.split("class PackerTemplateSerializer", 1)[1].split("class ", 1)[0]
+    )
+
+    migration_rel = "netbox_packer/migrations/0019_stamp_fileserver_golden_template.py"
+    migration_src = _read(migration_rel)
+    assert '("netbox_packer", "0018_alter_packertemplate_name_unique")' in migration_src
+    assert 'name="is_fileserver_golden_template"' in migration_src
+    assert "editable=False" in migration_src
+    assert "migrations.RunPython(stamp_golden_template, unstamp_golden_template)" in migration_src
+    assert 'TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"' in migration_src
+
+
+def test_fileserver_package_index_authorizes_by_flag_not_name(monkeypatch) -> None:
+    """Simulate the rename-then-reclaim bypass the flag exists to close.
+
+    `render_fileserver_package_index` must authorize on
+    `is_fileserver_golden_template` alone, independent of `template_name` — so a
+    row that still carries the trusted name after being reclaimed (flag False)
+    is rejected, and the real golden row keeps working even if renamed away from
+    `FILESERVER_TEMPLATE_NAME` (flag True survives renames).
+    """
+    mod = _load_package_index()
+    config = (
+        "index-url = https://"
+        + mod.PACKAGE_READ_USER_PLACEHOLDER
+        + ":"
+        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
+        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+
+    # A new row that reclaimed the trusted name after the original was renamed
+    # away must NOT receive credentials merely because the name matches.
+    try:
+        mod.render_fileserver_package_index(
+            config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=False
+        )
+    except RuntimeError as exc:
+        assert "not the File Server golden template" in str(exc)
+    else:  # pragma: no cover - name alone must never authorize credential injection
+        raise AssertionError("expected a reclaimed name with flag=False to be rejected")
+
+    # The original golden template, renamed away, must keep working because the
+    # flag (not the name) is what carries trust.
+    monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
+    monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "token")
+    rendered = mod.render_fileserver_package_index(
+        config, template_name="renamed-golden-template", is_fileserver_golden_template=True
+    )
+    assert mod.PACKAGE_READ_USER_PLACEHOLDER not in rendered
+    assert mod.PACKAGE_READ_TOKEN_PLACEHOLDER not in rendered
+
+
 def _load_package_index():
     """Load package_index.py in isolation (it only imports the stdlib)."""
     path = PKG / "package_index.py"
@@ -500,7 +592,9 @@ def test_fileserver_package_index_credentials_are_required_and_url_encoded(monke
     monkeypatch.delenv(mod.PACKAGE_READ_USER_ENV, raising=False)
     monkeypatch.delenv(mod.PACKAGE_READ_TOKEN_ENV, raising=False)
     try:
-        mod.render_fileserver_package_index(config, template_name=mod.FILESERVER_TEMPLATE_NAME)
+        mod.render_fileserver_package_index(
+            config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+        )
     except RuntimeError as exc:
         assert mod.PACKAGE_READ_USER_ENV in str(exc)
         assert mod.PACKAGE_READ_TOKEN_ENV in str(exc)
@@ -509,7 +603,9 @@ def test_fileserver_package_index_credentials_are_required_and_url_encoded(monke
 
     monkeypatch.setenv(mod.PACKAGE_READ_USER_ENV, "fileserver reader")
     monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
-    rendered = mod.render_fileserver_package_index(config, template_name=mod.FILESERVER_TEMPLATE_NAME)
+    rendered = mod.render_fileserver_package_index(
+        config, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+    )
     assert "fileserver%20reader:read%2Ftoken%3Fonly@" in rendered
     assert "read/token?only" not in rendered
 
@@ -528,7 +624,9 @@ def test_fileserver_package_index_rejects_placeholders_on_other_templates(monkey
     monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
 
     try:
-        mod.render_fileserver_package_index(config, template_name="some-other-template")
+        mod.render_fileserver_package_index(
+            config, template_name="some-other-template", is_fileserver_golden_template=False
+        )
     except RuntimeError as exc:
         assert "not the File Server golden template" in str(exc)
     else:  # pragma: no cover - credential injection must be scoped to the File Server template
@@ -538,8 +636,18 @@ def test_fileserver_package_index_rejects_placeholders_on_other_templates(monkey
 def test_fileserver_package_index_non_target_passthrough_and_log_redaction(monkeypatch) -> None:
     mod = _load_package_index()
     unrelated = "#cloud-config\npackages:\n  - qemu-guest-agent\n"
-    assert mod.render_fileserver_package_index(unrelated, template_name="some-other-template") == unrelated
-    assert mod.render_fileserver_package_index(unrelated, template_name=mod.FILESERVER_TEMPLATE_NAME) == unrelated
+    assert (
+        mod.render_fileserver_package_index(
+            unrelated, template_name="some-other-template", is_fileserver_golden_template=False
+        )
+        == unrelated
+    )
+    assert (
+        mod.render_fileserver_package_index(
+            unrelated, template_name=mod.FILESERVER_TEMPLATE_NAME, is_fileserver_golden_template=True
+        )
+        == unrelated
+    )
 
     monkeypatch.setenv(mod.PACKAGE_READ_TOKEN_ENV, "read/token?only")
     output = "raw=read/token?only encoded=read%2Ftoken%3Fonly"
@@ -564,7 +672,11 @@ def test_fileserver_package_index_target_without_placeholders_fails_closed() -> 
     mod = _load_package_index()
     target_without_placeholders = f"#cloud-config\npath: {mod.FILESERVER_PIP_CONFIG_PATH}\n"
     try:
-        mod.render_fileserver_package_index(target_without_placeholders, template_name=mod.FILESERVER_TEMPLATE_NAME)
+        mod.render_fileserver_package_index(
+            target_without_placeholders,
+            template_name=mod.FILESERVER_TEMPLATE_NAME,
+            is_fileserver_golden_template=True,
+        )
     except RuntimeError as exc:
         assert "placeholders are missing" in str(exc)
     else:  # pragma: no cover - the target config must never fall back to public PyPI
