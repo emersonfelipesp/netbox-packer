@@ -192,8 +192,17 @@ class PackerTemplateForm(NetBoxModelForm):
         REST serializer keep ``os_version`` free-form so automation may send any
         version. An existing template's originally-stored value is always allowed
         so editing an older (off-list) template never fails validation.
+
+        ``super().clean() or self.cleaned_data`` works around a NetBox 4.6.4
+        core bug: ``CheckLastUpdatedMixin.clean()`` (in the MRO between this
+        form and ``forms.ModelForm``) returns ``None`` on every one of its
+        normal paths — e.g. any new (unsaved) instance — instead of
+        propagating ``cleaned_data``. Django's ``BaseForm._clean_form()`` only
+        overwrites ``self.cleaned_data`` when a ``clean()`` override returns a
+        non-``None`` value, so ``self.cleaned_data`` itself is unaffected and
+        safe to fall back to.
         """
-        cleaned_data = super().clean()
+        cleaned_data = super().clean() or self.cleaned_data
 
         family = cleaned_data.get("os_family")
         version = cleaned_data.get("os_version")
