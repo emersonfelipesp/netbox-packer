@@ -57,7 +57,7 @@ write_files:
     content: |
       # netbox-packer replaces these placeholders from its service environment.
       # Operators rotate NMS_FILESERVER_PACKAGE_READ_TOKEN there and rebake VMID
-      # 9032; use only a dedicated non-human Gitea package-Read token, never a
+      # 9300; use only a dedicated non-human Gitea package-Read token, never a
       # personal token or PACKAGE_WRITE_TOKEN.
       [global]
       index-url = https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/

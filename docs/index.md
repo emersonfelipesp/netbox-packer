@@ -60,7 +60,7 @@ Agent 2 are injected at bake time; the DB password is generated on first boot an
 the server key/JWT/database come from the data migration.
 
 The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
-`9032`, targeting CLUSTER01-DC01 at `https://10.0.30.71:8006` / node
+`9300`, targeting CLUSTER01-DC01 at `https://10.0.30.71:8006` / node
 `10.0.30.71`. Its installer config `fileserver-allinone-cloud-config` v1.0.1 installs
 Samba AD/DC packages, Nextcloud web/PHP prerequisites, `python3-venv`, and
 monitoring agents. `nms-fileserver-agent` is installed from
@@ -69,7 +69,7 @@ must provide `NMS_FILESERVER_PACKAGE_READ_USER` and
 `NMS_FILESERVER_PACKAGE_READ_TOKEN` for a dedicated non-human Gitea token with
 package-Read permission only. Dispatch fails closed without them and bakes the
 sole authenticated index into root-only `/etc/nms-fileserver-agent/pip.conf`;
-operators rotate the environment secret and rebake VMID `9032`. The image installs
+operators rotate the environment secret and rebake VMID `9300`. The image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`. The baked agent config uses
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`;

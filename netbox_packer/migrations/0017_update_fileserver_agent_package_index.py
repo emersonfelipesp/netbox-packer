@@ -63,7 +63,7 @@ write_files:
     content: |
       # netbox-packer replaces these placeholders from its service environment.
       # Operators rotate NMS_FILESERVER_PACKAGE_READ_TOKEN there and rebake VMID
-      # 9032; use only a dedicated non-human Gitea package-Read token, never a
+      # 9300; use only a dedicated non-human Gitea package-Read token, never a
       # personal token or PACKAGE_WRITE_TOKEN.
       [global]
       index-url = https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/
@@ -216,6 +216,7 @@ CONFIG_NAME = "fileserver-allinone-cloud-config"
 PREVIOUS_CONFIG_VERSION = "1.0.0"
 CONFIG_VERSION = "1.0.1"
 TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"
+TEMPLATE_VMID = 9300
 
 
 def update_fileserver_package_index(apps, schema_editor):
@@ -236,7 +237,11 @@ def update_fileserver_package_index(apps, schema_editor):
             ),
         },
     )
-    PackerTemplate.objects.filter(name=TEMPLATE_NAME).update(installer_config=config, build_status="pending")
+    PackerTemplate.objects.filter(name=TEMPLATE_NAME).update(
+        installer_config=config,
+        proxmox_template_id=TEMPLATE_VMID,
+        build_status="pending",
+    )
 
 
 def restore_previous_fileserver_config(apps, schema_editor):
@@ -260,4 +265,3 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunPython(update_fileserver_package_index, restore_previous_fileserver_config),
     ]
-

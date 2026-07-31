@@ -234,7 +234,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0016` | `ubuntu-2204-cloudinit-base` | 9040 | Ubuntu 22.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template for the customer VM catalog; minimal `#cloud-config` (QGA + Zabbix + `ssh_pwauth` injected at build time). Shares installer config `ubuntu-lts-base-cloud-config` |
 | `0016` | `ubuntu-2404-cloudinit-base` | 9041 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above) |
 | `0016` | `ubuntu-2604-cloudinit-base` | 9042 | Ubuntu 26.04 | `https://10.0.30.71:8006` | Base Ubuntu LTS cloud-init template (see above). Verify the 26.04 cloud image URL resolves before baking |
-| `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9032 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1 with authenticated package-Read index injection and marks it pending for rebake |
+| `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1, corrects its current VMID to 9300, injects the authenticated package-Read index, and marks it pending for rebake |
 
 #### Migration 0008 — monitoring-agent fields
 
@@ -305,7 +305,8 @@ placeholders before production use.
 
 #### Migration 0014 — File Server all-in-one
 
-Seeds `tpl-fileserver-allinone-ubuntu-2404` (VMID 9032) on ProxmoxEndpoint
+Migration 0014 historically seeded `tpl-fileserver-allinone-ubuntu-2404`
+(VMID 9032) on ProxmoxEndpoint
 `https://10.0.30.71:8006` / node `10.0.30.71`, using installer config
 `fileserver-allinone-cloud-config`. Migration 0014 remains the immutable v1.0.0
 history. The current verbatim cloud-config source is tracked at
@@ -328,14 +329,15 @@ persisted build output. Public `httpx` is installed from PyPI first; the pinned
 agent is installed with `--no-deps` from the authenticated sole private index in
 root-only `/etc/nms-fileserver-agent/pip.conf`. Operators rotate the variables
 in the secret store that supplies the NetBox worker environment and rebake VMID
-9032; every clone otherwise retains the credential baked into that file. It writes
+9300; every clone otherwise retains the credential baked into that file. It writes
 `/etc/nms-fileserver-agent/config.env` with
 `NMS_BACKEND_URL=https://backend.nms.nmulti.cloud` and
 `NETBOX_URL=https://netbox.nmulti.cloud`.
 
 Migration `0017_update_fileserver_agent_package_index.py` creates installer
-config version `1.0.1`, repoints the existing template row, and marks it pending
-so deployments that already applied migration 0014 receive the new bootstrap.
+config version `1.0.1`, repoints the existing template row, corrects its current
+VMID to 9300, and marks it pending so deployments that already applied migration
+0014 receive the new bootstrap.
 
 The image is software-only: tenant provisioning is deferred to clone-time
 automation, no enrollment token is baked, `nginx` is disabled,

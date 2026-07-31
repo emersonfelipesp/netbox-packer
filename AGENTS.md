@@ -75,11 +75,12 @@ migration off the existing instance.
 
 ## File Server All-in-One Seed
 
-Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds
-`tpl-fileserver-allinone-ubuntu-2404` with VMID `9032` for Ubuntu 24.04. The
-current installer config is `fileserver-allinone-cloud-config` version `1.0.1`,
-created by migration `0017_update_fileserver_agent_package_index.py`; the verbatim
-cloud-config source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
+Migration `0014_seed_fileserver_allinone_cloud_init.py` initially seeded
+`tpl-fileserver-allinone-ubuntu-2404` for Ubuntu 24.04. Migration
+`0017_update_fileserver_agent_package_index.py` corrects its current VMID to
+`9300` and creates the current installer config,
+`fileserver-allinone-cloud-config` version `1.0.1`; the verbatim cloud-config
+source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
 
 The image installs Samba AD/DC packages, Nextcloud web/PHP prerequisites,
 `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
@@ -93,7 +94,7 @@ with package-Read permission only; never use a personal token or
 redacts the token from persisted output, and bakes the sole private index into
 root-only `/etc/nms-fileserver-agent/pip.conf`. Public dependencies are resolved
 before the pinned agent is installed with `--no-deps`. Rotate the variables in
-the secret store supplying the NetBox worker environment and rebake VMID `9032`
+the secret store supplying the NetBox worker environment and rebake VMID `9300`
 so future clones receive the new read-only credential. The image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; it points the agent at

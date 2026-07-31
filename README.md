@@ -85,7 +85,7 @@ JWT keys, and database are supplied by the data migration from the existing
 Passbolt instance.
 
 The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
-`9032`, using installer config `fileserver-allinone-cloud-config` version
+`9300`, using installer config `fileserver-allinone-cloud-config` version
 `1.0.1` on
 CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. It installs
 Samba AD/DC packages, Nextcloud web/PHP prerequisites, monitoring agents, and
@@ -102,7 +102,7 @@ root-only `/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is installed from
 PyPI first, and the pinned agent is then installed from the sole private index
 with `--no-deps`. Operators manage and rotate the two variables in the secret
 store that supplies the NetBox worker process environment, then rebake VMID
-`9032` so future clones inherit the replacement read-only token. The image installs
+`9300` so future clones inherit the replacement read-only token. The image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; the baked config points at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`, and the

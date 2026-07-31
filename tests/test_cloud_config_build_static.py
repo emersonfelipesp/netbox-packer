@@ -309,14 +309,12 @@ def test_fileserver_allinone_seed_contract() -> None:
     assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
     assert constants["CONFIG_VERSION"] == "1.0.0"
     assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
-    assert constants["TEMPLATE_VMID"] == 9032
     assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
     assert constants["PROXMOX_NODE"] == "10.0.30.71"
     assert name == constants["TEMPLATE_NAME"]
 
     assert defaults["os_family"] == "ubuntu"
     assert defaults["os_version"] == "24.04"
-    assert defaults["proxmox_template_id"] == 9032
     assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
     assert defaults["proxmox_node"] == "10.0.30.71"
     assert defaults["storage_pool"] == "local"
@@ -363,16 +361,16 @@ def test_fileserver_allinone_seed_contract() -> None:
 
     assert "apt-get install -y zabbix-agent2" in seed
     assert "apt-get install -y zabbix-agent2 nms-fileserver-agent" not in seed
-    assert "python3 -m venv \"${NMS_FILESERVER_AGENT_VENV_DIR}\"" in seed
+    assert 'python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"' in seed
     assert "pip install --no-deps" in seed
-    assert "\"${NMS_FILESERVER_AGENT_PIP_SPEC}\"" in seed
-    assert "NMS_FILESERVER_AGENT_PIP_SPEC=\"${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}\"" in seed
+    assert '"${NMS_FILESERVER_AGENT_PIP_SPEC}"' in seed
+    assert 'NMS_FILESERVER_AGENT_PIP_SPEC="${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}"' in seed
     config = yaml.safe_load(seed)
     pip_config = next(item for item in config["write_files"] if item["path"] == "/etc/nms-fileserver-agent/pip.conf")
     assert pip_config["permissions"] == "0600"
-    assert "https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@" in pip_config[
-        "content"
-    ]
+    assert (
+        "https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@" in pip_config["content"]
+    )
     assert "git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/" in pip_config["content"]
     assert "extra-index-url =" in pip_config["content"]
     assert "NMS_FILESERVER_PACKAGE_READ_TOKEN" in pip_config["content"]
@@ -405,7 +403,7 @@ def test_fileserver_allinone_process_is_documented_for_operators_and_agents() ->
     required = (
         "tpl-fileserver-allinone-ubuntu-2404",
         "fileserver-allinone-cloud-config",
-        "9032",
+        "9300",
         "https://10.0.30.71:8006",
         "10.0.30.71",
         "nms-fileserver-agent",
@@ -434,12 +432,13 @@ def test_fileserver_package_index_upgrade_migration_contract() -> None:
     assert constants["PREVIOUS_CONFIG_VERSION"] == "1.0.0"
     assert constants["CONFIG_VERSION"] == "1.0.1"
     assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
+    assert constants["TEMPLATE_VMID"] == 9300
     seed = _read("netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml")
     assert constants["FILESERVER_ALLINONE_CLOUD_CONFIG"] == seed
     assert "PackerInstallerConfig.objects.update_or_create(" in src
-    assert 'update(installer_config=config, build_status="pending")' in src
+    assert "proxmox_template_id=TEMPLATE_VMID" in src
     assert 'update(installer_config=previous, build_status="pending")' in src
-    assert 'PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()' in src
+    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
     assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
 
 

@@ -235,8 +235,9 @@ unconfigured until an operator wires a relay.
 
 ## File Server All-in-One Template
 
-Migration `0014_seed_fileserver_allinone_cloud_init.py` seeds the combined file
-server image used by File Server auto-provisioning.
+Migration `0014_seed_fileserver_allinone_cloud_init.py` originally seeded the
+combined file server image used by File Server auto-provisioning. Migration
+`0017_update_fileserver_agent_package_index.py` updates the current record.
 
 | Field | Value |
 | --- | --- |
@@ -244,7 +245,7 @@ server image used by File Server auto-provisioning.
 | Installer config | `fileserver-allinone-cloud-config` version `1.0.1` |
 | Cloud-config source | `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml` |
 | OS | Ubuntu `24.04` |
-| Template VMID | `9032` |
+| Template VMID | `9300` |
 | Proxmox endpoint | `https://10.0.30.71:8006` |
 | Proxmox node / SSH host | `10.0.30.71` |
 | Storage | `local` |
@@ -276,7 +277,7 @@ authenticated N-MultiCloud PyPI index in root-only
 before the agent is installed from the sole private index with `--no-deps`.
 
 Because every clone inherits that root-only credential, rotate both service
-environment values and rebake VMID `9032` whenever the read token is replaced;
+environment values and rebake VMID `9300` whenever the read token is replaced;
 retire prior images and clones according to the credential-rotation policy.
 Migration `0017_update_fileserver_agent_package_index.py` repoints installations
 that already ran migration 0014 at this v1.0.1 config and marks the template
@@ -333,7 +334,7 @@ on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
 port 53, both PowerDNS API webservers should bind to localhost, and no
 configuration should expose recursion to `0.0.0.0/0`.
 
-For the File Server all-in-one template, VMID `9032` should be marked as a
+For the File Server all-in-one template, VMID `9300` should be marked as a
 template on `10.0.30.71`. On a clone before tenant provisioning, Samba and
 nginx should remain inactive, `zabbix-agent2` should point at
 `zabbix.nmulti.cloud`, and `/etc/nms-fileserver-agent/config.env` should contain
@@ -356,7 +357,7 @@ only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
   `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
   reversible seeded-row cleanup stable.
 - the File Server all-in-one seed keeps `tpl-fileserver-allinone-ubuntu-2404`,
-  `fileserver-allinone-cloud-config`, VMID `9032`, CLUSTER01-DC01 endpoint
+  `fileserver-allinone-cloud-config`, VMID `9300`, CLUSTER01-DC01 endpoint
   `https://10.0.30.71:8006`, production NMS URLs, service-disabled defaults,
   root-only package-index configuration, package-Read credential placeholders,
   YAML parseability, and reversible seeded-row cleanup stable.
