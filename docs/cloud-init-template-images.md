@@ -265,20 +265,41 @@ The cloud-config installs Samba AD/DC packages (`samba`, `samba-dsdb-modules`,
 `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
-through apt. Set `NMS_FILESERVER_PACKAGE_READ_USER` and
-`NMS_FILESERVER_PACKAGE_READ_TOKEN` in the secret store that supplies the
-NetBox/netbox-packer worker service environment. The credentials must belong to
-a dedicated non-human Gitea identity, and the token must have package-Read
-permission only—never use a personal token or `PACKAGE_WRITE_TOKEN`. Dispatch
-fails closed if either value is absent, URL-encodes them, and redacts the raw or
-encoded token from persisted build output. The rendered golden image stores the
-authenticated N-MultiCloud PyPI index in root-only
-`/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is installed from PyPI
-before the agent is installed from the sole private index with `--no-deps`.
+through apt. Store the package-index identity on the singleton
+`PackerPluginSettings` row: the username is plaintext metadata in
+`fileserver_package_read_user`, while the token is written only through
+`set_fileserver_package_read_token()` and stored in
+`fileserver_package_read_token_encrypted` with the same Fernet cipher derived
+from Django's `SECRET_KEY` that is used by the proxbox-api key.
 
-Because every clone inherits that root-only credential, rotate both service
-environment values and rebake VMID `9300` whenever the read token is replaced;
-retire prior images and clones according to the credential-rotation policy.
+Use the Django/NetBox shell (`manage.py nbshell` or `manage.py shell`) to set or
+rotate the credential; there is no plugin REST endpoint for this settings row,
+and the encrypted field is intentionally not directly editable in Django admin.
+The raw token therefore stays out of request/API parameters and is supplied only
+to the model's encrypted setter in an operator shell:
+
+```python
+from netbox_packer.models import PackerPluginSettings
+
+settings_row = PackerPluginSettings.get_solo()
+settings_row.fileserver_package_read_user = "nms-pkg-reader"
+settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
+settings_row.save()
+```
+
+The credentials must belong to a dedicated non-human Gitea identity, and the
+token must have package-Read permission only—never use a personal token or
+`PACKAGE_WRITE_TOKEN`. Dispatch fails closed if either setting is empty,
+URL-encodes both values, and redacts the raw or encoded token from persisted
+build output. The rendered golden image stores the authenticated N-MultiCloud
+PyPI index in root-only `/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is
+installed from PyPI before the agent is installed from the sole private index
+with `--no-deps`.
+
+Because every clone inherits that root-only credential, rotate the token on the
+`PackerPluginSettings` row and rebake VMID `9300` whenever the read token is
+replaced; retire prior images and clones according to the credential-rotation
+policy.
 Migration `0017_update_fileserver_agent_package_index.py` repoints installations
 that already ran migration 0014 at this v1.0.1 config and marks the template
 pending for a replacement bake.

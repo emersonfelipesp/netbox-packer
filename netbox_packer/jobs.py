@@ -387,6 +387,7 @@ class PackerBuildJob(JobRunner):
         from .proxbox_client import ProxboxApiError, call_proxbox_build
 
         settings_row = PackerPluginSettings.get_solo()
+        fileserver_package_read_token = settings_row.get_fileserver_package_read_token()
         api_url = (settings_row.proxbox_api_url or "").strip()
         installer = template.installer_config
         storage = _resolve_storage(template, build.variable_overrides)
@@ -423,6 +424,7 @@ class PackerBuildJob(JobRunner):
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
         user_data_yaml = render_fileserver_package_index(
             user_data_yaml,
+            settings_row=settings_row,
             template_name=template.name,
             is_fileserver_golden_template=template.is_fileserver_golden_template,
         )
@@ -452,11 +454,11 @@ class PackerBuildJob(JobRunner):
                 timeout=int(timeout) + 300,
             )
         except ProxboxApiError as exc:
-            safe_error = redact_fileserver_package_token(str(exc))
+            safe_error = redact_fileserver_package_token(str(exc), fileserver_package_read_token)
             log_lines.append(f"[ERROR] {safe_error}")
             build.log = "\n".join(log_lines)
             build.save(update_fields=["log"])
-            raise sanitized_fileserver_package_error(exc) from None
+            raise sanitized_fileserver_package_error(exc, fileserver_package_read_token) from None
 
         status = str(response.get("status", "")).lower()
         result_vmid = response.get("vmid") or response.get("template_vmid")
@@ -464,7 +466,7 @@ class PackerBuildJob(JobRunner):
         for key in ("build_script", "stdout", "stderr"):
             value = response.get(key)
             if value:
-                safe_value = redact_fileserver_package_token(str(value))
+                safe_value = redact_fileserver_package_token(str(value), fileserver_package_read_token)
                 log_lines.append(f"[{key.upper()}]\n{safe_value}")
 
         build.finished_at = timezone.now()

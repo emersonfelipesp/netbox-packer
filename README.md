@@ -97,17 +97,18 @@ Samba AD/DC packages, Nextcloud web/PHP prerequisites, monitoring agents, and
 `python3-venv`. `nms-fileserver-agent` is not installed through apt; the bake
 creates `/opt/nms-fileserver-agent/venv` and installs
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`) from the
-N-MultiCloud Gitea PyPI index. The NetBox/netbox-packer service environment must
-provide `NMS_FILESERVER_PACKAGE_READ_USER` and
-`NMS_FILESERVER_PACKAGE_READ_TOKEN`. Use a dedicated non-human identity whose
-token has only Gitea package-Read permission; never use a personal token or
+N-MultiCloud Gitea PyPI index. Configure
+`PackerPluginSettings.fileserver_package_read_user` and the Fernet-encrypted
+package-read token through `set_fileserver_package_read_token()` from the
+Django/NetBox shell. Use a dedicated non-human identity whose token has only
+Gitea package-Read permission; never use a personal token or
 `PACKAGE_WRITE_TOKEN`. Build dispatch URL-encodes the values, fails closed when
 they are missing, and writes the authenticated index to the golden image as the
 root-only `/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is installed from
 PyPI first, and the pinned agent is then installed from the sole private index
-with `--no-deps`. Operators manage and rotate the two variables in the secret
-store that supplies the NetBox worker process environment, then rebake VMID
-`9300` so future clones inherit the replacement read-only token. The image installs
+with `--no-deps`. Operators rotate the token on the singleton settings row and
+rebake VMID `9300` so future clones inherit the replacement read-only token. The
+image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; the baked config points at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`, and the

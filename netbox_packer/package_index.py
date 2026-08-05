@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import os
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-PACKAGE_READ_USER_ENV = "NMS_FILESERVER_PACKAGE_READ_USER"
-PACKAGE_READ_TOKEN_ENV = "NMS_FILESERVER_PACKAGE_READ_TOKEN"  # noqa: S105 - environment variable name, not a secret
+if TYPE_CHECKING:
+    from .models import PackerPluginSettings
+
+
 PACKAGE_READ_USER_PLACEHOLDER = "__NMS_FILESERVER_PACKAGE_READ_USER__"
 PACKAGE_READ_TOKEN_PLACEHOLDER = "__NMS_FILESERVER_PACKAGE_READ_TOKEN__"  # noqa: S105 - placeholder, not a secret
 REDACTED_PACKAGE_TOKEN = "[REDACTED_PACKAGE_READ_TOKEN]"
@@ -21,9 +23,13 @@ FILESERVER_TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"
 
 
 def render_fileserver_package_index(
-    user_data_yaml: str, *, template_name: str, is_fileserver_golden_template: bool
+    user_data_yaml: str,
+    *,
+    settings_row: PackerPluginSettings,
+    template_name: str,
+    is_fileserver_golden_template: bool,
 ) -> str:
-    """Replace File Server package-index placeholders from the service environment.
+    """Replace File Server package-index placeholders from plugin settings.
 
     Cloud-configs without the File Server placeholders pass through unchanged.
     A File Server bake fails closed when either placeholder or required runtime
@@ -58,19 +64,19 @@ def render_fileserver_package_index(
     if not has_user_placeholder or not has_token_placeholder:
         raise RuntimeError("File Server package-index credential placeholders are incomplete")
 
-    package_user = os.environ.get(PACKAGE_READ_USER_ENV, "")
-    package_token = os.environ.get(PACKAGE_READ_TOKEN_ENV, "")
+    package_user = settings_row.fileserver_package_read_user
+    package_token = settings_row.get_fileserver_package_read_token()
     missing = [
         name
         for name, value in (
-            (PACKAGE_READ_USER_ENV, package_user),
-            (PACKAGE_READ_TOKEN_ENV, package_token),
+            ("PackerPluginSettings.fileserver_package_read_user", package_user),
+            ("PackerPluginSettings.fileserver_package_read_token", package_token),
         )
         if not value
     ]
     if missing:
         raise RuntimeError(
-            "File Server package-index credentials are not configured in the netbox-packer service environment: "
+            "File Server package-index credentials are not configured in PackerPluginSettings: "
             + ", ".join(missing)
         )
 
@@ -80,9 +86,8 @@ def render_fileserver_package_index(
     )
 
 
-def redact_fileserver_package_token(value: str) -> str:
+def redact_fileserver_package_token(value: str, package_token: str) -> str:
     """Remove raw and URL-encoded package tokens before build output is persisted."""
-    package_token = os.environ.get(PACKAGE_READ_TOKEN_ENV, "")
     if not package_token:
         return value
     encoded_token = quote(package_token, safe="")
@@ -92,6 +97,6 @@ def redact_fileserver_package_token(value: str) -> str:
     return redacted
 
 
-def sanitized_fileserver_package_error(error: BaseException) -> RuntimeError:
+def sanitized_fileserver_package_error(error: BaseException, package_token: str) -> RuntimeError:
     """Build an unchained exception whose message cannot contain the package token."""
-    return RuntimeError(redact_fileserver_package_token(str(error)))
+    return RuntimeError(redact_fileserver_package_token(str(error), package_token))

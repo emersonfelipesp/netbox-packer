@@ -172,6 +172,8 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
 | `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |
 | `proxbox_api_key_encrypted` | CharField(512) | blank | Fernet-encrypted API key; not editable directly — use `set_proxbox_api_key()` |
+| `fileserver_package_read_user` | CharField(255) | blank | Plaintext username for the File Server image's read-only package index |
+| `fileserver_package_read_token_encrypted` | CharField(512) | blank | Fernet-encrypted package-read token; not editable directly — use `set_fileserver_package_read_token()` |
 
 ### Key-management methods
 
@@ -184,6 +186,12 @@ settings_row.save()
 
 # Retrieve the decrypted key at job time
 api_key = settings_row.get_proxbox_api_key()
+
+# Store and retrieve the File Server package-index credential
+settings_row.fileserver_package_read_user = "nms-pkg-reader"
+settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
+settings_row.save()
+package_read_token = settings_row.get_fileserver_package_read_token()
 ```
 
 The Fernet cipher is derived from `settings.SECRET_KEY` (SHA-256 → base64url).

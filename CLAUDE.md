@@ -124,8 +124,10 @@ nms UI /virtualization/packer (Create dialog -> Build)
 
 Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
 plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
-`get_proxbox_api_key()`, keyed off `settings.SECRET_KEY` — no `netbox-nms`
-dependency).
+`get_proxbox_api_key()`), and the File Server package-read username plus
+Fernet-encrypted token (`set_fileserver_package_read_token()` /
+`get_fileserver_package_read_token()`). Encryption is keyed off
+`settings.SECRET_KEY`; there is no `netbox-nms` dependency.
 
 ### Dispatch invariants (do not regress)
 
@@ -250,6 +252,8 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0019` | *(schema + data — `AddField` + `RunPython` on `PackerTemplate`)* | — | — | — | Adds `is_fileserver_golden_template` (`BooleanField`, `editable=False`) and stamps it `True` on the row named `tpl-fileserver-allinone-ubuntu-2404`. `unique=True` (0018) only stops two rows sharing the trusted name *simultaneously* — it does not stop the trusted row being renamed away and a different row later reclaiming the freed name. `package_index.py` now authorizes credential injection on this immutable flag instead of on `name`; the flag is settable only by a migration (excluded from `PackerTemplateForm` and the DRF serializer's explicit `fields` tuples) |
 | `0020` | `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | 9050 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned OSS 2.9.1 profile for Proxmox metrics/Flux; requires `endpoint_id` + `target_node` |
 | `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires `endpoint_id` + `target_node` |
+| `0021` | *(schema only — `AddField` on `PackerPluginSettings`)* | — | — | — | Adds the plaintext File Server package-read username and Fernet-encrypted token; build rendering and redaction source both from this singleton instead of worker environment variables |
+| `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 
 #### Migration 0020 — InfluxDB profiles
 
@@ -340,26 +344,27 @@ Migration 0014 historically seeded `tpl-fileserver-allinone-ubuntu-2404`
 `https://10.0.30.71:8006` / node `10.0.30.71`, using installer config
 `fileserver-allinone-cloud-config`. Migration 0014 remains the immutable v1.0.0
 history. The current verbatim cloud-config source is tracked at
-`netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`, and
-`tests/test_cloud_config_build_static.py` asserts the migration 0020 constant
-matches that file exactly.
+`netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
+`tests/test_cloud_config_build_static.py` preserves migration 0017's historical
+content while asserting that additive migration 0022 applies the current
+settings-based credential-rotation instructions.
 
 The cloud-config installs Samba AD/DC packages, Nextcloud web/PHP
 prerequisites, `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is not an apt package in this image. The bake creates
 `/opt/nms-fileserver-agent/venv` and installs
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`) from the
-N-MultiCloud Gitea PyPI index. The NetBox/netbox-packer service environment must
-provide `NMS_FILESERVER_PACKAGE_READ_USER` and
-`NMS_FILESERVER_PACKAGE_READ_TOKEN` for a dedicated non-human identity whose
+N-MultiCloud Gitea PyPI index. The singleton `PackerPluginSettings` row must
+provide `fileserver_package_read_user` and a token encrypted through
+`set_fileserver_package_read_token()` for a dedicated non-human identity whose
 token has only Gitea package-Read permission. Never supply a personal token or
-`PACKAGE_WRITE_TOKEN`. The dispatch path fails closed when either secret is
+`PACKAGE_WRITE_TOKEN`. The dispatch path fails closed when either setting is
 missing, URL-encodes both values, and redacts the raw and encoded token from
 persisted build output. Public `httpx` is installed from PyPI first; the pinned
 agent is installed with `--no-deps` from the authenticated sole private index in
-root-only `/etc/nms-fileserver-agent/pip.conf`. Operators rotate the variables
-in the secret store that supplies the NetBox worker environment and rebake VMID
-9300; every clone otherwise retains the credential baked into that file. It writes
+root-only `/etc/nms-fileserver-agent/pip.conf`. Operators rotate the encrypted
+settings token and rebake VMID 9300; every clone otherwise retains the
+credential baked into that file. It writes
 `/etc/nms-fileserver-agent/config.env` with
 `NMS_BACKEND_URL=https://backend.nms.nmulti.cloud` and
 `NETBOX_URL=https://netbox.nmulti.cloud`.
@@ -368,6 +373,9 @@ Migration `0017_update_fileserver_agent_package_index.py` creates installer
 config version `1.0.1`, repoints the existing template row, corrects its current
 VMID to 9300, and marks it pending so deployments that already applied migration
 0014 receive the new bootstrap.
+Migration `0022_update_fileserver_package_settings_comment.py` leaves migration
+0017 immutable and replaces only its stale environment-variable rotation prose
+in existing v1.0.1 rows with the current `PackerPluginSettings` setter workflow.
 
 The image is software-only: tenant provisioning is deferred to clone-time
 automation, no enrollment token is baked, `nginx` is disabled,

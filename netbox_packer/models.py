@@ -313,7 +313,7 @@ PACKER_BRANCH_ON_CONFLICT_CHOICES = (
 
 
 class PackerPluginSettings(NetBoxModel):
-    """Singleton-style settings row for netbox-packer branching behavior."""
+    """Singleton-style runtime settings for netbox-packer."""
 
     singleton_key = models.CharField(
         max_length=32,
@@ -352,6 +352,21 @@ class PackerPluginSettings(NetBoxModel):
         editable=False,
         help_text="Fernet-encrypted X-Proxbox-API-Key (set via set_proxbox_api_key()).",
     )
+    fileserver_package_read_user = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+    fileserver_package_read_token_encrypted = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        editable=False,
+        help_text=(
+            "Fernet-encrypted package-index read token "
+            "(set via set_fileserver_package_read_token())."
+        ),
+    )
 
     class Meta:
         verbose_name = "Packer Plugin Settings"
@@ -383,4 +398,20 @@ class PackerPluginSettings(NetBoxModel):
         try:
             return _fernet().decrypt(self.proxbox_api_key_encrypted.encode()).decode()
         except Exception:  # noqa: BLE001 - treat any decrypt failure as "no key"
+            return ""
+
+    def set_fileserver_package_read_token(self, plain: str) -> None:
+        """Encrypt and store the package-index token (clears it when ``plain`` is empty)."""
+        if not plain:
+            self.fileserver_package_read_token_encrypted = ""
+            return
+        self.fileserver_package_read_token_encrypted = _fernet().encrypt(plain.encode()).decode()
+
+    def get_fileserver_package_read_token(self) -> str:
+        """Return the decrypted package-index token, or ``""`` when unset/undecryptable."""
+        if not self.fileserver_package_read_token_encrypted:
+            return ""
+        try:
+            return _fernet().decrypt(self.fileserver_package_read_token_encrypted.encode()).decode()
+        except Exception:  # noqa: BLE001 - treat any decrypt failure as "no token"
             return ""

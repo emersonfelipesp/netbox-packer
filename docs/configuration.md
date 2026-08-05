@@ -34,6 +34,8 @@ see "Storing the key" below.
 | --- | --- | --- |
 | Proxbox API URL | `proxbox_api_url` | Base URL of the proxbox-api backend (e.g. `http://10.0.30.207:8000`). Required for `cloud_config` installer-type builds. |
 | Proxbox API key | `proxbox_api_key_encrypted` | Set only via `set_proxbox_api_key()` / read via `get_proxbox_api_key()` — never stored or read as plaintext. See key management below. |
+| File Server package-read user | `fileserver_package_read_user` | Plaintext username for the dedicated non-human Gitea package reader. |
+| File Server package-read token | `fileserver_package_read_token_encrypted` | Set only via `set_fileserver_package_read_token()` / read via `get_fileserver_package_read_token()` — never stored or read as plaintext. |
 | Enable branching | `branching_enabled` | When `True`, staleness-check jobs run inside a netbox-branching branch. |
 | Branch name prefix | `branch_name_prefix` | Prefix for auto-created branch names (default: `packer-stale`). |
 | Branch conflict behavior | `branch_on_conflict` | `fail` (leave branch open) or `acknowledge` (merge anyway). |
@@ -70,6 +72,28 @@ settings_row = PackerPluginSettings.get_solo()
 key = settings_row.get_proxbox_api_key()
 print("Key configured:", bool(key))
 ```
+
+## File Server package-index credential management
+
+The File Server golden-image bake reads its package-index credential from the
+same singleton settings row, not from the NetBox or RQ service environment.
+The username is not secret; the token uses the same Django `SECRET_KEY`-derived
+Fernet cipher as the proxbox-api key. Set it from the Django/NetBox shell:
+
+```python
+from netbox_packer.models import PackerPluginSettings
+
+settings_row = PackerPluginSettings.get_solo()
+settings_row.fileserver_package_read_user = "nms-pkg-reader"
+settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
+settings_row.save()
+```
+
+Use a dedicated non-human Gitea identity and grant package-Read permission only.
+Never use a personal token or `PACKAGE_WRITE_TOKEN`. When the token changes,
+rotate it through the setter and rebake File Server VMID `9300`; existing images
+and clones retain the credential already baked into root-only
+`/etc/nms-fileserver-agent/pip.conf`.
 
 ## proxbox-api prerequisites
 

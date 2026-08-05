@@ -85,21 +85,25 @@ Migration `0014_seed_fileserver_allinone_cloud_init.py` initially seeded
 `9300` and creates the current installer config,
 `fileserver-allinone-cloud-config` version `1.0.1`; the verbatim cloud-config
 source is `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml`.
+Migration `0022_update_fileserver_package_settings_comment.py` updates already
+seeded v1.0.1 rows with the `PackerPluginSettings` /
+`set_fileserver_package_read_token()` rotation instructions without modifying
+historical migration 0017.
 
 The image installs Samba AD/DC packages, Nextcloud web/PHP prerequisites,
 `qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
 `nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
 `NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
-through apt. The NetBox/netbox-packer service environment must provide
-`NMS_FILESERVER_PACKAGE_READ_USER` and
-`NMS_FILESERVER_PACKAGE_READ_TOKEN` for a dedicated non-human Gitea identity
+through apt. The singleton `PackerPluginSettings` row must provide
+`fileserver_package_read_user` and a token set through
+`set_fileserver_package_read_token()` for a dedicated non-human Gitea identity
 with package-Read permission only; never use a personal token or
 `PACKAGE_WRITE_TOKEN`. Dispatch fails closed when either value is missing,
 redacts the token from persisted output, and bakes the sole private index into
 root-only `/etc/nms-fileserver-agent/pip.conf`. Public dependencies are resolved
-before the pinned agent is installed with `--no-deps`. Rotate the variables in
-the secret store supplying the NetBox worker environment and rebake VMID `9300`
-so future clones receive the new read-only credential. The image installs
+before the pinned agent is installed with `--no-deps`. Rotate the encrypted
+settings token and rebake VMID `9300` so future clones receive the new read-only
+credential. The image installs
 `nms-fileserver-agent-enroll.service` and
 `nms-fileserver-agent-heartbeat.timer`; it points the agent at
 `https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`; do not

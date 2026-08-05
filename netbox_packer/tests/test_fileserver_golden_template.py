@@ -16,8 +16,13 @@ from django.test import TestCase
 from netbox_packer.api.serializers import PackerTemplateSerializer
 from netbox_packer.choices import OSFamilyChoices
 from netbox_packer.forms import PackerTemplateForm
-from netbox_packer.models import PackerTemplate
-from netbox_packer.package_index import FILESERVER_TEMPLATE_NAME
+from netbox_packer.models import PackerPluginSettings, PackerTemplate
+from netbox_packer.package_index import (
+    FILESERVER_TEMPLATE_NAME,
+    PACKAGE_READ_TOKEN_PLACEHOLDER,
+    PACKAGE_READ_USER_PLACEHOLDER,
+    render_fileserver_package_index,
+)
 
 
 def _template_data(**overrides):
@@ -33,10 +38,104 @@ def _template_data(**overrides):
     return data
 
 
+def _package_index_config():
+    return (
+        "index-url = https://"
+        f"{PACKAGE_READ_USER_PLACEHOLDER}:{PACKAGE_READ_TOKEN_PLACEHOLDER}"
+        "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
+    )
+
+
+class FileServerPackageCredentialsTest(TestCase):
+    def setUp(self):
+        self.settings_row = PackerPluginSettings.get_solo()
+        self.settings_row.fileserver_package_read_user = "fileserver reader"
+        self.settings_row.set_fileserver_package_read_token("read/token?only")
+        self.settings_row.save()
+
+    def test_token_round_trip_is_encrypted_at_rest(self):
+        self.settings_row.refresh_from_db()
+
+        self.assertNotEqual(self.settings_row.fileserver_package_read_token_encrypted, "read/token?only")
+        self.assertNotIn("read/token?only", self.settings_row.fileserver_package_read_token_encrypted)
+        self.assertEqual(self.settings_row.get_fileserver_package_read_token(), "read/token?only")
+
+    def test_empty_token_clears_the_encrypted_field(self):
+        self.settings_row.set_fileserver_package_read_token("")
+
+        self.assertEqual(self.settings_row.fileserver_package_read_token_encrypted, "")
+        self.assertEqual(self.settings_row.get_fileserver_package_read_token(), "")
+
+    def test_invalid_ciphertext_is_treated_as_unset(self):
+        self.settings_row.fileserver_package_read_token_encrypted = "not-fernet-ciphertext"
+
+        self.assertEqual(self.settings_row.get_fileserver_package_read_token(), "")
+
+    def test_renderer_uses_settings_row_and_url_encodes_credentials(self):
+        rendered = render_fileserver_package_index(
+            _package_index_config(),
+            settings_row=self.settings_row,
+            template_name=FILESERVER_TEMPLATE_NAME,
+            is_fileserver_golden_template=True,
+        )
+
+        self.assertIn("fileserver%20reader:read%2Ftoken%3Fonly@", rendered)
+        self.assertNotIn("read/token?only", rendered)
+
+    def test_renderer_fails_closed_and_names_empty_user(self):
+        self.settings_row.fileserver_package_read_user = ""
+
+        with self.assertRaisesRegex(RuntimeError, "PackerPluginSettings.fileserver_package_read_user"):
+            render_fileserver_package_index(
+                _package_index_config(),
+                settings_row=self.settings_row,
+                template_name=FILESERVER_TEMPLATE_NAME,
+                is_fileserver_golden_template=True,
+            )
+
+    def test_renderer_fails_closed_and_names_empty_token(self):
+        self.settings_row.set_fileserver_package_read_token("")
+
+        with self.assertRaisesRegex(RuntimeError, "PackerPluginSettings.fileserver_package_read_token"):
+            render_fileserver_package_index(
+                _package_index_config(),
+                settings_row=self.settings_row,
+                template_name=FILESERVER_TEMPLATE_NAME,
+                is_fileserver_golden_template=True,
+            )
+
+    def test_renderer_fails_closed_and_names_both_empty_settings_fields(self):
+        self.settings_row.fileserver_package_read_user = ""
+        self.settings_row.set_fileserver_package_read_token("")
+        self.settings_row.save()
+        self.settings_row.refresh_from_db()
+
+        with self.assertRaises(RuntimeError) as raised:
+            render_fileserver_package_index(
+                _package_index_config(),
+                settings_row=self.settings_row,
+                template_name=FILESERVER_TEMPLATE_NAME,
+                is_fileserver_golden_template=True,
+            )
+
+        message = str(raised.exception)
+        self.assertIn("PackerPluginSettings.fileserver_package_read_user", message)
+        self.assertIn("PackerPluginSettings.fileserver_package_read_token", message)
+
+
 class MigrationSeedsGoldenTemplateTest(TestCase):
     def test_migration_0019_flags_the_seeded_fileserver_row(self):
         template = PackerTemplate.objects.get(name=FILESERVER_TEMPLATE_NAME)
         self.assertTrue(template.is_fileserver_golden_template)
+
+    def test_migration_0022_updates_package_rotation_instructions(self):
+        template = PackerTemplate.objects.get(name=FILESERVER_TEMPLATE_NAME)
+        content = template.installer_config.content
+
+        self.assertNotIn("service environment", content)
+        self.assertNotIn("Operators rotate NMS_FILESERVER_PACKAGE_READ_TOKEN", content)
+        self.assertIn("PackerPluginSettings", content)
+        self.assertIn("set_fileserver_package_read_token()", content)
 
 
 class RenameThenReclaimTest(TestCase):
