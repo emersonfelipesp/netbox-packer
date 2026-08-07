@@ -51,24 +51,45 @@ jobs:
 
           case "$target" in
             staging)
-              if [[ ! -x /opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging ]]; then
-                echo "ERROR: staging deploy helper is not installed on this runner"
-                exit 1
-              fi
-              /opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging netbox-packer "$REF"
+              deploy_helper=/opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging
+              web_unit=netbox-staging.service
+              worker_unit=netbox-staging-rq.service
               ;;
             production)
-              if [[ -x /opt/nmulticloud/deploy/bin/deploy-netbox-plugin ]]; then
-                /opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"
-              else
-                ssh -o StrictHostKeyChecking=accept-new \
-                    -o ServerAliveInterval=30 \
-                    -o ServerAliveCountMax=20 \
-                    nmc-prod-207 -- deploy-plugin netbox-packer "$REF"
-              fi
+              deploy_helper=/opt/nmulticloud/deploy/bin/deploy-netbox-plugin
+              web_unit=netbox.service
+              worker_unit=netbox-rq.service
               ;;
             *)
               echo "ERROR: Invalid deploy target: $target"
               exit 1
               ;;
           esac
+
+          if [[ ! -x "$deploy_helper" ]]; then
+            echo "ERROR: $target deploy helper is not installed on this runner"
+            exit 1
+          fi
+
+          # Service lifecycle must live under the helper's shared host-wide
+          # NetBox deployment lock. Refuse legacy helpers before any mutation:
+          # stopping or masking services here would sit outside that lock and
+          # race a queued cross-plugin deployment. Contract v1 requires the
+          # helper to drain/stop web and RQ before package/schema mutation,
+          # handle initially inactive and no-runtime-change deployments, start
+          # fresh processes on success, and leave both stopped on failure.
+          guard_contract=netbox-service-guard-v1
+          if ! "$deploy_helper" --supports "$guard_contract" >/dev/null 2>&1; then
+            echo "ERROR: $deploy_helper lacks required $guard_contract support; deploy the coordinated helper update first"
+            exit 1
+          fi
+
+          NMC_NETBOX_DEPLOY_REQUIRE_SERVICE_GUARD="$guard_contract" \
+          NMC_NETBOX_DEPLOY_WEB_UNIT="$web_unit" \
+          NMC_NETBOX_DEPLOY_WORKER_UNIT="$worker_unit" \
+            "$deploy_helper" netbox-packer "$REF"
+
+          # Do not re-inspect or manipulate services after the helper releases
+          # its lock: a queued deployment may already have acquired the lock
+          # and stopped them. Success is the helper's locked contract result.
+          echo "Completed guard-aware deployment for $web_unit/$worker_unit"

@@ -41,14 +41,6 @@ menu = PluginMenu(
                     link="plugins:netbox_packer:packerbuild_list",
                     link_text="Builds",
                     permissions=["netbox_packer.view_packerbuild"],
-                    buttons=[
-                        PluginMenuButton(
-                            link="plugins:netbox_packer:packerbuild_add",
-                            title="Add",
-                            icon_class="mdi mdi-plus-thick",
-                            permissions=["netbox_packer.add_packerbuild"],
-                        ),
-                    ],
                 ),
                 PluginMenuItem(
                     link="plugins:netbox_packer:packerbuildtarget_list",

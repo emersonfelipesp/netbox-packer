@@ -1,57 +1,30 @@
-import re
-
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 
 from ..models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+from ..security import contains_non_persistable_build_override
 
-_SECRET_KEY_PARTS = (
-    "password",
-    "passphrase",
-    "secret",
-    "token",
-    "authorization",
-    "api_key",
-    "access_key",
-    "private_key",
-    "credential",
-)
-_SECRET_VALUE_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE | re.MULTILINE)
-    for pattern in (
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-        (
-            r"(?:^|[,{]\s*|-\s+)[\"']?[A-Za-z0-9_.-]*"
-            r"(?:token|password|passphrase|secret|authorization|api[-_]?key|"
-            r"access[-_]?key|private[-_]?key|credential)"
-            r"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*[\"']?(?!/)[^\s\"']+"
-        ),
-        r"\b(?:authorization|bearer)\s*[:=]\s*[\"']?[^\s\"']+",
-        r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@",
-        "\x00",
-    )
+_PACKER_BUILD_PUBLIC_IMMUTABLE_FIELDS = frozenset(
+    {
+        "template",
+        "triggered_by",
+        "queued_at",
+        "started_at",
+        "finished_at",
+        "status",
+        "variable_overrides",
+        "log",
+        "exit_code",
+        "result_template_id",
+        "selected_node",
+        "proxbox_operation_id",
+    }
 )
 
 
 def _contains_secret_material(value):
-    """Reject secret-shaped keys and plaintext embedded in nested overrides."""
-
-    pending = [value]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            for key, nested in item.items():
-                normalized = str(key).lower().replace("-", "_")
-                if any(part in normalized for part in _SECRET_KEY_PARTS):
-                    return True
-                pending.append(nested)
-        elif isinstance(item, list):
-            pending.extend(item)
-        elif isinstance(item, str) and any(
-            pattern.search(item) for pattern in _SECRET_VALUE_PATTERNS
-        ):
-            return True
-    return False
+    """Compatibility name for the shared durable-override detector."""
+    return contains_non_persistable_build_override(value)
 
 
 class PackerTemplateBuildRequestSerializer(serializers.Serializer):
@@ -61,9 +34,12 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
     variable_overrides = serializers.JSONField(default=dict)
 
     def validate_variable_overrides(self, value):
+        from ..models import validate_packer_build_overrides
+
         if not isinstance(value, dict):
             raise serializers.ValidationError("variable_overrides must be an object.")
-        if _contains_secret_material(value):
+        validate_packer_build_overrides(value)
+        if contains_non_persistable_build_override(value):
             raise serializers.ValidationError(
                 "Secret-shaped override keys or values are forbidden; use netbox-nms references."
             )
@@ -75,9 +51,7 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
             try:
                 endpoint_id = int(endpoint_id)
             except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    "endpoint_id must be a positive integer."
-                ) from exc
+                raise serializers.ValidationError("endpoint_id must be a positive integer.") from exc
             if endpoint_id < 1:
                 raise serializers.ValidationError("endpoint_id must be a positive integer.")
             result["endpoint_id"] = endpoint_id
@@ -88,22 +62,28 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
             try:
                 template_vmid = int(template_vmid)
             except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    "template_vmid must be an integer >= 100."
-                ) from exc
+                raise serializers.ValidationError("template_vmid must be an integer >= 100.") from exc
             if not 100 <= template_vmid <= 999999999:
                 raise serializers.ValidationError("template_vmid must be an integer >= 100.")
             result["template_vmid"] = template_vmid
         target_node = str(result.get("target_node") or "").strip()
         if target_node:
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", target_node):
-                raise serializers.ValidationError("target_node has an invalid value.")
+            from ..proxbox_client import validate_proxbox_target_node
+
+            try:
+                target_node = validate_proxbox_target_node(target_node)
+            except ValueError as exc:
+                raise serializers.ValidationError("target_node has an invalid value.") from exc
+
             result["target_node"] = target_node
         raw_storage = result.get("storage")
         if raw_storage not in (None, ""):
-            storage = str(raw_storage).strip()
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", storage):
-                raise serializers.ValidationError("storage has an invalid value.")
+            from ..proxbox_client import validate_proxbox_storage_identifier
+
+            try:
+                storage = validate_proxbox_storage_identifier(str(raw_storage).strip())
+            except ValueError as exc:
+                raise serializers.ValidationError("storage has an invalid value.") from exc
             result["storage"] = storage
         return result
 
@@ -184,7 +164,29 @@ class PackerBuildSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_packer-api:packerbuild-detail",
     )
-    template = PackerTemplateSerializer(nested=True)
+    template = PackerTemplateSerializer(nested=True, read_only=True)
+
+    def validate_variable_overrides(self, value):
+        from ..models import validate_packer_build_overrides
+
+        validate_packer_build_overrides(value)
+        return value
+
+    def validate(self, attrs):
+        submitted = _PACKER_BUILD_PUBLIC_IMMUTABLE_FIELDS.intersection(getattr(self, "initial_data", {}))
+        if submitted:
+            raise serializers.ValidationError(
+                dict.fromkeys(sorted(submitted), "This worker-managed field cannot be submitted.")
+            )
+        return super().validate(attrs)
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if "variable_overrides" in representation:
+            representation["variable_overrides"] = instance.safe_variable_overrides
+        if "log" in representation:
+            representation["log"] = instance.safe_log
+        return representation
 
     class Meta:
         model = PackerBuild
@@ -203,12 +205,14 @@ class PackerBuildSerializer(NetBoxModelSerializer):
             "exit_code",
             "result_template_id",
             "selected_node",
+            "proxbox_operation_id",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "status", "queued_at")
+        read_only_fields = tuple(sorted(_PACKER_BUILD_PUBLIC_IMMUTABLE_FIELDS))
 
 
 class PackerBuildTargetSerializer(NetBoxModelSerializer):

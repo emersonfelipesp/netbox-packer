@@ -44,6 +44,18 @@ shared `dispatch_build(build)` helper immediately after setting the template to
 If enqueue fails, the build is marked `failed`, an error is written to the build
 log, and the template returns to `failed` unless another build is active.
 
+Generic PackerBuild REST/HTML create, edit, retarget, and delete surfaces are
+disabled. Execution inputs are an immutable snapshot created by the authorized
+template build action; secret-shaped keys/values and caller-supplied image URLs
+are never durable. Cancellation requires object-restricted
+`change_packerbuild`, can atomically win only while the row is `queued`, and
+must return a conflict after the worker claims it.
+
+For cloud builds, persist the signed preflight `plan_id` on the build before the
+execution POST. A lost response must be reconciled against proxbox-api's durable
+operation journal; never collapse an unproven result to an ordinary failure or
+retry against the same endpoint/VMID.
+
 Local `packer init` / `packer build` subprocesses must enforce
 `PACKER_BUILD_TIMEOUT_SECONDS` even during silent stalls with no stdout.
 

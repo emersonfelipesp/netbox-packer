@@ -38,15 +38,12 @@ def _get_plugin_setting(key, default=None):
     return plugin_cfg.get(key, default)
 
 
-def _resolve_cloud_image_url(template, overrides):
+def _resolve_cloud_image_url(template):
     """Resolve the base cloud image URL for a cloud_config build.
 
-    Honors ``variable_overrides['image_url']`` first, then derives a sensible
-    default from ``os_family`` / ``os_version``.
+    Image URLs are derived from non-secret template catalog metadata. They are
+    never accepted through durable ``variable_overrides``.
     """
-    override = (overrides or {}).get("image_url")
-    if override:
-        return str(override)
     fam = (template.os_family or "").lower()
     ver = (template.os_version or "").strip()
     if fam == "ubuntu" and ver:
@@ -55,33 +52,8 @@ def _resolve_cloud_image_url(template, overrides):
         return "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
     raise RuntimeError(
         f"No base cloud image URL for os_family={fam!r} os_version={ver!r}; "
-        "set variable_overrides['image_url'] on the build."
+        "configure a server-side catalog image source before building."
     )
-
-
-def _resolve_ssh_host(template, overrides):
-    """Resolve the Proxmox node host that proxbox-api should SSH into for the bake.
-
-    Honors ``variable_overrides['ssh_host']`` first, then the hostname of the
-    template's ``proxmox_endpoint`` (the netbox-proxbox ProxmoxEndpoint URL),
-    then ``proxmox_node``.
-    """
-    # When a proxbox-api endpoint id is selected, proxbox-api must derive the
-    # SSH host from that same endpoint.  Sending legacy template metadata could
-    # otherwise gate one endpoint while connecting to another host.
-    if _resolve_endpoint_id(overrides) is not None:
-        return None
-    override = (overrides or {}).get("ssh_host")
-    if override:
-        return str(override)
-    endpoint = (template.proxmox_endpoint or "").strip()
-    if endpoint:
-        from urllib.parse import urlparse
-
-        host = urlparse(endpoint).hostname
-        if host:
-            return host
-    return template.proxmox_node or None
 
 
 def _resolve_endpoint_id(overrides):
@@ -97,10 +69,13 @@ def _resolve_endpoint_id(overrides):
     raw = (overrides or {}).get("endpoint_id")
     if raw in (None, ""):
         return None
+    if isinstance(raw, bool):
+        return None
     try:
-        return int(raw)
+        endpoint_id = int(raw)
     except (TypeError, ValueError):
         return None
+    return endpoint_id if endpoint_id > 0 else None
 
 
 def _resolve_target_node(template, selected_node, overrides):
@@ -124,9 +99,25 @@ def _resolve_template_vmid(template, overrides):
 
 def _resolve_storage(template, overrides):
     """Resolve target storage without accepting an empty proxbox-api value."""
+    from .proxbox_client import validate_proxbox_storage_identifier
 
     value = str((overrides or {}).get("storage") or template.storage_pool or "local").strip()
-    return value or "local"
+    try:
+        return validate_proxbox_storage_identifier(value or "local")
+    except ValueError:
+        raise RuntimeError("Configured storage does not match the proxbox-api v0.0.21 contract.") from None
+
+
+def _mark_build_failed_closed(build, template, message: str) -> None:
+    """Record one fixed pre-network failure without copying untrusted values."""
+    from .security import redact_non_persistable_build_overrides
+
+    build.variable_overrides = redact_non_persistable_build_overrides(build.variable_overrides)
+    build.status = "failed"
+    build.finished_at = timezone.now()
+    build.log = f"[ERROR] {message}"
+    build.save(update_fields=["variable_overrides", "status", "finished_at", "log"])
+    type(template).objects.filter(pk=template.pk).update(build_status="failed")
 
 
 def select_build_node(template, skip_affinity_check=False):
@@ -329,7 +320,8 @@ class PackerBuildJob(JobRunner):
         Expected kwargs:
             build_id (int): primary key of the PackerBuild record to execute.
         """
-        from .models import PackerBuild, PackerTemplate
+        from .models import PackerBuild, PackerPluginSettings, PackerTemplate
+        from .security import contains_non_persistable_build_override
 
         build_id = kwargs.get("build_id")
         if not build_id:
@@ -341,29 +333,47 @@ class PackerBuildJob(JobRunner):
             raise ValueError(f"PackerBuild #{build_id} not found")
 
         template = build.template
+        if contains_non_persistable_build_override(build.variable_overrides):
+            message = "PackerBuild contained a non-persistable image source and was scrubbed."
+            _mark_build_failed_closed(build, template, message)
+            raise RuntimeError(message)
+
+        installer = template.installer_config
+        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
+        if is_cloud_config and not PackerPluginSettings.get_solo().proxbox_writes_enabled:
+            message = "Proxbox writes are disabled by the operator safety gate."
+            _mark_build_failed_closed(build, template, message)
+            raise RuntimeError(message)
+
         timeout = _get_plugin_setting("PACKER_BUILD_TIMEOUT_SECONDS", 3600)
 
-        # Mark build as running
+        # Atomically claim only queued rows. If cancellation wins this race, the
+        # queued RQ job remains harmless and exits without any external work.
+        started_at = timezone.now()
+        claimed = PackerBuild.objects.filter(pk=build.pk, status="queued").update(
+            status="running",
+            started_at=started_at,
+        )
+        if not claimed:
+            build.refresh_from_db(fields=["status"])
+            if build.status == "cancelled":
+                logger.info("PackerBuildJob skipped cancelled build #%s", build_id)
+                return
+            raise RuntimeError(f"PackerBuild #{build_id} cannot start from status {build.status!r}.")
         build.status = "running"
-        build.started_at = timezone.now()
-        build.save(update_fields=["status", "started_at"])
+        build.started_at = started_at
 
         # Endpoint-agnostic profiles carry their cluster and node selectors in
         # variable_overrides.  Legacy templates retain affinity-based fallback.
         requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
         endpoint, node = select_build_node(
             template,
-            skip_affinity_check=bool(
-                requested_node and _resolve_endpoint_id(build.variable_overrides)
-            ),
+            skip_affinity_check=bool(requested_node and _resolve_endpoint_id(build.variable_overrides)),
         )
         if requested_node:
             node = requested_node
         build.selected_node = node or ""
         build.save(update_fields=["selected_node"])
-
-        installer = template.installer_config
-        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
 
         try:
             if is_cloud_config:
@@ -374,43 +384,53 @@ class PackerBuildJob(JobRunner):
                 self._run_packer(build, template, endpoint, node, timeout)
         except Exception as exc:
             logger.exception("PackerBuildJob failed for build #%s", build_id)
-            build.status = "failed"
-            build.finished_at = timezone.now()
             build.log = f"{build.log or ''}\n\n[ERROR] {exc}".strip()
-            build.save(update_fields=["status", "finished_at", "log"])
-            PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
+            if build.status == "recovery_required":
+                build.save(update_fields=["log"])
+            else:
+                build.status = "failed"
+                build.finished_at = timezone.now()
+                build.save(update_fields=["status", "finished_at", "log"])
+                PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
             raise
 
     def _run_proxbox_cloud_build(self, build, template, node, timeout):
         """Bake a cloud-init template image by delegating to proxbox-api."""
         from .models import PackerPluginSettings, PackerTemplate
-        from .proxbox_client import ProxboxApiError, call_proxbox_build
+        from .proxbox_client import (
+            ProxboxApiError,
+            ProxboxOperationRecoveryRequired,
+            call_proxbox_build,
+            normalize_proxbox_api_base_url,
+        )
 
         settings_row = PackerPluginSettings.get_solo()
         fileserver_package_read_token = settings_row.get_fileserver_package_read_token()
-        api_url = (settings_row.proxbox_api_url or "").strip()
+        if not settings_row.proxbox_writes_enabled:
+            raise RuntimeError("Proxbox writes are disabled by the operator safety gate.")
+        configured_api_url = settings_row.proxbox_api_url or ""
+        api_url = normalize_proxbox_api_base_url(configured_api_url) if configured_api_url else ""
         installer = template.installer_config
         storage = _resolve_storage(template, build.variable_overrides)
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
         target_node = _resolve_target_node(template, node, build.variable_overrides)
-        image_url = _resolve_cloud_image_url(template, build.variable_overrides)
-        ssh_host = _resolve_ssh_host(template, build.variable_overrides)
+        image_url = _resolve_cloud_image_url(template)
         endpoint_id = _resolve_endpoint_id(build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
+
+        if endpoint_id is None or target_node is None:
+            raise RuntimeError(
+                "Executable cloud image builds require a positive endpoint_id and validated target_node."
+            )
 
         log_lines = [
             f"[INFO] Cloud-init template image build for '{template.name}'",
             f"[INFO] Delegating real Proxmox bake to proxbox-api: {api_url or 'UNSET'}",
             f"[INFO] Installer config: {installer} ({installer.installer_type})",
-            f"[INFO] Base image: {image_url}",
-            f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
+            "[INFO] Base image source resolved (value withheld from durable logs)",
+            f"[INFO] Proxmox transport derived from endpoint | storage: {storage}",
             f"[INFO] Destination template VMID: {template_vmid}",
-            "[INFO] proxbox-api endpoint_id: "
-            + (
-                str(endpoint_id)
-                if endpoint_id is not None
-                else "UNSET (required by proxbox-api when execute=true — pass variable_overrides['endpoint_id'])"
-            ),
+            f"[INFO] proxbox-api endpoint_id: {endpoint_id}",
         ]
 
         if not api_url:
@@ -437,6 +457,23 @@ class PackerBuildJob(JobRunner):
         ]
 
         try:
+
+            def persist_operation_id(operation_id: str) -> None:
+                updated = (
+                    type(build)
+                    .objects.filter(
+                        pk=build.pk,
+                        status="running",
+                        proxbox_operation_id="",
+                    )
+                    .update(proxbox_operation_id=operation_id)
+                )
+                if not updated:
+                    current = type(build).objects.only("proxbox_operation_id").get(pk=build.pk)
+                    if current.proxbox_operation_id != operation_id:
+                        raise RuntimeError("PackerBuild operation identity changed before execution.")
+                build.proxbox_operation_id = operation_id
+
             response = call_proxbox_build(
                 proxbox_api_url=api_url,
                 proxbox_api_key=settings_row.get_proxbox_api_key(),
@@ -449,10 +486,22 @@ class PackerBuildJob(JobRunner):
                 vm_storage=storage,
                 storage=storage,
                 snippets_storage=storage,
-                ssh_host=ssh_host,
                 endpoint_id=endpoint_id,
                 timeout=int(timeout) + 300,
+                operation_planned=persist_operation_id,
             )
+        except ProxboxOperationRecoveryRequired as exc:
+            build.proxbox_operation_id = exc.operation_id
+            build.status = "recovery_required"
+            build.finished_at = timezone.now()
+            log_lines.append(
+                "[WARNING] proxbox-api execution response was ambiguous; "
+                f"inspect durable operation {exc.operation_id} before retrying"
+            )
+            build.log = "\n".join(log_lines)
+            build.save(update_fields=["proxbox_operation_id", "status", "finished_at", "log"])
+            PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
+            raise
         except ProxboxApiError as exc:
             safe_error = redact_fileserver_package_token(str(exc), fileserver_package_read_token)
             log_lines.append(f"[ERROR] {safe_error}")
@@ -463,14 +512,16 @@ class PackerBuildJob(JobRunner):
         status = str(response.get("status", "")).lower()
         result_vmid = response.get("vmid") or response.get("template_vmid")
         log_lines.append(f"[INFO] proxbox-api status: {status or 'unknown'} (vmid={result_vmid})")
-        for key in ("build_script", "stdout", "stderr"):
-            value = response.get(key)
-            if value:
-                safe_value = redact_fileserver_package_token(str(value), fileserver_package_read_token)
-                log_lines.append(f"[{key.upper()}]\n{safe_value}")
+        log_lines.append("[INFO] Backend scripts and process output omitted from durable logs")
+        if response.get("recovery_required"):
+            operation_id = response.get("operation_id")
+            log_lines.append(
+                "[WARNING] proxbox-api preserved possible partial state for operator recovery"
+                + (f" (operation_id={operation_id})" if operation_id else "")
+            )
 
         build.finished_at = timezone.now()
-        if status in {"created", "completed", "already_exists"}:
+        if status == "completed":
             build.status = "success"
             build.exit_code = 0
             if result_vmid:
@@ -479,13 +530,26 @@ class PackerBuildJob(JobRunner):
             if installer:
                 update["installer_config_checksum_at_build"] = installer.checksum
             PackerTemplate.objects.filter(pk=template.pk).update(**update)
+        elif status == "recovery_required":
+            build.status = "recovery_required"
+            build.exit_code = response.get("returncode")
+            PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
         else:
             build.status = "failed"
             build.exit_code = response.get("returncode") or 1
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
 
         build.log = "\n".join(log_lines)
-        build.save(update_fields=["status", "finished_at", "exit_code", "result_template_id", "log"])
+        build.save(
+            update_fields=[
+                "status",
+                "finished_at",
+                "exit_code",
+                "result_template_id",
+                "proxbox_operation_id",
+                "log",
+            ]
+        )
 
     def _run_packer(self, build, template, endpoint, node, timeout):
         """Run packer init + packer build, streaming output into build.log."""
@@ -534,7 +598,16 @@ class PackerBuildJob(JobRunner):
 
     def _run_subprocess(self, cmd, build, log_lines, timeout, phase="build"):
         """Run a subprocess, capturing output into log_lines with partial saves."""
-        log_lines.append(f"[INFO] Running: {' '.join(cmd)}")
+        from .security import redact_packer_build_log
+
+        safe_command = []
+        for argument in cmd:
+            if argument.startswith("-var="):
+                variable_name = argument.removeprefix("-var=").partition("=")[0]
+                safe_command.append(f"-var={variable_name}=<redacted>")
+            else:
+                safe_command.append(argument)
+        log_lines.append(f"[INFO] Running: {' '.join(safe_command)}")
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -565,7 +638,7 @@ class PackerBuildJob(JobRunner):
 
         try:
             for line_count, line in enumerate(proc.stdout, start=1):
-                log_lines.append(line.rstrip())
+                log_lines.append(redact_packer_build_log(line.rstrip()))
                 # Partial save every 50 lines so logs appear incrementally
                 if line_count % 50 == 0:
                     build.log = "\n".join(log_lines)
@@ -609,6 +682,11 @@ def _build_var_args(template, overrides, endpoint, node):
     # Per-run overrides win
     resolved.update(overrides)
 
+    from .security import contains_non_persistable_build_override
+
+    if contains_non_persistable_build_override(resolved):
+        raise ValueError("Packer variables contain a non-persistable or secret-shaped value.")
+
     return [f"-var={k}={v}" for k, v in resolved.items()]
 
 
@@ -649,7 +727,11 @@ class PackerStalenessCheckJob(JobRunner):
             stale = 0
             queued = 0
 
-            for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+            for template in (
+                PackerTemplate.objects.select_related("installer_config")
+                .exclude(build_status__in=("building",))
+                .exclude(max_age_days=None)
+            ):
                 checked += 1
                 if not template.is_stale:
                     continue
@@ -658,6 +740,15 @@ class PackerStalenessCheckJob(JobRunner):
                 PackerTemplate.objects.filter(pk=template.pk).update(build_status="stale")
 
                 if not template.auto_rebuild:
+                    continue
+
+                installer = template.installer_config
+                if installer is not None and installer.installer_type == "cloud_config":
+                    logger.warning(
+                        "Skipped automatic rebuild for cloud template '%s': "
+                        "endpoint_id and target_node must be supplied by an authorized API request",
+                        template.name,
+                    )
                     continue
 
                 # Only queue if no build is already active

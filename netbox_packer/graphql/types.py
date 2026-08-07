@@ -25,7 +25,7 @@ class PackerTemplateType(NetBoxObjectType):
     build_targets: list[Annotated["PackerBuildTargetType", strawberry.lazy("netbox_packer.graphql.types")]]
 
 
-@strawberry_django.type(models.PackerBuild, fields="__all__")
+@strawberry_django.type(models.PackerBuild, exclude=("variable_overrides", "log"))
 class PackerBuildType(NetBoxObjectType):
     template: Annotated["PackerTemplateType", strawberry.lazy("netbox_packer.graphql.types")]
 

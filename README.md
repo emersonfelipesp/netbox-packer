@@ -14,6 +14,22 @@ cataloging.
 When configured with an HCP Packer organization / project ID, the plugin can
 resolve image IDs from the HCP Packer registry via `proxbox-api`.
 
+The configured proxbox-api base URL is treated as one exact HTTP(S) origin.
+HTTPS is required except for literal loopback development endpoints. The
+credential-bearing client rejects userinfo, paths, query strings, fragments,
+ambiguous authorities, and unsupported schemes before network access, and it
+does not follow HTTP redirects and does not use environment-configured HTTP
+proxies. Errors never include backend response bodies, and successful response
+bodies are limited to 1 MiB and must be JSON objects. Endpoint status and VMID
+fields are validated, including HTTP 201 for template builds and HTTP 200 for
+VM provisioning, while scripts and process output are discarded before durable
+logging. Signed `image_url` overrides are recursively rejected and scrubbed
+from legacy build rows at every mapping depth, and Proxbox writes remain
+fail-closed after upgrade until an operator enables the post-canary safety
+gate. Raw build overrides and logs are also omitted and scrubbed from NetBox
+ObjectChange snapshots. See
+[configuration](docs/configuration.md#proxbox-api-origin-and-redirect-policy).
+
 ## Status
 
 `netbox-packer` v0.0.5 ships Packer template, build, installer-config,
@@ -31,10 +47,12 @@ producing a real, bootable VM template. The flow is triggerable from the NMS UI
 at `nms.nmulti.cloud/virtualization/packer` (Installer Configs + a "Create
 cloud-init template image" dialog + per-row Build button).
 
-Requirements: `proxbox-api >= 0.0.18` with
+Requirements: `proxbox-api >= 0.0.21,<0.0.22` with the build-response v2 and signed
+preflight v1 contracts, plus
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
-Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
-`snippets,import,images`. Configure `proxbox_api_url` and an encrypted API key
+Proxmox host, the endpoint's `allow_writes=True`, and configured `images` and
+`snippets` storage content. `import` is the download-url request value, not a
+Proxmox storage content type to enable. Configure `proxbox_api_url` and an encrypted API key
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 (there is no NetBox UI page or REST endpoint for this settings model yet — see
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
@@ -53,7 +71,19 @@ Migration `0020` adds endpoint-agnostic, credential-free InfluxDB profiles:
 metrics/Flux and `influxdb-core-3.11.0-ubuntu-2404` (VMID `9051`) for general
 SQL/InfluxQL workloads. Build requests must supply the proxbox-api
 `endpoint_id` and `target_node`, with optional typed `template_vmid` and
-`storage` overrides; proxbox-api derives the SSH host from that same endpoint.
+`storage` overrides. The client first renders a non-executing plan, obtains an
+endpoint-bound signed preflight token, and only then requests execution;
+the final response must repeat the approved recipe digest and preflight plan ID.
+The plan ID is stored before execution; if the execution response is lost, the
+worker queries the durable operation journal and leaves the build in
+`recovery_required` unless it can prove a terminal result.
+proxbox-api derives SSH authority from that same endpoint. Legacy `ssh_host`
+selectors are never sent. Cloud builds are accepted only through the authorized
+API/NMS action with both selectors; the selector-less HTML action and automatic
+staleness rebuilds fail closed without creating a build.
+Build records and their input snapshot cannot be created, retargeted, edited,
+or deleted through generic REST/HTML CRUD. Cancellation is an atomic queued-only
+operation; once a worker claims a build, the cancel action returns a conflict.
 Package versions are pinned and held. Initial users, databases, and
 tokens are created only through typed NMS RPC and stored as `nms-secret:`
 references—never in cloud-init. The legacy VMID `9011` development profile is

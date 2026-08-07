@@ -131,12 +131,18 @@ arrives.
 | `queued_at` | DateTimeField | auto_now_add | — |
 | `started_at` | DateTimeField | null | Set when job starts running |
 | `finished_at` | DateTimeField | null | Set on success or failure |
-| `status` | CharField(20) | `queued` | `queued`, `running`, `success`, `failed`, `cancelled` |
-| `variable_overrides` | JSONField | `{}` | Per-build overrides (e.g. `image_url`, `ssh_host`) |
-| `log` | TextField | blank | Accumulated build output |
+| `status` | CharField(20) | `queued` | `queued`, `running`, `success`, `failed`, `cancelled`, `recovery_required` |
+| `variable_overrides` | JSONField | `{}` | Immutable non-secret per-build selectors such as `endpoint_id`, `target_node`, `template_vmid`, and `storage`. Ephemeral image sources plus secret-shaped keys and values are rejected at every depth; migration `0024` recursively scrubs historical material. Generic REST/HTML creation and editing are disabled. |
+| `log` | TextField | blank | Worker-owned local Packer output, or a safe proxbox-api status/VMID/operation summary. Packer variable values are omitted from command summaries and secret-shaped output is replaced before persistence. Credential-bearing backend scripts, generated user data, stdout, stderr, and signed image URLs are never stored; migration `0024` scrubs unsafe historical logs. Both `log` and `variable_overrides` are omitted from NetBox ObjectChange snapshots. |
 | `exit_code` | IntegerField | null | Exit code from `packer build` or proxbox-api response |
 | `result_template_id` | IntegerField | null | Proxmox VMID of the completed template |
 | `selected_node` | CharField(100) | blank | Proxmox node selected by `select_build_node()` |
+| `proxbox_operation_id` | CharField(36) | blank | Durable preflight plan/operation UUID persisted before execution, used for ambiguous-response recovery |
+
+Build cancellation is authorized by `change_packerbuild` with object
+restriction and is atomic for queued rows only. A worker atomically claims the
+same queued state; cancellation after that claim returns a conflict instead of
+claiming that running local or remote work stopped.
 
 ---
 
@@ -170,7 +176,7 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | `branching_enabled` | BooleanField | `False` | When `True`, `PackerStalenessCheckJob` uses netbox-branching for stale updates |
 | `branch_name_prefix` | CharField(64) | `"packer-stale"` | Prefix for auto-created branch names |
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
-| `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |
+| `proxbox_api_url` | URLField | blank | Exact proxbox-api origin; HTTPS required except for literal loopback development endpoints; required for `cloud_config` builds |
 | `proxbox_api_key_encrypted` | CharField(512) | blank | Fernet-encrypted API key; not editable directly — use `set_proxbox_api_key()` |
 | `fileserver_package_read_user` | CharField(255) | blank | Plaintext username for the File Server image's read-only package index |
 | `fileserver_package_read_token_encrypted` | CharField(512) | blank | Fernet-encrypted package-read token; not editable directly — use `set_fileserver_package_read_token()` |
@@ -196,3 +202,7 @@ package_read_token = settings_row.get_fileserver_package_read_token()
 
 The Fernet cipher is derived from `settings.SECRET_KEY` (SHA-256 → base64url).
 There is **no dependency on `netbox-nms`** for key management.
+
+This release does not register a settings UI or REST endpoint. Use the
+preflight, update, and rollback procedure in
+[`configuration.md`](configuration.md#legacy-configuration-preflight-and-migration).

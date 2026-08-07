@@ -382,27 +382,6 @@ class PackerTemplateCreateInstanceForm(forms.Form):
         }
 
 
-# ── PackerBuild ───────────────────────────────────────────────────────────────
-
-
-class PackerBuildForm(NetBoxModelForm):
-    template = DynamicModelChoiceField(queryset=PackerTemplate.objects.all())
-
-    class Meta:
-        model = PackerBuild
-        fields = (
-            "template",
-            "triggered_by",
-            "variable_overrides",
-            "tags",
-        )
-        fieldsets = (
-            FieldSet("template", "triggered_by", name="Build"),
-            FieldSet("variable_overrides", name="Overrides"),
-            FieldSet("tags", name="Metadata"),
-        )
-
-
 class PackerBuildFilterForm(NetBoxModelFilterSetForm):
     model = PackerBuild
     fieldsets = (

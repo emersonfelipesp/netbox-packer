@@ -46,12 +46,12 @@
       </table>
     </div>
   </div>
-  {% if object.log %}
+  {% if object.safe_log %}
   <div class="col col-md-6">
     <div class="card">
       <h2 class="card-header">Build Log</h2>
       <div class="card-body">
-        <pre class="border rounded p-2" style="max-height:400px;overflow:auto;">{{ object.log }}</pre>
+        <pre class="border rounded p-2" style="max-height:400px;overflow:auto;">{{ object.safe_log }}</pre>
       </div>
     </div>
   </div>

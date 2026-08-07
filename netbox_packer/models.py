@@ -1,6 +1,7 @@
 import base64
 import hashlib
 
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from netbox.models import NetBoxModel
@@ -11,6 +12,17 @@ from .choices import (
     StorageFormatChoices,
     StoragePoolTypeChoices,
 )
+from .security import contains_non_persistable_build_override
+
+
+def validate_packer_build_overrides(value) -> None:
+    """Reject values whose credentials cannot safely survive durable storage."""
+    if not isinstance(value, dict):
+        raise ValidationError("variable_overrides must be a JSON object.")
+    if contains_non_persistable_build_override(value):
+        raise ValidationError(
+            "Ephemeral image sources and secret-shaped keys or values are not persistable build overrides."
+        )
 
 
 def _fernet():
@@ -237,6 +249,7 @@ class PackerBuild(NetBoxModel):
         ("success", "Success"),
         ("failed", "Failed"),
         ("cancelled", "Cancelled"),
+        ("recovery_required", "Recovery required"),
     ]
 
     template = models.ForeignKey(
@@ -253,11 +266,22 @@ class PackerBuild(NetBoxModel):
         choices=BUILD_STATUS_CHOICES,
         default="queued",
     )
-    variable_overrides = models.JSONField(default=dict, blank=True)
+    variable_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        validators=(validate_packer_build_overrides,),
+    )
     log = models.TextField(blank=True)
     exit_code = models.IntegerField(null=True, blank=True)
     result_template_id = models.IntegerField(null=True, blank=True)
     selected_node = models.CharField(max_length=100, blank=True)
+    proxbox_operation_id = models.CharField(
+        max_length=36,
+        blank=True,
+        default="",
+        editable=False,
+        help_text="Durable proxbox-api operation UUID for recovery and operator inspection.",
+    )
 
     class Meta:
         ordering = ["-queued_at"]
@@ -266,6 +290,30 @@ class PackerBuild(NetBoxModel):
 
     def __str__(self):
         return f"Build #{self.pk} for {self.template.name}"
+
+    def save(self, *args, **kwargs):
+        validate_packer_build_overrides(self.variable_overrides)
+        super().save(*args, **kwargs)
+
+    def serialize_object(self, exclude=None):
+        """Omit raw override/log fields from NetBox ObjectChange snapshots."""
+        excluded_fields = set(exclude or ())
+        excluded_fields.update(("variable_overrides", "log"))
+        return super().serialize_object(exclude=excluded_fields)
+
+    @property
+    def safe_variable_overrides(self):
+        """Return overrides without fields that can contain ephemeral credentials."""
+        from .security import redact_non_persistable_build_overrides
+
+        return redact_non_persistable_build_overrides(self.variable_overrides)
+
+    @property
+    def safe_log(self):
+        """Return a build log with recognizable secret-shaped content removed."""
+        from .security import redact_packer_build_log
+
+        return redact_packer_build_log(self.log)
 
     def get_absolute_url(self):
         from django.urls import reverse
@@ -342,7 +390,8 @@ class PackerPluginSettings(NetBoxModel):
         default="",
         help_text=(
             "Base URL of the proxbox-api backend used to bake cloud-init template images "
-            "(e.g. http://10.0.30.207:8000). Required for cloud_config installer-config builds."
+            "(HTTPS required except for literal loopback development endpoints). Required "
+            "for cloud_config installer-config builds."
         ),
     )
     proxbox_api_key_encrypted = models.CharField(
@@ -362,9 +411,13 @@ class PackerPluginSettings(NetBoxModel):
         blank=True,
         default="",
         editable=False,
+        help_text=("Fernet-encrypted package-index read token (set via set_fileserver_package_read_token())."),
+    )
+    proxbox_writes_enabled = models.BooleanField(
+        default=False,
         help_text=(
-            "Fernet-encrypted package-index read token "
-            "(set via set_fileserver_package_read_token())."
+            "Fail-closed operator gate for template builds and VM provisioning. Enable only "
+            "after post-upgrade validation and the controlled staging canary."
         ),
     )
 

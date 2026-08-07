@@ -11,19 +11,38 @@
 1. Create or select a `PackerInstallerConfig` where
    `installer_type = "cloud_config"`.
 2. Create or select a `PackerTemplate` that references the installer config.
-3. Trigger the template build from NetBox, the API, or the NMS page at
-   `/virtualization/packer`.
-4. `PackerBuildJob` resolves the build node, base cloud image URL, storage, and
-   SSH host.
+3. After the operator has enabled `proxbox_writes_enabled`, use the authorized
+   API or NMS build action and supply a positive proxbox-api `endpoint_id` plus
+   a validated `target_node`. The selector-less HTML Build action rejects cloud
+   templates without creating a build, and scheduled/management-command
+   staleness checks mark them stale but do not auto-queue them.
+4. `PackerBuildJob` resolves the bound endpoint/node, base cloud image URL, and
+   storage. It never accepts or forwards caller-selected SSH authority.
 5. `proxbox-api` downloads the base image, creates the VM, writes the cloud-init
    snippet as Proxmox `cicustom` user-data, converts the VM to a template with
    `qm template`, and returns the resulting VMID.
+6. The plugin requires the endpoint's terminal HTTP 201 response, validates the
+   body status, exact requested VMID, approved recipe digest, and preflight plan
+   ID/operation ID, then stores only that summary. Backend
+   scripts, command lists, generated user data, stdout, and stderr are discarded
+   at the client boundary and never copied into the durable `PackerBuild.log`.
+   `image_url` overrides are recursively rejected before build creation,
+   defensively redacted from serialized builds at every mapping depth, and
+   scrubbed from legacy rows by migration `0024`; the worker derives its URL
+   from server-side catalog metadata. Raw overrides and logs are omitted from
+   new NetBox ObjectChange snapshots, and migration `0024` removes those raw
+   fields from historical PackerBuild snapshots.
 
 The `PackerPluginSettings` singleton row must include `proxbox_api_url` and an
 encrypted proxbox-api key (see [Configuration](configuration.md) — today this
 is set via the Python shell only, not a UI page or REST endpoint). The target
 `ProxmoxEndpoint` in netbox-proxbox must allow writes, and the selected Proxmox
-storage must support `snippets`, `import`, and `images`.
+storage must support configured `snippets` and `images` content. `import` is
+used only as the Proxmox download-url request value and is not a storage content
+type to enable. The backend origin must use HTTPS unless it is a literal loopback
+development address; see the configuration guide's pre-deployment migration
+check and fail-closed write-gate procedure before upgrading an existing
+installation.
 
 ## Creating a template from the web form
 
@@ -130,9 +149,16 @@ Both rows store an empty `proxmox_endpoint` and `select-at-build` as the model
 placeholder node. Each build request must provide a positive proxbox-api
 `variable_overrides.endpoint_id` and a validated
 `variable_overrides.target_node`. Optional validated `template_vmid` and
-`storage` overrides select the destination identifiers. When an endpoint ID is present,
-netbox-packer suppresses all legacy `ssh_host` values so proxbox-api derives
-transport from the same selected endpoint it authorizes.
+`storage` overrides select the destination identifiers. Netbox-packer uses the
+proxbox-api v2 plan → signed read-only preflight → bound execution sequence. It
+never forwards legacy `ssh_host` or identity values; proxbox-api derives
+transport from the same selected endpoint it authorizes. Only a verified
+`completed` response marks the template ready. A `recovery_required` response
+fails the build while retaining the safe operation ID so operators preserve
+and inspect possible partial state.
+The operation ID is committed to the build before the executable POST. If that
+response is lost, netbox-packer reads the durable proxbox-api operation journal;
+an unproven terminal outcome leaves the build explicitly `recovery_required`.
 
 The cloud-init profiles:
 

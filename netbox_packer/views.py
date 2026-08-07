@@ -87,7 +87,20 @@ class PackerTemplateBuildView(generic.ObjectView):
     queryset = models.PackerTemplate.objects.all()
 
     def post(self, request, pk):
-        template = get_object_or_404(models.PackerTemplate, pk=pk)
+        if not request.user.has_perm("netbox_packer.change_packertemplate"):
+            raise PermissionDenied
+        template = get_object_or_404(
+            models.PackerTemplate.objects.restrict(request.user, "change").select_related("installer_config"),
+            pk=pk,
+        )
+        installer = template.installer_config
+        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
+        if is_cloud_config:
+            messages.error(
+                request,
+                "Cloud image builds require an explicit proxbox endpoint and node; use the API build action.",
+            )
+            return redirect(template.get_absolute_url())
         build = models.PackerBuild.objects.create(
             template=template,
             triggered_by=str(request.user),
@@ -120,9 +133,15 @@ class PackerTemplateCreateInstanceView(generic.ObjectView):
     queryset = models.PackerTemplate.objects.all()
 
     def post(self, request, pk):
-        template = get_object_or_404(models.PackerTemplate.objects.all(), pk=pk)
         if not request.user.has_perm("netbox_packer.change_packertemplate"):
             raise PermissionDenied
+        template = get_object_or_404(
+            models.PackerTemplate.objects.restrict(request.user, "change").select_related("installer_config"),
+            pk=pk,
+        )
+        if not models.PackerPluginSettings.get_solo().proxbox_writes_enabled:
+            messages.error(request, "Proxbox writes are disabled by the operator safety gate.")
+            return _redirect_after_instance_create(request, template)
 
         form = forms.PackerTemplateCreateInstanceForm(request.POST, template=template)
         if not form.is_valid():
@@ -134,7 +153,10 @@ class PackerTemplateCreateInstanceView(generic.ObjectView):
             return _redirect_after_instance_create(request, template)
 
         settings_row = models.PackerPluginSettings.get_solo()
-        proxbox_api_url = (settings_row.proxbox_api_url or "").strip()
+        if not settings_row.proxbox_writes_enabled:
+            messages.error(request, "Proxbox writes are disabled by the operator safety gate.")
+            return _redirect_after_instance_create(request, template)
+        proxbox_api_url = settings_row.proxbox_api_url or ""
         proxbox_api_key = settings_row.get_proxbox_api_key()
         if not proxbox_api_url or not proxbox_api_key:
             messages.error(
@@ -186,18 +208,6 @@ class PackerBuildListView(generic.ObjectListView):
     table = tables.PackerBuildTable
     filterset = filtersets.PackerBuildFilterSet
     filterset_form = forms.PackerBuildFilterForm
-
-
-@register_model_view(models.PackerBuild, name="add", detail=False)
-@register_model_view(models.PackerBuild, name="edit")
-class PackerBuildEditView(generic.ObjectEditView):
-    queryset = models.PackerBuild.objects.all()
-    form = forms.PackerBuildForm
-
-
-@register_model_view(models.PackerBuild, name="delete")
-class PackerBuildDeleteView(generic.ObjectDeleteView):
-    queryset = models.PackerBuild.objects.all()
 
 
 # ── PackerBuildTarget ─────────────────────────────────────────────────────────

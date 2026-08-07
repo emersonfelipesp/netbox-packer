@@ -31,7 +31,12 @@ class Command(BaseCommand):
         stale = 0
         queued = 0
 
-        for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+        templates = (
+            PackerTemplate.objects.select_related("installer_config")
+            .exclude(build_status__in=("building",))
+            .exclude(max_age_days=None)
+        )
+        for template in templates:
             checked += 1
             if not template.is_stale:
                 self.stdout.write(f"  OK       {template.name}")
@@ -47,6 +52,13 @@ class Command(BaseCommand):
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="stale")
 
             if not template.auto_rebuild:
+                continue
+
+            installer = template.installer_config
+            if installer is not None and installer.installer_type == "cloud_config":
+                self.stdout.write(
+                    "           → skipping auto-rebuild (cloud builds require API-supplied endpoint_id and target_node)"
+                )
                 continue
 
             active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()

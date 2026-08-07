@@ -1,3 +1,5 @@
+from django.shortcuts import get_object_or_404
+from netbox.api.authentication import TokenPermissions
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import status as http_status
 from rest_framework.decorators import action
@@ -16,6 +18,24 @@ from .serializers import (
 )
 
 
+class PackerTemplateBuildPermissions(TokenPermissions):
+    """Map the mutating build action to change permission, never HTTP POST/add."""
+
+    perms_map = {
+        **TokenPermissions.perms_map,
+        "POST": ["%(app_label)s.change_%(model_name)s"],
+    }
+
+
+class PackerBuildCancelPermissions(TokenPermissions):
+    """Map cancellation to change permission on the existing build."""
+
+    perms_map = {
+        **TokenPermissions.perms_map,
+        "POST": ["%(app_label)s.change_%(model_name)s"],
+    }
+
+
 class PackerInstallerConfigViewSet(NetBoxModelViewSet):
     queryset = models.PackerInstallerConfig.objects.prefetch_related("tags")
     serializer_class = PackerInstallerConfigSerializer
@@ -30,8 +50,7 @@ class InfluxDBProfileListView(APIView):
             raise PermissionDenied("view_packertemplate permission is required.")
         template_names = [profile["template_name"] for profile in INFLUXDB_PROFILES]
         templates = {
-            template.name: template
-            for template in models.PackerTemplate.objects.filter(name__in=template_names)
+            template.name: template for template in models.PackerTemplate.objects.filter(name__in=template_names)
         }
         profiles = []
         for profile in INFLUXDB_PROFILES:
@@ -54,30 +73,46 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
     serializer_class = PackerTemplateSerializer
     filterset_class = filtersets.PackerTemplateFilterSet
 
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[PackerTemplateBuildPermissions],
+    )
     def build(self, request, pk=None):
         """Queue a new build for this template, with optional node affinity pre-check."""
         from ..validators import NodeAffinityValidator
 
-        template = self.get_object()
+        if not request.user.has_perm("netbox_packer.change_packertemplate"):
+            raise PermissionDenied("change_packertemplate permission is required.")
+        template = get_object_or_404(
+            models.PackerTemplate.objects.restrict(request.user, "change").select_related("installer_config"),
+            pk=pk,
+        )
         request_serializer = PackerTemplateBuildRequestSerializer(data=request.data)
         request_serializer.is_valid(raise_exception=True)
         variable_overrides = request_serializer.validated_data["variable_overrides"]
         endpoint_id = variable_overrides.get("endpoint_id")
         target_node = variable_overrides.get("target_node")
+        installer = template.installer_config
+        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
         endpoint_agnostic = not template.proxmox_endpoint or template.proxmox_node == "select-at-build"
-        if endpoint_agnostic and (not endpoint_id or not target_node):
+        if (is_cloud_config or endpoint_agnostic) and (not endpoint_id or not target_node):
             return Response(
                 {
                     "detail": (
-                        "Endpoint-agnostic templates require positive variable_overrides.endpoint_id "
-                        "and variable_overrides.target_node."
+                        "Cloud or endpoint-agnostic templates require positive "
+                        "variable_overrides.endpoint_id and variable_overrides.target_node."
                     )
                 },
                 status=http_status.HTTP_400_BAD_REQUEST,
             )
         skip_validation = request_serializer.validated_data["skip_node_validation"]
         selector_is_explicit = bool(endpoint_id and target_node)
+        if is_cloud_config and not models.PackerPluginSettings.get_solo().proxbox_writes_enabled:
+            return Response(
+                {"detail": "Proxbox writes are disabled by the operator safety gate."},
+                status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         if not skip_validation and not selector_is_explicit:
             validator = NodeAffinityValidator(template)
@@ -141,23 +176,67 @@ class PackerBuildViewSet(NetBoxModelViewSet):
     serializer_class = PackerBuildSerializer
     filterset_class = filtersets.PackerBuildFilterSet
 
-    @action(detail=True, methods=["post"])
+    def create(self, request, *args, **kwargs):
+        """Build records are created only through the selector-aware template action."""
+        return Response(
+            {"detail": "PackerBuild records cannot be created through the generic endpoint."},
+            status=http_status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        """Execution records and their input snapshots are immutable."""
+        return Response(
+            {"detail": "PackerBuild records are immutable."},
+            status=http_status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Preserve immutable execution history."""
+        return Response(
+            {"detail": "PackerBuild records cannot be deleted through the generic endpoint."},
+            status=http_status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[PackerBuildCancelPermissions],
+    )
     def cancel(self, request, pk=None):
-        """Cancel a queued or running build."""
-        build = self.get_object()
-        if build.status not in ("queued", "running"):
+        """Atomically cancel only queued work; running execution is not interruptible here."""
+        if not request.user.has_perm("netbox_packer.change_packerbuild"):
+            raise PermissionDenied("change_packerbuild permission is required.")
+        build = get_object_or_404(
+            models.PackerBuild.objects.restrict(request.user, "change").select_related("template"),
+            pk=pk,
+        )
+        if build.status != "queued":
             return Response(
-                {"detail": f"Cannot cancel a build with status '{build.status}'."},
-                status=http_status.HTTP_400_BAD_REQUEST,
+                {"detail": f"Only queued builds can be cancelled; current status is '{build.status}'."},
+                status=http_status.HTTP_409_CONFLICT,
             )
         from django.utils import timezone
 
+        finished_at = timezone.now()
+        cancelled = models.PackerBuild.objects.filter(pk=build.pk, status="queued").update(
+            status="cancelled",
+            finished_at=finished_at,
+        )
+        if not cancelled:
+            build.refresh_from_db(fields=["status"])
+            return Response(
+                {"detail": f"Cancellation lost the start race; current status is '{build.status}'."},
+                status=http_status.HTTP_409_CONFLICT,
+            )
         build.status = "cancelled"
-        build.finished_at = timezone.now()
-        build.save(update_fields=["status", "finished_at"])
+        build.finished_at = finished_at
         active = models.PackerBuild.objects.filter(template=build.template, status__in=("queued", "running")).exists()
         if not active:
-            models.PackerTemplate.objects.filter(pk=build.template_id).update(build_status="ready")
+            replacement_status = "ready" if build.template.built_at else "pending"
+            models.PackerTemplate.objects.filter(pk=build.template_id).update(build_status=replacement_status)
         serializer = self.get_serializer(build)
         return Response(serializer.data)
 

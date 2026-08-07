@@ -112,10 +112,13 @@ nms UI /virtualization/packer (Create dialog -> Build)
   -> PackerTemplateViewSet.build(): create PackerBuild -> dispatch_build(build)
   -> PackerBuildJob (RQ), cloud_config branch -> _run_proxbox_cloud_build()
        -> proxbox_client.call_proxbox_build()
-       -> POST {PackerPluginSettings.proxbox_api_url}/cloud/templates/images
+       -> POST /cloud/templates/images with execute=false (v2 recipe plan)
+       -> POST /cloud/templates/images/preflight (v1 read-only signed plan)
+       -> POST /cloud/templates/images with execute=true + signed plan token
             header X-Proxbox-API-Key
-            body { name, vmid, target_node, image_url, image_storage, vm_storage,
-                   user_data_yaml = installer_config.content, execute: true, ssh_host }
+            body bound to { name, vmid, endpoint_id, target_node, image_url,
+                            image_storage, vm_storage,
+                            user_data_yaml = installer_config.content }
   -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
        on <vm_storage>:snippets -> qm template -> returns vmid
   -> PackerBuild.result_template_id=vmid, build_status=success;
@@ -127,7 +130,58 @@ plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
 `get_proxbox_api_key()`), and the File Server package-read username plus
 Fernet-encrypted token (`set_fileserver_package_read_token()` /
 `get_fileserver_package_read_token()`). Encryption is keyed off
-`settings.SECRET_KEY`; there is no `netbox-nms` dependency.
+`settings.SECRET_KEY`; there is no `netbox-nms` dependency. The same singleton
+also owns the fail-closed `proxbox_writes_enabled` operator gate.
+
+### Proxbox API credential boundary
+
+- `proxbox_api_url` must identify one exact HTTP(S) origin. The shared client
+  accepts only a scheme, hostname/IP, and optional valid port; it normalizes a
+  root trailing slash and rejects userinfo, non-root paths, query strings,
+  fragments, whitespace/control characters, ambiguous authorities, and other
+  schemes before network access. HTTPS is required for every non-loopback
+  origin; plain HTTP is accepted only for a literal loopback IPv4 or IPv6
+  development endpoint.
+- A request carrying `X-Proxbox-API-Key` does not follow HTTP redirects. Every
+  3xx response fails closed, including same-origin redirects. Configure the
+  canonical backend URL instead of relying on a redirect.
+- The client does not use environment-configured HTTP proxies. A proxy is a
+  second credential recipient and is outside the configured-origin boundary.
+- API keys must be nonempty, header-safe ASCII values. Client failures use
+  fixed diagnostics and never include backend response bodies or transport
+  exception text. Successful response bodies have a 1 MiB limit, a 30-second
+  post-header read deadline, and must decode to a JSON object.
+- Each endpoint validates its documented HTTP and body contract: HTTP 201 for
+  template builds, HTTP 200 for VM provisioning, an allowed body status, and
+  the exact requested VMID. The client exposes only allowlisted result metadata;
+  backend build scripts, commands, generated user data, stdout, and stderr are
+  discarded before durable logging.
+- Never persist `image_url` at any mapping depth in
+  `PackerBuild.variable_overrides`. It can contain signed query credentials.
+  Model/API validation recursively rejects it, REST/model read helpers
+  recursively redact it, GraphQL excludes the raw persistence fields, the
+  worker scrubs legacy rows before failing, and migration `0024` recursively
+  removes existing keys without logging their values. `PackerBuild.serialize_object()`
+  omits raw overrides/logs from new NetBox ObjectChange snapshots, while
+  migration `0024` removes them from historical PackerBuild snapshots.
+  Migration `0024` also replaces
+  recognizable legacy proxbox logs wholesale, and every API/GraphQL/HTML read
+  surface applies the same defensive redaction because the old log format embedded image URLs,
+  build scripts, stdout, and stderr. Image sources come from the server-side
+  catalog.
+- Template builds and synchronous VM provisioning must check
+  `PackerPluginSettings.proxbox_writes_enabled` before dispatch or network
+  access. Migration `0024` defaults the gate to `False`; only the documented
+  post-upgrade canary may enable it.
+- Keep this policy shared in `proxbox_client._post_json()` so image builds and
+  VM provisioning cannot drift. Do not replace the guarded opener with the
+  default `urllib.request.urlopen`, add credentials to the URL, or disable TLS
+  verification.
+- `tests/test_proxbox_client_security.py` uses two isolated local HTTP servers
+  to prove a cross-origin redirect target never receives the canary API key.
+- This release has no registered `PackerPluginSettings` UI or REST route.
+  Configure and preflight the singleton only through the documented NetBox
+  Python-shell procedure; never print the decrypted key.
 
 ### Dispatch invariants (do not regress)
 
@@ -151,13 +205,17 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   rejects an empty `target_node` with HTTP 422 (`min_length=1`).
 - These contracts are locked by `tests/test_cloud_config_build_static.py` and
   `tests/test_build_dispatch_behavior.py`.
+- Persistence and operator-gate coverage is locked by
+  `tests/test_build_persistence_security.py`.
 
 ### Prerequisites (proxbox-api side)
 
-- `proxbox-api >= 0.0.18` with `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` and
-  `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`
-  (`0.0.18.post1`). The target `ProxmoxEndpoint` needs `allow_writes=True`, and
-  the chosen storage must allow `snippets,import,images` content types.
+- `proxbox-api >= 0.0.21,<0.0.22` with build-response v2, signed preflight v1,
+  `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, and `PROXBOX_SSH_KEY_DIR`.
+  The target `ProxmoxEndpoint` needs `allow_writes=True`, and
+  the chosen storage must allow configured `snippets` and `images` content
+  types. `import` is a download-url request value, not a configured Proxmox
+  storage content type.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 
@@ -254,6 +312,8 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires `endpoint_id` + `target_node` |
 | `0021` | *(schema only — `AddField` on `PackerPluginSettings`)* | — | — | — | Adds the plaintext File Server package-read username and Fernet-encrypted token; build rendering and redaction source both from this singleton instead of worker environment variables |
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
+| `0023` | *(schema metadata only)* | — | — | — | Documents HTTPS except literal loopback for `proxbox_api_url`; stored values are unchanged |
+| `0024` | *(security schema/data migration)* | — | — | — | Adds fail-closed `proxbox_writes_enabled=False`, scrubs legacy `image_url` overrides and unsafe proxbox logs, removes raw build fields from historical ObjectChange snapshots, and rejects future persistence |
 
 #### Migration 0020 — InfluxDB profiles
 
@@ -263,8 +323,8 @@ InfluxData signing-key fingerprint, selects only the requested semantic patch
 version from APT, verifies the installed version, and applies `apt-mark hold`.
 Build requests provide proxbox-api `endpoint_id` and `target_node`, with
 optional `template_vmid` and `storage` selectors; when an
-endpoint ID is present, netbox-packer never forwards a legacy `ssh_host` and
-proxbox-api derives transport from the selected endpoint. Product bootstrap,
+netbox-packer never forwards a legacy `ssh_host`; proxbox-api derives transport
+from the required selected endpoint. Product bootstrap,
 database/bucket creation, tokens, configs, files, services, health, and journal
 operations are performed through typed NMS RPC; plaintext credentials are
 stored only by the netbox-nms secret bridge and RPC results contain
@@ -401,8 +461,21 @@ Pushes to `develop` deploy `netbox-packer` to
 - Triggers on `push: [develop, main]` branch updates
 - Also supports manual dispatch via `workflow_dispatch` with optional `ref` and optional `environment` choice
 - Runs on `prod-deploy` runner with access to the NetBox deploy host
-- For staging, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging netbox-packer "$REF"`
-- For production, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"` when local, or falls back to `ssh nmc-prod-207 -- deploy-plugin netbox-packer "$REF"`
+- Requires the environment-specific deploy helper to be installed locally on
+  the runner; there is no SSH or remote-helper fallback
+- Requires the local helper to advertise the read-only
+  `netbox-service-guard-v1` capability before any deployment mutation; the
+  current legacy helpers do not satisfy it, so this workflow remains blocked
+  until the coordinated helper update is installed
+- Passes the exact web/RQ pair (`netbox-staging.service` plus
+  `netbox-staging-rq.service`, or `netbox.service` plus `netbox-rq.service`) to
+  the guard-aware helper. The helper owns the complete stop/mask/mutate/start
+  sequence under its shared host-wide NetBox deployment lock, including
+  initially inactive and no-runtime-change paths, fresh process checks, and the
+  requirement to leave both services stopped on failure
+- The workflow performs no service inspection or manipulation after the helper
+  releases its lock, because a queued deploy may already have stopped them;
+  helper success is the locked freshness/health result
 - Keep the full plugin slug `netbox-packer`; the production deploy helper validates repository-style NetBox plugin names and rejects the short historical slug `packer`.
 
 **Deploy parameters:**
@@ -411,9 +484,12 @@ Pushes to `develop` deploy `netbox-packer` to
 
 **Security hardening:**
 - REF is passed via environment variable, not direct GitHub Actions context interpolation
-- Bash case statement validates ref format before SSH (whitelist: version tags, branch names, commit SHAs)
-- StrictHostKeyChecking=accept-new prevents MITM attacks
+- Bash case statement validates ref format before the local helper is selected (whitelist: version tags, branch names, commit SHAs)
 - Quoted variable interpolation prevents shell injection
+- A helper that cannot prove the guard contract is rejected before mutation.
+  The workflow's executable capability, failure, no-op, inactive-service, and
+  two-process serialization tests live in
+  `tests/test_deploy_worker_guard.py`
 
 **Deployment on target server (`nmc-prod-207`):**
 1. Git fetch/checkout of the specified ref in the plugin submodule
@@ -425,19 +501,22 @@ Pushes to `develop` deploy `netbox-packer` to
 
 **Monitoring and verification:**
 - Watch the `deploy-production.yml` workflow run in Gitea Actions
-- Check the `deploy` job logs for SSH output and health check results
+- Check the `deploy` job logs for the helper's locked service guard, web health,
+  and fresh web/RQ process proof
 - Verify staging: `curl -fsS https://staging.netbox.nmulti.cloud/api/`
 - Verify production: `curl -fsS https://netbox.nmulti.cloud/api/`
-- Check service logs: `ssh nmc-prod-207 -- logs netbox`
+- Use the approved NMS operations surfaces for service status/log follow-up;
+  do not bypass the guarded workflow with a direct remote deploy
 
 **Manual deployment trigger:**
 ```bash
 # Deploy a specific tag or branch via workflow dispatch
 nms git actions run netbox-packer .gitea/workflows/deploy-production.yml \
   -r main -f environment=production -f ref=v0.1.0
-
-# Or SSH directly to production
-ssh nmc-prod-207 -- deploy-plugin netbox-packer v0.1.0
 ```
+
+Direct helper or SSH deployment is not an alternate path: it can bypass the
+required capability negotiation and guarded service lifecycle. Trigger the
+Gitea workflow for manual deployment.
 
 For comprehensive deploy infrastructure documentation, see `/root/personal-context/nmulticloud-context/CLAUDE.md` section "Automatic Plugin Deployment to Production".

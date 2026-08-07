@@ -184,7 +184,32 @@ def test_run_subprocess_timeout_kills_silent_process(isolated_imports) -> None:
     build.save.assert_called_with(update_fields=["log"])
 
 
-def test_explicit_endpoint_keeps_target_and_ssh_resolution_on_same_boundary(
+def test_run_subprocess_never_logs_packer_variable_values(isolated_imports, monkeypatch) -> None:
+    jobs = _import_jobs_module()
+    canary = "command-line-value-must-not-be-logged"
+    process = SimpleNamespace(
+        stdout=iter(()),
+        poll=Mock(return_value=0),
+        wait=Mock(),
+        returncode=0,
+    )
+    monkeypatch.setattr(jobs.subprocess, "Popen", Mock(return_value=process))
+    build = SimpleNamespace(log="", save=Mock())
+    log_lines: list[str] = []
+
+    result = jobs.PackerBuildJob()._run_subprocess(
+        ["packer", "build", f"-var=ordinary_selector={canary}", "template.pkr.hcl"],
+        build,
+        log_lines,
+        timeout=10,
+    )
+
+    assert result == 0
+    assert canary not in "\n".join(log_lines)
+    assert "-var=ordinary_selector=<redacted>" in log_lines[0]
+
+
+def test_explicit_endpoint_requires_positive_id_and_valid_target(
     isolated_imports,
 ) -> None:
     jobs = _import_jobs_module()
@@ -197,28 +222,55 @@ def test_explicit_endpoint_keeps_target_and_ssh_resolution_on_same_boundary(
     overrides = {
         "endpoint_id": 11,
         "target_node": "pve-selected",
-        "ssh_host": "must-not-bypass-endpoint.example",
     }
 
     assert jobs._resolve_target_node(template, "affinity-node", overrides) == "pve-selected"
-    assert jobs._resolve_ssh_host(template, overrides) is None
+    assert jobs._resolve_endpoint_id(overrides) == 11
     assert jobs._resolve_template_vmid(template, {"template_vmid": 19050}) == 19050
     assert jobs._resolve_storage(template, {"storage": "fast-zfs"}) == "fast-zfs"
 
 
-def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -> None:
+@pytest.mark.parametrize("raw_endpoint", (None, "", 0, -1, True, "invalid"))
+def test_invalid_endpoint_ids_fail_closed(isolated_imports, raw_endpoint) -> None:
     jobs = _import_jobs_module()
-    template = SimpleNamespace(
-        proxmox_endpoint="https://legacy-pve.example:8006",
-        proxmox_node="legacy-node",
-        proxmox_template_id=9050,
-        storage_pool="local",
+
+    assert jobs._resolve_endpoint_id({"endpoint_id": raw_endpoint}) is None
+
+
+def test_worker_failure_path_recursively_scrubs_nested_image_urls(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    canary = "worker-nested-image-url-canary-not-a-secret"
+    template_filter = Mock()
+
+    class Template:
+        objects = SimpleNamespace(filter=Mock(return_value=template_filter))
+
+    template = Template()
+    template.pk = 7
+    build = SimpleNamespace(
+        variable_overrides={
+            "source": {"image_url": f"https://images.example/image.qcow2?token={canary}"},
+            "layers": [{"image_url": f"https://images.example/{canary}"}],
+            "target_node": "pve01",
+        },
+        status="queued",
+        finished_at=None,
+        log="",
+        save=Mock(),
     )
 
-    assert jobs._resolve_target_node(template, None, {}) == "legacy-node"
-    assert jobs._resolve_ssh_host(template, {}) == "legacy-pve.example"
-    assert jobs._resolve_template_vmid(template, {}) == 9050
-    assert jobs._resolve_storage(template, {}) == "local"
+    jobs._mark_build_failed_closed(build, template, "Unsafe image source rejected.")
+
+    assert build.variable_overrides == {
+        "source": {},
+        "layers": [{}],
+        "target_node": "pve01",
+    }
+    assert canary not in repr(build.variable_overrides)
+    assert build.status == "failed"
+    build.save.assert_called_once_with(update_fields=["variable_overrides", "status", "finished_at", "log"])
+    Template.objects.filter.assert_called_once_with(pk=7)
+    template_filter.update.assert_called_once_with(build_status="failed")
 
 
 @pytest.mark.parametrize(
@@ -250,7 +302,6 @@ def test_build_overrides_allow_typed_non_secret_selectors(isolated_imports) -> N
                 "target_node": "pve-selected",
                 "template_vmid": 19050,
                 "storage": "fast-zfs",
-                "image_url": "https://cloud-images.ubuntu.com/image.qcow2",
             }
         )
         is False
@@ -264,6 +315,9 @@ class ChainManager:
         self.update = Mock()
 
     def all(self):
+        return self
+
+    def restrict(self, *args):
         return self
 
     def select_related(self, *args):
@@ -364,7 +418,7 @@ def test_ui_build_view_creates_build_and_dispatches_it(isolated_imports) -> None
     _install_package()
     messages = _install_django_view_stubs()
 
-    template = SimpleNamespace(pk=12, name="ubuntu-template")
+    template = SimpleNamespace(pk=12, name="ubuntu-template", installer_config=None)
     build = SimpleNamespace(pk=77, status="queued", get_absolute_url=Mock(return_value="/builds/77/"))
     build_manager = ChainManager()
     build_manager.create.return_value = build
@@ -375,7 +429,10 @@ def test_ui_build_view_creates_build_and_dispatches_it(isolated_imports) -> None
     _install_project_view_stubs(dispatch_build)
     views = importlib.import_module("netbox_packer.views")
 
-    response = views.PackerTemplateBuildView().post(SimpleNamespace(user="alice"), pk=12)
+    user = Mock()
+    user.has_perm.return_value = True
+    user.__str__ = Mock(return_value="alice")
+    response = views.PackerTemplateBuildView().post(SimpleNamespace(user=user), pk=12)
 
     build_manager.create.assert_called_once_with(
         template=template,
@@ -387,6 +444,60 @@ def test_ui_build_view_creates_build_and_dispatches_it(isolated_imports) -> None
     dispatch_build.assert_called_once_with(build)
     messages.success.assert_called_once()
     assert response == {"redirect": "/builds/77/"}
+
+
+def test_ui_build_view_rejects_view_only_user_before_mutation(isolated_imports) -> None:
+    _install_package()
+    _install_django_view_stubs()
+
+    template = SimpleNamespace(pk=12, name="ubuntu-template", installer_config=None)
+    build_manager = ChainManager()
+    template_manager = ChainManager()
+    dispatch_build = Mock()
+    user = Mock()
+    user.has_perm.return_value = False
+
+    _install_view_model_stubs(template, build_manager, template_manager)
+    _install_project_view_stubs(dispatch_build)
+    views = importlib.import_module("netbox_packer.views")
+
+    with pytest.raises(views.PermissionDenied):
+        views.PackerTemplateBuildView().post(SimpleNamespace(user=user), pk=12)
+
+    user.has_perm.assert_called_once_with("netbox_packer.change_packertemplate")
+    build_manager.create.assert_not_called()
+    template_manager.filter.assert_not_called()
+    dispatch_build.assert_not_called()
+
+
+def test_ui_build_view_rejects_cloud_build_without_creating_doomed_job(isolated_imports) -> None:
+    _install_package()
+    messages = _install_django_view_stubs()
+
+    installer = SimpleNamespace(installer_type="cloud_config")
+    template = SimpleNamespace(
+        pk=12,
+        name="ubuntu-cloud-template",
+        installer_config=installer,
+        get_absolute_url=Mock(return_value="/templates/12/"),
+    )
+    build_manager = ChainManager()
+    template_manager = ChainManager()
+    dispatch_build = Mock()
+    user = Mock()
+    user.has_perm.return_value = True
+
+    _install_view_model_stubs(template, build_manager, template_manager)
+    _install_project_view_stubs(dispatch_build)
+    views = importlib.import_module("netbox_packer.views")
+
+    response = views.PackerTemplateBuildView().post(SimpleNamespace(user=user), pk=12)
+
+    assert response == {"redirect": "/templates/12/"}
+    messages.error.assert_called_once()
+    build_manager.create.assert_not_called()
+    template_manager.filter.assert_not_called()
+    dispatch_build.assert_not_called()
 
 
 def _install_api_import_stubs(template, build_manager, template_manager, dispatch_build) -> None:
@@ -428,6 +539,12 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
     rest_views.APIView = type("APIView", (), {})
 
     viewsets = types.ModuleType("netbox.api.viewsets")
+    authentication = types.ModuleType("netbox.api.authentication")
+
+    class TokenPermissions:
+        perms_map = {}
+
+    authentication.TokenPermissions = TokenPermissions
 
     class NetBoxModelViewSet:
         def get_object(self):
@@ -480,6 +597,7 @@ def _install_api_import_stubs(template, build_manager, template_manager, dispatc
     sys.modules["rest_framework.views"] = rest_views
     sys.modules["netbox"] = types.ModuleType("netbox")
     sys.modules["netbox.api"] = types.ModuleType("netbox.api")
+    sys.modules["netbox.api.authentication"] = authentication
     sys.modules["netbox.api.viewsets"] = viewsets
     sys.modules["netbox_packer.api.serializers"] = serializers
     sys.modules["netbox_packer.validators"] = validators
@@ -491,6 +609,7 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
         name="ubuntu-template",
         proxmox_endpoint="https://pve.example:8006",
         proxmox_node="pve01",
+        installer_config=None,
     )
     build = SimpleNamespace(pk=88, status="queued")
     build_manager = ChainManager()
@@ -502,9 +621,12 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
 
     view = api_views.PackerTemplateViewSet()
     view.template = template
+    user = Mock()
+    user.has_perm.return_value = True
+    user.__str__ = Mock(return_value="api-user")
     request = SimpleNamespace(
-        user="api-user",
-        data={"variable_overrides": {"image_url": "https://example.invalid/base.qcow2"}},
+        user=user,
+        data={"variable_overrides": {"target_node": "pve01"}},
     )
 
     response = view.build(request, pk=12)
@@ -512,7 +634,7 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
     build_manager.create.assert_called_once_with(
         template=template,
         triggered_by="api-user",
-        variable_overrides={"image_url": "https://example.invalid/base.qcow2"},
+        variable_overrides={"target_node": "pve01"},
         status="queued",
     )
     template_manager.filter.assert_called_once_with(pk=12)
@@ -520,3 +642,31 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
     dispatch_build.assert_called_once_with(build)
     assert response.status_code == 202
     assert response.data == {"id": 88, "status": "queued"}
+    user.has_perm.assert_called_once_with("netbox_packer.change_packertemplate")
+
+
+def test_api_build_action_rejects_add_only_user_before_mutation(isolated_imports) -> None:
+    template = SimpleNamespace(
+        pk=12,
+        name="ubuntu-template",
+        proxmox_endpoint="https://pve.example:8006",
+        proxmox_node="pve01",
+        installer_config=None,
+    )
+    build_manager = ChainManager()
+    template_manager = ChainManager()
+    dispatch_build = Mock()
+    _install_api_import_stubs(template, build_manager, template_manager, dispatch_build)
+    api_views = importlib.import_module("netbox_packer.api.views")
+
+    user = Mock()
+    user.has_perm.return_value = False
+    request = SimpleNamespace(user=user, data={"variable_overrides": {}})
+
+    with pytest.raises(api_views.PermissionDenied):
+        api_views.PackerTemplateViewSet().build(request, pk=12)
+
+    user.has_perm.assert_called_once_with("netbox_packer.change_packertemplate")
+    build_manager.create.assert_not_called()
+    template_manager.filter.assert_not_called()
+    dispatch_build.assert_not_called()

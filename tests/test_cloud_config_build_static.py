@@ -106,7 +106,8 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     src = _read("netbox_packer/jobs.py")
     assert 'installer.installer_type == "cloud_config"' in src
     assert "def _run_proxbox_cloud_build(self, build, template, node, timeout):" in src
-    assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
+    assert "ProxboxApiError," in src
+    assert "call_proxbox_build," in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
     assert "fileserver_package_read_token = settings_row.get_fileserver_package_read_token()" in src
@@ -114,7 +115,8 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "settings_row=settings_row," in src
     assert "template_name=template.name," in src
     assert "is_fileserver_golden_template=template.is_fileserver_golden_template," in src
-    assert "redact_fileserver_package_token(str(value), fileserver_package_read_token)" in src
+    assert "Backend scripts and process output omitted from durable logs" in src
+    assert 'for key in ("build_script", "stdout", "stderr")' not in src
     assert "raise sanitized_fileserver_package_error(exc, fileserver_package_read_token) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
     # Gap 1: PackerBuild creation must enqueue the job.
@@ -150,6 +152,21 @@ def test_build_actions_dispatch_the_job() -> None:
     ui_src = _read("netbox_packer/views.py")
     assert "dispatch_build(build)" in api_src
     assert "dispatch_build(build)" in ui_src
+
+
+def test_only_selector_aware_api_can_queue_cloud_builds() -> None:
+    api_src = _read("netbox_packer/api/views.py")
+    ui_src = _read("netbox_packer/views.py")
+    jobs_src = _read("netbox_packer/jobs.py")
+    command_src = _read("netbox_packer/management/commands/check_packer_staleness.py")
+
+    assert 'request.user.has_perm("netbox_packer.change_packertemplate")' in api_src
+    assert 'objects.restrict(request.user, "change")' in api_src
+    assert "PackerTemplateBuildPermissions" in api_src
+    assert "(is_cloud_config or endpoint_agnostic)" in api_src
+    assert "Cloud image builds require an explicit proxbox endpoint and node" in ui_src
+    assert "Skipped automatic rebuild for cloud template" in jobs_src
+    assert "cloud builds require API-supplied endpoint_id and target_node" in command_src
 
 
 def test_proxbox_client_targets_template_images_endpoint() -> None:
@@ -517,17 +534,20 @@ def test_fileserver_package_settings_comment_migration_contract() -> None:
 
     assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
     assert constants["CONFIG_VERSION"] == "1.0.1"
-    historical_content = _literal_assignments(
-        "netbox_packer/migrations/0017_update_fileserver_agent_package_index.py"
-    )["FILESERVER_ALLINONE_CLOUD_CONFIG"]
+    historical_content = _literal_assignments("netbox_packer/migrations/0017_update_fileserver_agent_package_index.py")[
+        "FILESERVER_ALLINONE_CLOUD_CONFIG"
+    ]
     assert constants["STALE_PIP_CONF_COMMENT"] in historical_content
     assert constants["STALE_PIP_CONF_COMMENT"] not in seed
     assert constants["SETTINGS_PIP_CONF_COMMENT"] in seed
-    assert historical_content.replace(
-        constants["STALE_PIP_CONF_COMMENT"],
-        constants["SETTINGS_PIP_CONF_COMMENT"],
-        1,
-    ) == seed
+    assert (
+        historical_content.replace(
+            constants["STALE_PIP_CONF_COMMENT"],
+            constants["SETTINGS_PIP_CONF_COMMENT"],
+            1,
+        )
+        == seed
+    )
     assert "updated_content = config.content.replace(" in src
     assert "checksum=hashlib.sha256(updated_content.encode()).hexdigest()" in src
     assert 'update(build_status="pending")' in src
@@ -905,11 +925,17 @@ def _load_proxbox_client():
 
 
 class _FakeResp:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, *, status: int = 201):
         self._body = body
+        self._offset = 0
+        self.status = status
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            size = len(self._body) - self._offset
+        chunk = self._body[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
 
     def __enter__(self):
         return self
@@ -920,60 +946,124 @@ class _FakeResp:
 
 def test_call_proxbox_build_posts_cloud_config(monkeypatch) -> None:
     mod = _load_proxbox_client()
-    captured: dict = {}
+    captured: list[dict] = []
+    recipe_digest = "a" * 64
+    responses = iter(
+        (
+            _FakeResp(
+                json.dumps(
+                    {
+                        "contract_version": "2.0",
+                        "status": "planned",
+                        "endpoint_id": 7,
+                        "target_node": "pve01",
+                        "vmid": 9010,
+                        "template_vmid": 9010,
+                        "recipe_digest": recipe_digest,
+                    }
+                ).encode()
+            ),
+            _FakeResp(
+                json.dumps(
+                    {
+                        "contract_version": "1.0",
+                        "endpoint_id": 7,
+                        "target_node": "pve01",
+                        "vmid": 9010,
+                        "ready": True,
+                        "writes_enabled": True,
+                        "recipe_digest": recipe_digest,
+                        "plan_id": "00000000-0000-0000-0000-000000000007",
+                        "plan_token": "p" * 64,
+                    }
+                ).encode(),
+                status=200,
+            ),
+            _FakeResp(
+                json.dumps(
+                    {
+                        "contract_version": "2.0",
+                        "status": "completed",
+                        "endpoint_id": 7,
+                        "target_node": "pve01",
+                        "vmid": 9010,
+                        "template_vmid": 9010,
+                        "returncode": 0,
+                        "operation_id": "00000000-0000-0000-0000-000000000007",
+                        "recipe_digest": recipe_digest,
+                        "verified": True,
+                        "recovery_required": False,
+                    }
+                ).encode()
+            ),
+        )
+    )
 
-    def fake_urlopen(req, timeout=0):
-        captured["url"] = req.full_url
-        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
-        captured["body"] = json.loads(req.data.decode())
-        return _FakeResp(b'{"status": "completed", "vmid": 9010}')
+    def fake_open_request(req, *, timeout=0):
+        captured.append(
+            {
+                "url": req.full_url,
+                "headers": {k.lower(): v for k, v in req.header_items()},
+                "body": json.loads(req.data.decode()),
+            }
+        )
+        return next(responses)
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", fake_open_request)
 
     out = mod.call_proxbox_build(
-        proxbox_api_url="http://10.0.30.207:8000/",
+        proxbox_api_url="https://proxbox-api.internal.example:8000/",
         proxbox_api_key="secret-key",
         name="zabbix-7.4-ubuntu-2604-pgsql-nginx",
         vmid=9010,
-        target_node="",
+        endpoint_id=7,
+        target_node="pve01",
         image_url="https://cloud-images.ubuntu.com/releases/26.04/release/img.img",
         user_data_yaml="#cloud-config\nruncmd:\n  - echo hi\n",
         image_storage="local",
         vm_storage="local",
         storage="local",
         snippets_storage="local",
-        ssh_host="10.0.30.139",
     )
 
-    assert out == {"status": "completed", "vmid": 9010}
-    assert captured["url"] == "http://10.0.30.207:8000/cloud/templates/images"
-    assert captured["headers"]["x-proxbox-api-key"] == "secret-key"
-    body = captured["body"]
+    assert out["status"] == "completed"
+    assert out["vmid"] == 9010
+    assert [request["url"] for request in captured] == [
+        "https://proxbox-api.internal.example:8000/cloud/templates/images",
+        "https://proxbox-api.internal.example:8000/cloud/templates/images/preflight",
+        "https://proxbox-api.internal.example:8000/cloud/templates/images",
+    ]
+    assert all(request["headers"]["x-proxbox-api-key"] == "secret-key" for request in captured)
+    body = captured[0]["body"]
     assert body["user_data_yaml"].startswith("#cloud-config")
-    assert body["execute"] is True
+    assert body["execute"] is False
     assert body["provider"] == "release_image"
-    assert body["ssh_host"] == "10.0.30.139"
+    assert "ssh_host" not in body
     assert body["snippets_storage"] == "local"
     assert body["vmid"] == 9010
+    assert captured[1]["body"]["recipe_digest"] == recipe_digest
+    assert captured[2]["body"]["preflight_plan_token"] == "p" * 64
+    assert captured[2]["body"]["execute"] is True
 
 
 def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
     mod = _load_proxbox_client()
 
-    def fake_urlopen(req, timeout=0):
+    def fake_open_request(req, *, timeout=0):
         raise mod.urllib.error.HTTPError(
             req.full_url, 403, "Forbidden", {}, fp=__import__("io").BytesIO(b"writes disabled")
         )
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", fake_open_request)
 
     try:
         mod.call_proxbox_build(
-            proxbox_api_url="http://x",
+            proxbox_api_url="https://proxbox-api.example",
             proxbox_api_key="k",
             name="n",
-            vmid=1,
-            target_node="",
+            vmid=9000,
+            endpoint_id=1,
+            target_node="pve01",
             image_url="https://x/y.img",
             user_data_yaml="#cloud-config\n",
         )
