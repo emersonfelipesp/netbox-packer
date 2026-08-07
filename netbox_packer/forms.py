@@ -109,6 +109,8 @@ class PackerTemplateForm(NetBoxModelForm):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
+            "install_nms_agent",
+            "nms_agent_backend_url",
             "tags",
         )
         fieldsets = (
@@ -138,6 +140,8 @@ class PackerTemplateForm(NetBoxModelForm):
                 "install_qemu_guest_agent",
                 "install_zabbix_agent2",
                 "zabbix_server",
+                "install_nms_agent",
+                "nms_agent_backend_url",
                 name="Monitoring Agents",
             ),
             FieldSet(

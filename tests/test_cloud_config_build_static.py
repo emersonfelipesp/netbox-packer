@@ -9,8 +9,11 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import subprocess
+import sys
 import traceback
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import yaml
 
@@ -47,7 +50,10 @@ def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
     for call in ast.walk(tree):
         if not isinstance(call, ast.Call):
             continue
-        if not isinstance(call.func, ast.Attribute) or call.func.attr != "get_or_create":
+        if not isinstance(call.func, ast.Attribute) or call.func.attr not in {
+            "get_or_create",
+            "update_or_create",
+        }:
             continue
 
         name = None
@@ -74,6 +80,43 @@ def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
             return str(name), defaults
 
     raise AssertionError(f"No PackerTemplate.objects.get_or_create defaults found in {rel}")
+
+
+def _load_jobs_isolated(monkeypatch):
+    """Load jobs.py with tiny framework stubs for its pure helper tests."""
+
+    django = ModuleType("django")
+    django_conf = ModuleType("django.conf")
+    django_conf.settings = SimpleNamespace(PLUGINS_CONFIG={})
+    django_utils = ModuleType("django.utils")
+    django_utils.timezone = SimpleNamespace(now=lambda: None)
+    netbox = ModuleType("netbox")
+    netbox_jobs = ModuleType("netbox.jobs")
+    netbox_jobs.JobRunner = type("JobRunner", (), {})
+    package = ModuleType("netbox_packer")
+    package.__path__ = [str(PKG)]
+    package_index = ModuleType("netbox_packer.package_index")
+    package_index.redact_fileserver_package_token = lambda value, _token: value
+    package_index.render_fileserver_package_index = lambda value, **_kwargs: value
+    package_index.sanitized_fileserver_package_error = lambda error, _token: error
+
+    for name, module in {
+        "django": django,
+        "django.conf": django_conf,
+        "django.utils": django_utils,
+        "netbox": netbox,
+        "netbox.jobs": netbox_jobs,
+        "netbox_packer": package,
+        "netbox_packer.package_index": package_index,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    path = PKG / "jobs.py"
+    spec = importlib.util.spec_from_file_location("netbox_packer.jobs_isolated", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ── Static wiring assertions ──────────────────────────────────────────────────
@@ -990,8 +1033,13 @@ def test_model_has_monitoring_agent_fields() -> None:
     src = _read("netbox_packer/models.py")
     assert "install_qemu_guest_agent = models.BooleanField(" in src
     assert "install_zabbix_agent2 = models.BooleanField(" in src
+    assert "install_nms_agent = models.BooleanField(" in src
+    assert "nms_agent_backend_url = models.URLField(" in src
     assert "zabbix_server = models.CharField(" in src
     assert '"zabbix.nmulti.cloud"' in src
+    assert 'default="https://backend.nms.nmulti.cloud"' in src
+    assert "provisions_service = models.CharField(" in src
+    assert 'default="", editable=False' in src
 
 
 def test_migration_0008_adds_monitoring_agent_fields() -> None:
@@ -1002,14 +1050,29 @@ def test_migration_0008_adds_monitoring_agent_fields() -> None:
     assert '"0007_seed_influxdb_cloud_init"' in src  # correct dependency
 
 
+def test_migration_0023_adds_optional_nms_agent_and_service_marker() -> None:
+    src = _read("netbox_packer/migrations/0023_packertemplate_nms_agent_and_service_marker.py")
+    assert '("netbox_packer", "0022_update_fileserver_package_settings_comment")' in src
+    assert 'name="install_nms_agent"' in src
+    assert "default=False" in src
+    assert 'name="nms_agent_backend_url"' in src
+    assert 'default="https://backend.nms.nmulti.cloud"' in src
+    assert 'name="provisions_service"' in src
+    assert "editable=False" in src
+
+
 def test_jobs_has_monitoring_injection_functions() -> None:
     src = _read("netbox_packer/jobs.py")
     assert "def _zabbix_agent2_bootstrap(zabbix_server" in src
+    assert "def _nms_agent_bootstrap()" in src
     assert "def _inject_monitoring_agents(user_data_yaml" in src
     # Injection function uses deduplication: skip packages if already present.
     assert '"qemu-guest-agent" not in pkgs' in src
     # Zabbix whole-YAML dedup: skip entirely if zabbix-agent2 already in content.
     assert '"zabbix-agent2" not in user_data_yaml' in src
+    assert 'getattr(template, "install_nms_agent", False)' in src
+    assert '"nms-agent" not in user_data_yaml' in src
+    assert 'return ["akvorado.service"]' in src
     # Zabbix bootstrap script uses ServerActive= with the configured server.
     assert "ServerActive=" in src
     # Security: module-level regex guard prevents heredoc break-out via zabbix_server.
@@ -1019,6 +1082,180 @@ def test_jobs_has_monitoring_injection_functions() -> None:
     # the template already declares it. The password itself is never baked.
     assert '"ssh_pwauth" not in config' in src
     assert 'config["ssh_pwauth"] = True' in src
+
+
+def test_nms_agent_injection_renders_bootstrap_and_deduplicates(monkeypatch) -> None:
+    mod = _load_jobs_isolated(monkeypatch)
+    template = SimpleNamespace(
+        install_qemu_guest_agent=False,
+        install_zabbix_agent2=False,
+        install_nms_agent=True,
+        nms_agent_backend_url="https://backend.nms.nmulti.cloud/",
+        provisions_service="akvorado",
+    )
+
+    rendered = mod._inject_monitoring_agents("#cloud-config\npackage_update: false\n", template)
+    config = yaml.safe_load(rendered.split("\n", 1)[1])
+    files = {item["path"]: item for item in config["write_files"]}
+
+    assert set(files) == {
+        "/etc/nms-agent/config.yaml",
+        "/etc/systemd/system/nms-agent.service",
+        "/opt/nmulticloud-nms-agent-bootstrap.sh",
+    }
+    agent_config = yaml.safe_load(files["/etc/nms-agent/config.yaml"]["content"])
+    assert agent_config["backend_url"] == "https://backend.nms.nmulti.cloud"
+    assert agent_config["otlp"]["endpoint"] == "https://backend.nms.nmulti.cloud"
+    assert agent_config["zabbix"] == {
+        "enabled": False,
+        "manage_agent2": False,
+        "server": "zabbix.nmulti.cloud",
+        "host_metadata": "",
+    }
+    assert agent_config["rpc"]["allowed_units"] == ["akvorado.service"]
+    assert files["/etc/nms-agent/config.yaml"]["permissions"] == "0600"
+
+    bootstrap = files["/opt/nmulticloud-nms-agent-bootstrap.sh"]["content"]
+    assert "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb" in bootstrap
+    assert "readonly GO_VERSION='1.24.13'" in bootstrap
+    assert 'go${GO_VERSION}.linux-amd64.tar.gz' in bootstrap
+    assert "sha256sum --check --strict" in bootstrap
+    assert "git -C" in bootstrap and "rev-parse HEAD" in bootstrap
+    assert "curl | bash" not in bootstrap
+    subprocess.run(["bash", "-n"], input=bootstrap, text=True, check=True)
+    assert config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
+
+    # The rendered content now references the agent, so a second pass must not
+    # add a second config, unit, script, or command.
+    rerendered = mod._inject_monitoring_agents(rendered, template)
+    rerendered_config = yaml.safe_load(rerendered.split("\n", 1)[1])
+    paths = [item["path"] for item in rerendered_config["write_files"]]
+    assert len(paths) == len(set(paths)) == 3
+    assert rerendered_config["runcmd"].count(
+        ["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]
+    ) == 1
+
+
+def test_nms_agent_injection_defaults_off_and_rejects_unsafe_backend(monkeypatch) -> None:
+    mod = _load_jobs_isolated(monkeypatch)
+    base = "#cloud-config\npackage_update: false\n"
+    rendered = mod._inject_monitoring_agents(
+        base,
+        SimpleNamespace(install_qemu_guest_agent=False, install_zabbix_agent2=False),
+    )
+    assert "/etc/nms-agent/config.yaml" not in rendered
+
+    template = SimpleNamespace(
+        install_qemu_guest_agent=False,
+        install_zabbix_agent2=False,
+        install_nms_agent=True,
+        nms_agent_backend_url="https://operator:secret@example.invalid/path",
+        provisions_service="",
+    )
+    try:
+        mod._inject_monitoring_agents(base, template)
+    except ValueError as exc:
+        assert "without credentials" in str(exc)
+    else:  # pragma: no cover - unsafe interpolation must fail closed
+        raise AssertionError("expected credential-bearing backend URL to be rejected")
+
+
+def test_akvorado_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0024_seed_akvorado_cloud_init.py"
+    seed_rel = "netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml"
+    constants = _literal_assignments(rel)
+    seed = _read(seed_rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+
+    assert constants["AKVORADO_CLOUD_CONFIG"] == seed
+    assert constants["CONFIG_NAME"] == "akvorado-2.4.0-ubuntu-2404-cloud-config"
+    assert constants["CONFIG_VERSION"] == "2.4.0"
+    assert constants["TEMPLATE_NAME"] == "akvorado-2.4.0-ubuntu-2404"
+    assert constants["TEMPLATE_VMID"] == 9070
+    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
+    assert constants["PROXMOX_NODE"] == "10.0.30.71"
+    assert name == constants["TEMPLATE_NAME"]
+
+    assert defaults["proxmox_template_id"] == 9070
+    assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
+    assert defaults["proxmox_node"] == "10.0.30.71"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["install_qemu_guest_agent"] is True
+    assert defaults["install_zabbix_agent2"] is True
+    assert defaults["install_nms_agent"] is True
+    assert defaults["nms_agent_backend_url"] == "https://backend.nms.nmulti.cloud"
+    assert defaults["provisions_service"] == "akvorado"
+
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+    assert "/etc/apt/sources.list.d/docker.sources" not in files
+    compose = yaml.safe_load(files["/opt/akvorado/docker-compose.yml"])
+    services = compose["services"]
+    assert services["kafka"]["image"] == "apache/kafka:4.2.0"
+    assert services["valkey"]["image"] == "valkey/valkey:9.0"
+    assert services["clickhouse"]["image"] == "clickhouse/clickhouse-server:26.3"
+    for component in (
+        "akvorado-console",
+        "akvorado-inlet",
+        "akvorado-outlet",
+        "akvorado-orchestrator",
+    ):
+        assert services[component]["image"] == "quay.io/akvorado/akvorado:2.4.0"
+    assert "redis" not in services
+    assert all("latest" not in service.get("image", "") for service in services.values())
+    assert services["akvorado-console"]["ports"] == ["8081:8080/tcp"]
+    assert set(services["akvorado-inlet"]["ports"]) == {
+        "2055:2055/udp",
+        "4739:4739/udp",
+        "6343:6343/udp",
+    }
+    assert services["akvorado-outlet"]["ports"] == ["10179:10179/tcp"]
+
+    console_config = yaml.safe_load(files["/opt/akvorado/config/console.yaml"])
+    # Akvorado names its RESP-compatible cache driver "redis"; the actual
+    # server and image are Valkey.
+    assert console_config["http"]["cache"] == {
+        "type": "redis",
+        "server": "valkey:6379",
+    }
+    service = files["/etc/systemd/system/akvorado.service"]
+    assert "ExecStart=/usr/bin/docker compose -f /opt/akvorado/docker-compose.yml up -d" in service
+    assert "ExecStop=/usr/bin/docker compose -f /opt/akvorado/docker-compose.yml down" in service
+    assert "RemainAfterExit=yes" in service
+
+    install_script = files["/usr/local/sbin/install-akvorado-stack"]
+    assert "sha256sum --check --strict" in install_script
+    assert "9DC858229FC7DD38854AE2D88D81803C0EBFCD88" in install_script
+    assert "docker-compose-plugin" in install_script
+    assert "systemctl enable --now akvorado.service" in install_script
+    assert "curl | bash" not in install_script
+    subprocess.run(["bash", "-n"], input=install_script, text=True, check=True)
+    assert install_script.index("/etc/apt/keyrings/docker.asc") < install_script.index(
+        "cat > /etc/apt/sources.list.d/docker.sources"
+    ) < install_script.index("apt-get update")
+    assert "nms-agent" not in seed
+
+
+def test_akvorado_contract_is_documented() -> None:
+    required = (
+        "akvorado-2.4.0-ubuntu-2404",
+        "9070",
+        "Kafka `4.2.0`",
+        "Valkey `9.0`",
+        "ClickHouse `26.3`",
+        "akvorado.service",
+        "https://backend.nms.nmulti.cloud",
+    )
+    for rel in (
+        "README.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "docs/cloud-init-template-images.md",
+        "docs/index.md",
+    ):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
 
 
 def test_ubuntu_lts_base_seed_contract() -> None:
@@ -1055,3 +1292,10 @@ def test_serializer_exposes_monitoring_agent_fields() -> None:
     assert '"install_qemu_guest_agent"' in src
     assert '"install_zabbix_agent2"' in src
     assert '"zabbix_server"' in src
+    assert '"install_nms_agent"' in src
+    assert '"nms_agent_backend_url"' in src
+    assert '"provisions_service"' in src
+    assert 'read_only_fields = ("provisions_service",)' in src
+
+    filter_src = _read("netbox_packer/filtersets.py")
+    assert '"provisions_service"' in filter_src

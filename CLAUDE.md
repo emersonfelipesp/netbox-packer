@@ -172,6 +172,8 @@ Every cloud-config build pass through `_inject_monitoring_agents()` in `jobs.py`
 | `install_qemu_guest_agent` | bool | `True` | Adds `qemu-guest-agent` to the `packages:` list and `systemctl enable --now qemu-guest-agent` to `runcmd:`. Skipped if `qemu-guest-agent` is already in the `packages:` list. |
 | `install_zabbix_agent2` | bool | `True` | Injects a Zabbix Agent 2 bootstrap script (`write_files:` + `runcmd:`). Skipped entirely if the string `"zabbix-agent2"` appears anywhere in the original cloud-config YAML. |
 | `zabbix_server` | str (255) | `"zabbix.nmulti.cloud"` | `ServerActive=` directive written into the injected Zabbix agent config. |
+| `install_nms_agent` | bool | `False` | Injects the pinned static NMS host agent, root-only config, and systemd unit. Skipped entirely if `"nms-agent"` appears anywhere in the original YAML. Default-off preserves every existing template; the Akvorado seed opts in. |
+| `nms_agent_backend_url` | URL | `"https://backend.nms.nmulti.cloud"` | Bootstrap, heartbeat, and OTLP base URL. Rendering accepts credential-free HTTP(S) URLs only and rejects query strings/fragments. |
 
 The injection is **idempotent** — running the same template twice produces the
 same cloud-config. The seeded Zabbix 7.4 template already has
@@ -179,12 +181,13 @@ same cloud-config. The seeded Zabbix 7.4 template already has
 The seeded InfluxDB template already has `qemu-guest-agent` in its packages
 list, so only the `systemctl enable` runcmd line is added.
 
-The NMS `/virtualization/packer` Create dialog exposes all three fields in a
-"Monitoring agents" section (both toggles default to on, `zabbix_server` input
-appears when the Zabbix toggle is on). Both presets (InfluxDB, Zabbix) default
-all three fields to their `PackerTemplate` defaults.
+The template form exposes the optional NMS agent toggle and backend URL next to
+the existing QEMU/Zabbix controls. The NMS agent remains disabled unless a
+template opts in.
 
-Migration `0008_packertemplate_monitoring_agents.py` adds the three fields.
+Migration `0008_packertemplate_monitoring_agents.py` adds the QEMU/Zabbix
+fields. Migration `0023_packertemplate_nms_agent_and_service_marker.py` adds
+the NMS agent fields and read-only `provisions_service` marker.
 
 **Password SSH (`ssh_pwauth`).** `_inject_monitoring_agents()` also always sets
 `ssh_pwauth: true` in the baked `#cloud-config` (idempotent — skipped only if
@@ -254,6 +257,8 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires `endpoint_id` + `target_node` |
 | `0021` | *(schema only — `AddField` on `PackerPluginSettings`)* | — | — | — | Adds the plaintext File Server package-read username and Fernet-encrypted token; build rendering and redaction source both from this singleton instead of worker environment variables |
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
+| `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
+| `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
 
 #### Migration 0020 — InfluxDB profiles
 
@@ -277,6 +282,34 @@ Adds three fields to `PackerTemplate` used by `_inject_monitoring_agents()` at b
 - `install_qemu_guest_agent` (BooleanField, default `True`) — injects `qemu-guest-agent` install + `systemctl enable`.
 - `install_zabbix_agent2` (BooleanField, default `True`) — injects Zabbix Agent 2 bootstrap. **Injection is skipped entirely** if the installer config already contains the string `"zabbix-agent2"` (hyphen).
 - `zabbix_server` (CharField, default `"zabbix.nmulti.cloud"`) — sets the `ServerActive=` directive in the injected Zabbix config.
+
+#### Migrations 0023/0024 — Akvorado and NMS host agent
+
+Migration `0023` adds `install_nms_agent` with a deliberately false default,
+the production-default `nms_agent_backend_url`, and the migration-managed
+`provisions_service` marker. Injection builds a static agent from exact commit
+`cec1c4c73d8cf301654ecce63e09c3195fd1b8bb` using a SHA256-verified Go
+toolchain. It writes no token or backend signing key and relies on the existing
+secure-prefix bootstrap flow. When `provisions_service == "akvorado"`, the
+agent's local RPC allowlist contains exactly `akvorado.service`; its own Zabbix
+management stays disabled because the existing Zabbix injector owns that
+configuration.
+
+Migration `0024` seeds `akvorado-2.4.0-ubuntu-2404` at VMID `9070` on
+CLUSTER01-DC01 (`https://10.0.30.71:8006` / `10.0.30.71`). The verbatim source
+is `netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml`. It pins
+Kafka `4.2.0`, Valkey `9.0`, ClickHouse `26.3`, and every Akvorado component to
+`2.4.0`; no `latest` image is allowed. The single systemd lifecycle owner must
+remain named exactly `akvorado.service` and operate
+`/opt/akvorado/docker-compose.yml`. The seed includes the default Akvorado
+configuration needed for a clean first boot; do not reintroduce a required
+post-boot config-deploy step.
+
+Created VMs already retain `source_packer_template`. Downstream hooks follow
+that lineage to `provisions_service="akvorado"`; do not replace this with
+hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
+ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
+aligned whenever this seed changes.
 
 #### Migration 0009 — Kubernetes 1.31 base node
 

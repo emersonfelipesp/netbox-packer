@@ -38,8 +38,20 @@ Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 (there is no NetBox UI page or REST endpoint for this settings model yet — see
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
-Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, a File Server
-all-in-one image, and base Ubuntu LTS cloud-init templates.
+Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, Akvorado,
+a File Server all-in-one image, and base Ubuntu LTS cloud-init templates.
+
+The Akvorado seed is `akvorado-2.4.0-ubuntu-2404`, VMID `9070`, on
+CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. First boot
+installs Docker Engine and the Compose plugin, then starts Kafka `4.2.0`,
+Valkey `9.0`, ClickHouse `26.3`, and Akvorado `2.4.0` console, inlet, outlet,
+and orchestrator through the single `akvorado.service` systemd unit. Its
+credential-free default configuration is complete enough to start without a
+post-boot config RPC. The template enables the optional NMS host-agent
+injection against `https://backend.nms.nmulti.cloud`; existing templates keep
+that injection disabled by default. Provisioned VMs retain the existing
+`source_packer_template` lineage, which downstream hooks follow to the
+template's read-only `provisions_service="akvorado"` marker.
 
 The Zabbix 7.4 monitoring stack seed is
 `zabbix-7.4-ubuntu-2604-pgsql-nginx`, VMID `9010`, on the development endpoint

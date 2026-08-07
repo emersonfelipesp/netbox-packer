@@ -172,12 +172,16 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
+            "install_nms_agent",
+            "nms_agent_backend_url",
+            "provisions_service",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name", "os_family", "os_version", "build_status")
+        read_only_fields = ("provisions_service",)
 
 
 class PackerBuildSerializer(NetBoxModelSerializer):

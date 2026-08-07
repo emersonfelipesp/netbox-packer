@@ -494,10 +494,22 @@ def test_template_form_declutters_machine_managed_fields() -> None:
     """Machine-managed lifecycle fields must not be exposed on the template form."""
     forms_src = _read("netbox_packer/forms.py")
     block = _class_block(forms_src, "PackerTemplateForm")
-    for machine_field in ("built_at", "packer_template_ref", "installer_config_checksum_at_build"):
+    for machine_field in (
+        "built_at",
+        "packer_template_ref",
+        "installer_config_checksum_at_build",
+        "provisions_service",
+    ):
         assert f'"{machine_field}"' not in block, (
             f"Machine-managed field '{machine_field}' should not appear on PackerTemplateForm"
         )
+
+
+def test_template_form_exposes_optional_nms_agent_controls() -> None:
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert '"install_nms_agent"' in block
+    assert '"nms_agent_backend_url"' in block
 
 
 def test_os_version_filter_js_asset() -> None:
