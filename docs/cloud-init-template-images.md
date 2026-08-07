@@ -370,9 +370,13 @@ and `down` on stop. The Compose stack pins:
 The console uses Akvorado's cache driver named `redis` to speak the
 Redis-compatible protocol to `valkey:6379`; the backing service is Valkey.
 Flow receivers listen on UDP `2055`, `4739`, and `6343`, the BMP receiver on
-TCP `10179`, and the console on TCP `8081`. The shipped `akvorado.yaml` plus
-inlet/outlet/console includes is a working credential-free default, so no
-configuration RPC is required before the stack starts.
+TCP `10179`, and the console only on loopback at `127.0.0.1:8081`. Akvorado's
+console trusts an identity header from a fronting authenticating proxy and does
+not authenticate users itself, so the template does not publish it on a
+wildcard host address. Reach it through an SSH tunnel to loopback port `8081`,
+or provision a separate authenticating reverse proxy explicitly. The shipped
+`akvorado.yaml` plus inlet/outlet/console includes is a working credential-free
+default, so no configuration RPC is required before the stack starts.
 
 The seed sets `install_nms_agent=True` only on this template. The build-time
 injector compiles the static agent from one pinned public commit using a
@@ -445,5 +449,6 @@ secure-prefix policy.
   YAML parseability, and reversible seeded-row cleanup stable.
 - the Akvorado seed keeps VMID `9070`, Kafka `4.2.0`, Valkey `9.0`, ClickHouse
   `26.3`, Akvorado `2.4.0`, the exact `akvorado.service` lifecycle contract,
-  working default config, agent opt-in/default-off behavior, source-template
-  marker, and rendered agent deduplication stable.
+  loopback-only console, working default config, HTTPS-only agent backend,
+  agent opt-in/default-off behavior, source-template marker, and structural
+  agent deduplication stable.

@@ -1,3 +1,4 @@
+import django.core.validators
 from django.db import migrations, models
 
 
@@ -23,9 +24,13 @@ class Migration(migrations.Migration):
             name="nms_agent_backend_url",
             field=models.URLField(
                 default="https://backend.nms.nmulti.cloud",
-                help_text=(
-                    "NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry."
-                ),
+                validators=[
+                    django.core.validators.URLValidator(
+                        message="Enter an HTTPS URL for the NMS agent backend.",
+                        schemes=["https"],
+                    )
+                ],
+                help_text=("HTTPS NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry."),
             ),
         ),
         migrations.AddField(

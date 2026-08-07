@@ -89,8 +89,8 @@ installer types.
 | `install_qemu_guest_agent` | BooleanField | `True` | Inject `qemu-guest-agent` package + `systemctl enable --now` runcmd into the cloud-config; skipped if `qemu-guest-agent` already appears in the installer config's packages list |
 | `install_zabbix_agent2` | BooleanField | `True` | Inject Zabbix Agent 2 bootstrap script into `write_files` + `runcmd`; skipped entirely when `"zabbix-agent2"` appears anywhere in the installer config (e.g. the Zabbix server seed manages its own agent) |
 | `zabbix_server` | CharField(255) | `"zabbix.nmulti.cloud"` | `ServerActive=` value in the injected `zabbix_agent2.conf`; validated against hostname/IP + optional `:port`, comma-separated; no spaces or shell metacharacters |
-| `install_nms_agent` | BooleanField | `False` | Inject the pinned static NMS host agent, config, and systemd unit; whole-payload deduplication skips injection when `"nms-agent"` is already present |
-| `nms_agent_backend_url` | URLField | `"https://backend.nms.nmulti.cloud"` | Credential-free HTTP(S) bootstrap/heartbeat/OTLP base URL; rendering rejects credentials, query strings, and fragments |
+| `install_nms_agent` | BooleanField | `False` | Inject the pinned static NMS host agent, config, and systemd unit; structural deduplication skips only when all managed files and the exact bootstrap command are present, and completes partial state |
+| `nms_agent_backend_url` | URLField | `"https://backend.nms.nmulti.cloud"` | HTTPS-only bootstrap/heartbeat/OTLP base URL; rendering also rejects credentials, query strings, and fragments |
 
 The Akvorado seed is the first template to set `install_nms_agent=True`. Its
 `provisions_service="akvorado"` marker also causes the injected local RPC

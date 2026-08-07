@@ -24,9 +24,7 @@ _ZABBIX_SERVER_RE = re.compile(r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.
 
 _NMS_AGENT_COMMIT = "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb"
 _NMS_AGENT_GO_VERSION = "1.24.13"
-_NMS_AGENT_GO_LINUX_AMD64_SHA256 = (
-    "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
-)
+_NMS_AGENT_GO_LINUX_AMD64_SHA256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
 
 # Minimum CPU arch requirements known to require non-default cpu_type
 MIN_CPU_KNOWN_REQUIREMENTS = {
@@ -249,7 +247,7 @@ systemctl enable --now zabbix-agent2
 
 
 def _normalize_nms_agent_backend_url(value: str) -> str:
-    """Return a safe HTTP(S) agent backend URL suitable for rendered YAML."""
+    """Return a safe HTTPS agent backend URL suitable for rendered YAML."""
 
     from urllib.parse import urlsplit, urlunsplit
 
@@ -261,16 +259,14 @@ def _normalize_nms_agent_backend_url(value: str) -> str:
     except ValueError as exc:
         raise ValueError(f"Invalid nms_agent_backend_url: {backend_url!r}") from exc
     if (
-        parts.scheme not in {"http", "https"}
+        parts.scheme != "https"
         or not parts.hostname
         or parts.username is not None
         or parts.password is not None
         or parts.query
         or parts.fragment
     ):
-        raise ValueError(
-            "nms_agent_backend_url must be an HTTP(S) URL without credentials, query, or fragment"
-        )
+        raise ValueError("nms_agent_backend_url must be an HTTPS URL without credentials, query, or fragment")
     normalized = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
     return normalized
 
@@ -286,9 +282,7 @@ def _nms_agent_allowed_units(template) -> list[str]:
 def _nms_agent_config(backend_url: str, allowed_units: list[str]) -> str:
     """Render the credential-free nms-agent configuration."""
 
-    allowed = "[]" if not allowed_units else "\n" + "\n".join(
-        f"    - {unit}" for unit in allowed_units
-    )
+    allowed = "[]" if not allowed_units else "\n" + "\n".join(f"    - {unit}" for unit in allowed_units)
     return f"""\
 backend_url: {json.dumps(_normalize_nms_agent_backend_url(backend_url))}
 identity_path: /etc/nms-agent/identity.json
@@ -407,8 +401,8 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
       always add the systemctl enable runcmd entry if not already present.
     - Zabbix Agent 2: skip all injection if 'zabbix-agent2' appears anywhere in the YAML
       (handles templates that already manage Zabbix themselves, e.g. the Zabbix server seed).
-    - nms-agent: disabled by default; skip all injection if 'nms-agent' appears anywhere in
-      the YAML so a template can own its installation without a duplicate bootstrap.
+    - nms-agent: disabled by default; skip injection only when all three managed files and
+      the exact bootstrap command are already present. Partial state is completed.
     """
     import yaml  # stdlib-adjacent; always available in NetBox's Django env via PyYAML
 
@@ -452,17 +446,27 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
             runcmds.append(["bash", script_path])
 
     # --- NMS Agent ---
-    if getattr(template, "install_nms_agent", False) and "nms-agent" not in user_data_yaml:
+    nms_agent_enabled = getattr(template, "install_nms_agent", False)
+    injection_complete = False
+    if nms_agent_enabled:
+        bootstrap_path = "/opt/nmulticloud-nms-agent-bootstrap.sh"
+        expected_paths = {
+            "/etc/nms-agent/config.yaml",
+            "/etc/systemd/system/nms-agent.service",
+            bootstrap_path,
+        }
+        existing_paths = {f.get("path") for f in write_files if isinstance(f, dict) and f.get("path")}
+        bootstrap_command = ["bash", bootstrap_path]
+        injection_complete = expected_paths.issubset(existing_paths) and (bootstrap_command in runcmds)
+
+    if nms_agent_enabled and not injection_complete:
         backend_url = getattr(template, "nms_agent_backend_url", "")
         allowed_units = _nms_agent_allowed_units(template)
         nms_files = (
             ("/etc/nms-agent/config.yaml", "0600", _nms_agent_config(backend_url, allowed_units)),
             ("/etc/systemd/system/nms-agent.service", "0644", _nms_agent_systemd_unit()),
-            ("/opt/nmulticloud-nms-agent-bootstrap.sh", "0750", _nms_agent_bootstrap()),
+            (bootstrap_path, "0750", _nms_agent_bootstrap()),
         )
-        existing_paths = {
-            f.get("path") for f in write_files if isinstance(f, dict) and f.get("path")
-        }
         for path, permissions, content in nms_files:
             if path not in existing_paths:
                 write_files.append(
@@ -473,9 +477,8 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
                         "content": content,
                     }
                 )
-        bootstrap_path = "/opt/nmulticloud-nms-agent-bootstrap.sh"
-        if not any(bootstrap_path in str(r) for r in runcmds):
-            runcmds.append(["bash", bootstrap_path])
+        if bootstrap_command not in runcmds:
+            runcmds.append(bootstrap_command)
 
     # --- Password SSH auth ---
     # Every cloud-init template must support username+password SSH (key-based
@@ -539,9 +542,7 @@ class PackerBuildJob(JobRunner):
         requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
         endpoint, node = select_build_node(
             template,
-            skip_affinity_check=bool(
-                requested_node and _resolve_endpoint_id(build.variable_overrides)
-            ),
+            skip_affinity_check=bool(requested_node and _resolve_endpoint_id(build.variable_overrides)),
         )
         if requested_node:
             node = requested_node

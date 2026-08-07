@@ -142,7 +142,10 @@ release `2.4.0`. The Compose lifecycle must remain wrapped by the single unit
 named exactly `akvorado.service`, operating
 `/opt/akvorado/docker-compose.yml`. The cloud-config must keep a working
 credential-free default Akvorado configuration so first boot does not depend
-on a config-deploy RPC. No container may use `latest`.
+on a config-deploy RPC. No container may use `latest`. Akvorado cannot
+authenticate console users itself, so the console must remain bound to
+`127.0.0.1:8081`; operators may reach it through an SSH tunnel or provision a
+separate authenticating reverse proxy.
 
 Migration `0023_packertemplate_nms_agent_and_service_marker.py` makes the NMS
 host-agent injection optional and default-off. Only the Akvorado seed opts in,

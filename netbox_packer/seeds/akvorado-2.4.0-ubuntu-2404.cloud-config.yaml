@@ -110,8 +110,10 @@ write_files:
             AKVORADO_CFG_CONSOLE_BRANDING: ${AKVORADO_CFG_CONSOLE_BRANDING:-false}
           volumes:
             - console-db:/run/akvorado
+          # Akvorado trusts identity headers from an authenticating reverse
+          # proxy; never publish its console directly on a wildcard address.
           ports:
-            - 8081:8080/tcp
+            - 127.0.0.1:8081:8080/tcp
           restart: unless-stopped
 
         akvorado-inlet:

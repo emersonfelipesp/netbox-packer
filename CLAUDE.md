@@ -172,8 +172,8 @@ Every cloud-config build pass through `_inject_monitoring_agents()` in `jobs.py`
 | `install_qemu_guest_agent` | bool | `True` | Adds `qemu-guest-agent` to the `packages:` list and `systemctl enable --now qemu-guest-agent` to `runcmd:`. Skipped if `qemu-guest-agent` is already in the `packages:` list. |
 | `install_zabbix_agent2` | bool | `True` | Injects a Zabbix Agent 2 bootstrap script (`write_files:` + `runcmd:`). Skipped entirely if the string `"zabbix-agent2"` appears anywhere in the original cloud-config YAML. |
 | `zabbix_server` | str (255) | `"zabbix.nmulti.cloud"` | `ServerActive=` directive written into the injected Zabbix agent config. |
-| `install_nms_agent` | bool | `False` | Injects the pinned static NMS host agent, root-only config, and systemd unit. Skipped entirely if `"nms-agent"` appears anywhere in the original YAML. Default-off preserves every existing template; the Akvorado seed opts in. |
-| `nms_agent_backend_url` | URL | `"https://backend.nms.nmulti.cloud"` | Bootstrap, heartbeat, and OTLP base URL. Rendering accepts credential-free HTTP(S) URLs only and rejects query strings/fragments. |
+| `install_nms_agent` | bool | `False` | Injects the pinned static NMS host agent, root-only config, and systemd unit. Injection is skipped only when all three managed paths and the exact bootstrap command are already present; partial state is completed. Default-off preserves every existing template; the Akvorado seed opts in. |
+| `nms_agent_backend_url` | URL | `"https://backend.nms.nmulti.cloud"` | Bootstrap, heartbeat, and OTLP base URL. Model/form/API validation and build rendering require HTTPS; rendering also rejects credentials, query strings, and fragments. |
 
 The injection is **idempotent** — running the same template twice produces the
 same cloud-config. The seeded Zabbix 7.4 template already has
@@ -303,7 +303,10 @@ Kafka `4.2.0`, Valkey `9.0`, ClickHouse `26.3`, and every Akvorado component to
 remain named exactly `akvorado.service` and operate
 `/opt/akvorado/docker-compose.yml`. The seed includes the default Akvorado
 configuration needed for a clean first boot; do not reintroduce a required
-post-boot config-deploy step.
+post-boot config-deploy step. Because Akvorado trusts a proxy-provided identity
+header instead of authenticating users itself, the console is bound only to
+`127.0.0.1:8081`; access requires an SSH tunnel or a separately provisioned
+authenticating reverse proxy.
 
 Created VMs already retain `source_packer_template`. Downstream hooks follow
 that lineage to `provisions_service="akvorado"`; do not replace this with

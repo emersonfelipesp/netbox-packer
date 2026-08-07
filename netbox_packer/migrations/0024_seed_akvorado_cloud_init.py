@@ -116,8 +116,10 @@ write_files:
             AKVORADO_CFG_CONSOLE_BRANDING: ${AKVORADO_CFG_CONSOLE_BRANDING:-false}
           volumes:
             - console-db:/run/akvorado
+          # Akvorado trusts identity headers from an authenticating reverse
+          # proxy; never publish its console directly on a wildcard address.
           ports:
-            - 8081:8080/tcp
+            - 127.0.0.1:8081:8080/tcp
           restart: unless-stopped
 
         akvorado-inlet:
@@ -393,48 +395,74 @@ def seed_akvorado(apps, schema_editor):
     PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
 
-    config, _ = PackerInstallerConfig.objects.update_or_create(
+    config_defaults = {
+        "os_family": "ubuntu",
+        "installer_type": "cloud_config",
+        "content": AKVORADO_CLOUD_CONFIG,
+        "checksum": hashlib.sha256(AKVORADO_CLOUD_CONFIG.encode()).hexdigest(),
+        "description": (
+            "Akvorado 2.4.0 all-in-one flow collector with Kafka 4.2.0, "
+            "Valkey 9.0, and ClickHouse 26.3. Docker Compose lifecycle is "
+            "managed by akvorado.service; no secrets are baked."
+        ),
+    }
+    config, config_created = PackerInstallerConfig.objects.get_or_create(
         name=CONFIG_NAME,
         version=CONFIG_VERSION,
-        defaults={
-            "os_family": "ubuntu",
-            "installer_type": "cloud_config",
-            "content": AKVORADO_CLOUD_CONFIG,
-            "checksum": hashlib.sha256(AKVORADO_CLOUD_CONFIG.encode()).hexdigest(),
-            "description": (
-                "Akvorado 2.4.0 all-in-one flow collector with Kafka 4.2.0, "
-                "Valkey 9.0, and ClickHouse 26.3. Docker Compose lifecycle is "
-                "managed by akvorado.service; no secrets are baked."
-            ),
-        },
+        defaults=config_defaults,
     )
+    if not config_created:
+        mismatches = [field for field, expected in config_defaults.items() if getattr(config, field) != expected]
+        if mismatches:
+            raise RuntimeError(
+                f"Akvorado seed naming collision: installer config {CONFIG_NAME!r} "
+                f"version {CONFIG_VERSION!r} already exists with different values for "
+                f"{', '.join(mismatches)}. Rename the existing row, or delete it if it is "
+                "genuinely obsolete, then rerun the migration. No existing row was modified."
+            )
 
-    PackerTemplate.objects.update_or_create(
+    template_defaults = {
+        "os_family": "ubuntu",
+        "os_version": "24.04",
+        "proxmox_template_id": TEMPLATE_VMID,
+        "proxmox_endpoint": PROXMOX_ENDPOINT,
+        "proxmox_node": PROXMOX_NODE,
+        "storage_pool": "local",
+        "cloud_init_ready": True,
+        "build_status": "pending",
+        "packer_template_ref": "",
+        "install_qemu_guest_agent": True,
+        "install_zabbix_agent2": True,
+        "zabbix_server": "zabbix.nmulti.cloud",
+        "install_nms_agent": True,
+        "nms_agent_backend_url": "https://backend.nms.nmulti.cloud",
+        "provisions_service": "akvorado",
+        "installer_config": config,
+        "description": (
+            "Akvorado 2.4.0 golden cloud-init template (VMID 9070) on "
+            "CLUSTER01-DC01. First boot starts the complete pinned Compose "
+            "stack and self-registers the injected NMS host agent."
+        ),
+    }
+    template, template_created = PackerTemplate.objects.get_or_create(
         name=TEMPLATE_NAME,
-        defaults={
-            "os_family": "ubuntu",
-            "os_version": "24.04",
-            "proxmox_template_id": TEMPLATE_VMID,
-            "proxmox_endpoint": PROXMOX_ENDPOINT,
-            "proxmox_node": PROXMOX_NODE,
-            "storage_pool": "local",
-            "cloud_init_ready": True,
-            "build_status": "pending",
-            "packer_template_ref": "",
-            "install_qemu_guest_agent": True,
-            "install_zabbix_agent2": True,
-            "zabbix_server": "zabbix.nmulti.cloud",
-            "install_nms_agent": True,
-            "nms_agent_backend_url": "https://backend.nms.nmulti.cloud",
-            "provisions_service": "akvorado",
-            "installer_config": config,
-            "description": (
-                "Akvorado 2.4.0 golden cloud-init template (VMID 9070) on "
-                "CLUSTER01-DC01. First boot starts the complete pinned Compose "
-                "stack and self-registers the injected NMS host agent."
-            ),
-        },
+        defaults=template_defaults,
     )
+    if not template_created:
+        template_expected_values = {
+            field: expected for field, expected in template_defaults.items() if field != "installer_config"
+        }
+        template_expected_values["installer_config_id"] = config.pk
+        mismatches = [
+            field for field, expected in template_expected_values.items() if getattr(template, field) != expected
+        ]
+        if mismatches:
+            raise RuntimeError(
+                f"Akvorado seed naming collision: template {TEMPLATE_NAME!r} already exists "
+                f"with different values for {', '.join(mismatches)}. Rename the existing row, "
+                "or delete it if it is genuinely obsolete, then rerun the migration. "
+                "No existing row was modified."
+            )
 
 
 def unseed_akvorado(apps, schema_editor):

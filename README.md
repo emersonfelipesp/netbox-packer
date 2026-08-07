@@ -51,7 +51,9 @@ post-boot config RPC. The template enables the optional NMS host-agent
 injection against `https://backend.nms.nmulti.cloud`; existing templates keep
 that injection disabled by default. Provisioned VMs retain the existing
 `source_packer_template` lineage, which downstream hooks follow to the
-template's read-only `provisions_service="akvorado"` marker.
+template's read-only `provisions_service="akvorado"` marker. The console is
+loopback-only on `127.0.0.1:8081`; expose it only through an SSH tunnel or a
+separately provisioned authenticating reverse proxy.
 
 The Zabbix 7.4 monitoring stack seed is
 `zabbix-7.4-ubuntu-2604-pgsql-nginx`, VMID `9010`, on the development endpoint

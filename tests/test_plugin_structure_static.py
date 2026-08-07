@@ -109,6 +109,8 @@ def test_packer_template_model_fields() -> None:
     ):
         assert field in block, f"Missing field '{field}' in PackerTemplate"
 
+    assert "validators=[NMS_AGENT_BACKEND_URL_VALIDATOR]" in block
+
 
 def test_packer_template_computed_properties() -> None:
     """PackerTemplate must have age_days, is_stale, and derived_vms properties."""

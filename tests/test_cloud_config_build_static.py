@@ -46,6 +46,14 @@ def _resolve_static_value(node: ast.AST, constants: dict[str, object]) -> object
 def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
     tree = ast.parse(_read(rel))
     constants = _literal_assignments(rel)
+    dict_assignments = {
+        node.targets[0].id: node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Dict)
+    }
 
     for call in ast.walk(tree):
         if not isinstance(call, ast.Call):
@@ -63,6 +71,9 @@ def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
                 name = _resolve_static_value(keyword.value, constants)
             elif keyword.arg == "defaults":
                 defaults_node = keyword.value
+
+        if isinstance(defaults_node, ast.Name):
+            defaults_node = dict_assignments.get(defaults_node.id)
 
         if name != constants.get("TEMPLATE_NAME") or not isinstance(defaults_node, ast.Dict):
             continue
@@ -1035,11 +1046,20 @@ def test_model_has_monitoring_agent_fields() -> None:
     assert "install_zabbix_agent2 = models.BooleanField(" in src
     assert "install_nms_agent = models.BooleanField(" in src
     assert "nms_agent_backend_url = models.URLField(" in src
+    assert 'schemes=["https"]' in src
+    assert "validators=[NMS_AGENT_BACKEND_URL_VALIDATOR]" in src
     assert "zabbix_server = models.CharField(" in src
     assert '"zabbix.nmulti.cloud"' in src
     assert 'default="https://backend.nms.nmulti.cloud"' in src
     assert "provisions_service = models.CharField(" in src
     assert 'default="", editable=False' in src
+
+    forms_src = _read("netbox_packer/forms.py")
+    serializers_src = _read("netbox_packer/api/serializers.py")
+    assert "def clean_nms_agent_backend_url(self):" in forms_src
+    assert "NMS_AGENT_BACKEND_URL_VALIDATOR(value)" in forms_src
+    assert "def validate_nms_agent_backend_url(self, value):" in serializers_src
+    assert 'urlsplit(value).scheme.lower() != "https"' in serializers_src
 
 
 def test_migration_0008_adds_monitoring_agent_fields() -> None:
@@ -1057,6 +1077,8 @@ def test_migration_0023_adds_optional_nms_agent_and_service_marker() -> None:
     assert "default=False" in src
     assert 'name="nms_agent_backend_url"' in src
     assert 'default="https://backend.nms.nmulti.cloud"' in src
+    assert 'schemes=["https"]' in src
+    assert "Enter an HTTPS URL for the NMS agent backend." in src
     assert 'name="provisions_service"' in src
     assert "editable=False" in src
 
@@ -1071,7 +1093,9 @@ def test_jobs_has_monitoring_injection_functions() -> None:
     # Zabbix whole-YAML dedup: skip entirely if zabbix-agent2 already in content.
     assert '"zabbix-agent2" not in user_data_yaml' in src
     assert 'getattr(template, "install_nms_agent", False)' in src
-    assert '"nms-agent" not in user_data_yaml' in src
+    assert '"nms-agent" not in user_data_yaml' not in src
+    assert "expected_paths.issubset(existing_paths)" in src
+    assert "bootstrap_command in runcmds" in src
     assert 'return ["akvorado.service"]' in src
     # Zabbix bootstrap script uses ServerActive= with the configured server.
     assert "ServerActive=" in src
@@ -1159,10 +1183,71 @@ def test_nms_agent_injection_defaults_off_and_rejects_unsafe_backend(monkeypatch
     else:  # pragma: no cover - unsafe interpolation must fail closed
         raise AssertionError("expected credential-bearing backend URL to be rejected")
 
+    try:
+        mod._normalize_nms_agent_backend_url("http://backend.nms.nmulti.cloud")
+    except ValueError as exc:
+        assert "HTTPS URL" in str(exc)
+    else:  # pragma: no cover - plaintext bootstrap transport must fail closed
+        raise AssertionError("expected an HTTP backend URL to be rejected")
+
+
+def test_nms_agent_comment_only_mention_does_not_skip_injection(monkeypatch) -> None:
+    mod = _load_jobs_isolated(monkeypatch)
+    template = SimpleNamespace(
+        install_qemu_guest_agent=False,
+        install_zabbix_agent2=False,
+        install_nms_agent=True,
+        nms_agent_backend_url="https://backend.nms.nmulti.cloud",
+        provisions_service="",
+    )
+
+    rendered = mod._inject_monitoring_agents(
+        "#cloud-config\n# nms-agent is installed only when requested\npackage_update: false\n",
+        template,
+    )
+    config = yaml.safe_load(rendered.split("\n", 1)[1])
+
+    assert {item["path"] for item in config["write_files"]} == {
+        "/etc/nms-agent/config.yaml",
+        "/etc/systemd/system/nms-agent.service",
+        "/opt/nmulticloud-nms-agent-bootstrap.sh",
+    }
+    assert ["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"] in config["runcmd"]
+
+
+def test_nms_agent_partial_injection_is_completed(monkeypatch) -> None:
+    mod = _load_jobs_isolated(monkeypatch)
+    template = SimpleNamespace(
+        install_qemu_guest_agent=False,
+        install_zabbix_agent2=False,
+        install_nms_agent=True,
+        nms_agent_backend_url="https://backend.nms.nmulti.cloud",
+        provisions_service="",
+    )
+    partial = """#cloud-config
+write_files:
+  - path: /etc/systemd/system/nms-agent.service
+    permissions: '0644'
+    content: existing-unit
+"""
+
+    rendered = mod._inject_monitoring_agents(partial, template)
+    config = yaml.safe_load(rendered.split("\n", 1)[1])
+    files = {item["path"]: item for item in config["write_files"]}
+
+    assert set(files) == {
+        "/etc/nms-agent/config.yaml",
+        "/etc/systemd/system/nms-agent.service",
+        "/opt/nmulticloud-nms-agent-bootstrap.sh",
+    }
+    assert files["/etc/systemd/system/nms-agent.service"]["content"] == "existing-unit"
+    assert config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
+
 
 def test_akvorado_seed_contract() -> None:
     rel = "netbox_packer/migrations/0024_seed_akvorado_cloud_init.py"
     seed_rel = "netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml"
+    source = _read(rel)
     constants = _literal_assignments(rel)
     seed = _read(seed_rel)
     name, defaults = _packer_template_seed_defaults(rel)
@@ -1175,6 +1260,10 @@ def test_akvorado_seed_contract() -> None:
     assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
     assert constants["PROXMOX_NODE"] == "10.0.30.71"
     assert name == constants["TEMPLATE_NAME"]
+    assert "update_or_create(" not in source
+    assert source.count("objects.get_or_create(") == 2
+    assert "Akvorado seed naming collision" in source
+    assert 'template_expected_values["installer_config_id"] = config.pk' in source
 
     assert defaults["proxmox_template_id"] == 9070
     assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
@@ -1203,7 +1292,10 @@ def test_akvorado_seed_contract() -> None:
         assert services[component]["image"] == "quay.io/akvorado/akvorado:2.4.0"
     assert "redis" not in services
     assert all("latest" not in service.get("image", "") for service in services.values())
-    assert services["akvorado-console"]["ports"] == ["8081:8080/tcp"]
+    console_ports = services["akvorado-console"]["ports"]
+    assert console_ports == ["127.0.0.1:8081:8080/tcp"]
+    assert all(port.startswith("127.0.0.1:") for port in console_ports)
+    assert "ports" not in services["akvorado-orchestrator"]
     assert set(services["akvorado-inlet"]["ports"]) == {
         "2055:2055/udp",
         "4739:4739/udp",
@@ -1218,6 +1310,8 @@ def test_akvorado_seed_contract() -> None:
         "type": "redis",
         "server": "valkey:6379",
     }
+    assert "default-user" not in files["/opt/akvorado/config/console.yaml"].lower()
+    assert "anonymous" not in files["/opt/akvorado/config/console.yaml"].lower()
     service = files["/etc/systemd/system/akvorado.service"]
     assert "ExecStart=/usr/bin/docker compose -f /opt/akvorado/docker-compose.yml up -d" in service
     assert "ExecStop=/usr/bin/docker compose -f /opt/akvorado/docker-compose.yml down" in service

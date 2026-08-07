@@ -1,7 +1,7 @@
 import base64
 import hashlib
 
-from django.core.validators import RegexValidator
+from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
@@ -10,6 +10,11 @@ from .choices import (
     OSFamilyChoices,
     StorageFormatChoices,
     StoragePoolTypeChoices,
+)
+
+NMS_AGENT_BACKEND_URL_VALIDATOR = URLValidator(
+    schemes=["https"],
+    message="Enter an HTTPS URL for the NMS agent backend.",
 )
 
 
@@ -143,7 +148,8 @@ class PackerTemplate(NetBoxModel):
     )
     nms_agent_backend_url = models.URLField(
         default="https://backend.nms.nmulti.cloud",
-        help_text="NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry.",
+        validators=[NMS_AGENT_BACKEND_URL_VALIDATOR],
+        help_text=("HTTPS NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry."),
     )
     zabbix_server = models.CharField(
         max_length=255,
@@ -380,10 +386,7 @@ class PackerPluginSettings(NetBoxModel):
         blank=True,
         default="",
         editable=False,
-        help_text=(
-            "Fernet-encrypted package-index read token "
-            "(set via set_fileserver_package_read_token())."
-        ),
+        help_text=("Fernet-encrypted package-index read token (set via set_fileserver_package_read_token())."),
     )
 
     class Meta:
