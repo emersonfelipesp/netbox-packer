@@ -1,7 +1,7 @@
 import base64
 import hashlib
 
-from django.core.validators import RegexValidator
+from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
@@ -10,6 +10,11 @@ from .choices import (
     OSFamilyChoices,
     StorageFormatChoices,
     StoragePoolTypeChoices,
+)
+
+NMS_AGENT_BACKEND_URL_VALIDATOR = URLValidator(
+    schemes=["https"],
+    message="Enter an HTTPS URL for the NMS agent backend.",
 )
 
 
@@ -134,6 +139,18 @@ class PackerTemplate(NetBoxModel):
             "Skipped entirely if the installer config already mentions zabbix-agent2."
         ),
     )
+    install_nms_agent = models.BooleanField(
+        default=False,
+        help_text=(
+            "Inject the pinned nms-agent bootstrap into the cloud-config at build time. "
+            "Disabled by default so existing templates are unchanged."
+        ),
+    )
+    nms_agent_backend_url = models.URLField(
+        default="https://backend.nms.nmulti.cloud",
+        validators=[NMS_AGENT_BACKEND_URL_VALIDATOR],
+        help_text=("HTTPS NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry."),
+    )
     zabbix_server = models.CharField(
         max_length=255,
         default="zabbix.nmulti.cloud",
@@ -182,6 +199,13 @@ class PackerTemplate(NetBoxModel):
     # `unique=True` on `name` above prevents two rows sharing the name
     # *simultaneously*; this flag is what prevents *reclaiming* the name.
     is_fileserver_golden_template = models.BooleanField(default=False, editable=False)
+
+    # Stable, migration-managed service identity for downstream provisioning
+    # hooks. Created VMs already retain source_packer_template, so consumers can
+    # follow that lineage to this marker without relying on hostnames or adding
+    # a second per-VM tag. Non-editable prevents operators from accidentally
+    # changing the meaning of an established golden template.
+    provisions_service = models.CharField(max_length=64, blank=True, default="", editable=False)
 
     class Meta:
         ordering = ["name"]
@@ -362,10 +386,7 @@ class PackerPluginSettings(NetBoxModel):
         blank=True,
         default="",
         editable=False,
-        help_text=(
-            "Fernet-encrypted package-index read token "
-            "(set via set_fileserver_package_read_token())."
-        ),
+        help_text=("Fernet-encrypted package-index read token (set via set_fileserver_package_read_token())."),
     )
 
     class Meta:

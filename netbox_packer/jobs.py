@@ -1,5 +1,6 @@
 """RQ background jobs for netbox-packer."""
 
+import json
 import logging
 import re
 import subprocess
@@ -20,6 +21,10 @@ logger = logging.getLogger("netbox_packer.jobs")
 # Zabbix ServerActive= value: hostname/IP (optional IPv6 brackets) with optional :port,
 # comma-separated for multiple servers.  No spaces, newlines, or shell metacharacters.
 _ZABBIX_SERVER_RE = re.compile(r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$")
+
+_NMS_AGENT_COMMIT = "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb"
+_NMS_AGENT_GO_VERSION = "1.24.13"
+_NMS_AGENT_GO_LINUX_AMD64_SHA256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
 
 # Minimum CPU arch requirements known to require non-default cpu_type
 MIN_CPU_KNOWN_REQUIREMENTS = {
@@ -241,14 +246,163 @@ systemctl enable --now zabbix-agent2
 """
 
 
+def _normalize_nms_agent_backend_url(value: str) -> str:
+    """Return a safe HTTPS agent backend URL suitable for rendered YAML."""
+
+    from urllib.parse import urlsplit, urlunsplit
+
+    backend_url = (value or "").strip() or "https://backend.nms.nmulti.cloud"
+    try:
+        parts = urlsplit(backend_url)
+        # Accessing port also rejects malformed/out-of-range values.
+        _ = parts.port
+    except ValueError as exc:
+        raise ValueError(f"Invalid nms_agent_backend_url: {backend_url!r}") from exc
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError("nms_agent_backend_url must be an HTTPS URL without credentials, query, or fragment")
+    normalized = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    return normalized
+
+
+def _nms_agent_allowed_units(template) -> list[str]:
+    """Map durable template service markers to the agent's local allowlist."""
+
+    if getattr(template, "provisions_service", "") == "akvorado":
+        return ["akvorado.service"]
+    return []
+
+
+def _nms_agent_config(backend_url: str, allowed_units: list[str]) -> str:
+    """Render the credential-free nms-agent configuration."""
+
+    allowed = "[]" if not allowed_units else "\n" + "\n".join(f"    - {unit}" for unit in allowed_units)
+    return f"""\
+backend_url: {json.dumps(_normalize_nms_agent_backend_url(backend_url))}
+identity_path: /etc/nms-agent/identity.json
+token_path: /etc/nms-agent/token
+signing_key_path: /etc/nms-agent/backend_signing.pub
+log_level: info
+otlp:
+  enabled: true
+  endpoint: {json.dumps(_normalize_nms_agent_backend_url(backend_url))}
+  insecure: false
+  headers: {{}}
+zabbix:
+  enabled: false
+  manage_agent2: false
+  server: zabbix.nmulti.cloud
+  host_metadata: ""
+intervals:
+  poll_s: 15
+  heartbeat_s: 60
+  metrics_s: 30
+  enroll_s: 30
+rpc:
+  enabled: true
+  allowed_units: {allowed}
+"""
+
+
+def _nms_agent_systemd_unit() -> str:
+    """Return the upstream-compatible nms-agent systemd service definition."""
+
+    return """\
+[Unit]
+Description=NMS Agent - telemetry and RPC agent for the NMS platform
+Documentation=https://git.nmulti.cloud/N-MultiCloud/nms-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nms-agent run --config /etc/nms-agent/config.yaml
+Restart=on-failure
+RestartSec=5
+User=root
+UMask=0077
+NoNewPrivileges=false
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def _nms_agent_bootstrap() -> str:
+    """Build and install nms-agent from its pinned source commit.
+
+    nms-agent currently publishes neither release binaries nor repository
+    packages. The build therefore fetches one exact public Git commit and uses
+    a SHA256-verified Go toolchain to produce its documented static binary.
+    """
+
+    return f"""\
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+readonly NMS_AGENT_COMMIT='{_NMS_AGENT_COMMIT}'
+readonly GO_VERSION='{_NMS_AGENT_GO_VERSION}'
+readonly GO_SHA256='{_NMS_AGENT_GO_LINUX_AMD64_SHA256}'
+readonly NMS_AGENT_REPOSITORY='https://git.nmulti.cloud/N-MultiCloud/nms-agent.git'
+
+test "$(dpkg --print-architecture)" = 'amd64'
+apt-get update -qq
+apt-get install -y --no-install-recommends ca-certificates curl git
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "${{workdir}}"' EXIT
+curl --fail --silent --show-error --location --retry 3 \
+  --output "${{workdir}}/go.tar.gz" \
+  "https://go.dev/dl/go${{GO_VERSION}}.linux-amd64.tar.gz"
+printf '%s  %s\n' "${{GO_SHA256}}" "${{workdir}}/go.tar.gz" | sha256sum --check --strict -
+tar -C "${{workdir}}" -xzf "${{workdir}}/go.tar.gz"
+
+git init --quiet "${{workdir}}/nms-agent"
+git -C "${{workdir}}/nms-agent" remote add origin "${{NMS_AGENT_REPOSITORY}}"
+git -C "${{workdir}}/nms-agent" fetch --quiet --depth 1 origin "${{NMS_AGENT_COMMIT}}"
+git -C "${{workdir}}/nms-agent" checkout --quiet --detach FETCH_HEAD
+test "$(git -C "${{workdir}}/nms-agent" rev-parse HEAD)" = "${{NMS_AGENT_COMMIT}}"
+
+cd "${{workdir}}/nms-agent"
+"${{workdir}}/go/bin/go" mod download
+ldflags=(
+  '-s'
+  '-w'
+  '-X'
+  "git.nmulti.cloud/N-MultiCloud/nms-agent/internal/version.Version=${{NMS_AGENT_COMMIT}}"
+  '-X'
+  "git.nmulti.cloud/N-MultiCloud/nms-agent/internal/version.Commit=${{NMS_AGENT_COMMIT}}"
+)
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "${{workdir}}/go/bin/go" build \
+  -trimpath \
+  -ldflags "${{ldflags[*]}}" \
+  -o "${{workdir}}/nms-agent-bin" ./cmd/nms-agent
+install -o root -g root -m 0755 "${{workdir}}/nms-agent-bin" /usr/bin/nms-agent
+/usr/bin/nms-agent version | grep -F "${{NMS_AGENT_COMMIT}}"
+
+install -d -o root -g root -m 0700 /etc/nms-agent
+systemctl daemon-reload
+systemctl enable --now nms-agent.service
+"""
+
+
 def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
-    """Inject QEMU Guest Agent and/or Zabbix Agent 2 into a #cloud-config YAML string.
+    """Inject QEMU Guest Agent, Zabbix Agent 2, and/or nms-agent into cloud-config.
 
     Deduplication rules:
     - QEMU Guest Agent: skip package add if 'qemu-guest-agent' already in packages list;
       always add the systemctl enable runcmd entry if not already present.
     - Zabbix Agent 2: skip all injection if 'zabbix-agent2' appears anywhere in the YAML
       (handles templates that already manage Zabbix themselves, e.g. the Zabbix server seed).
+    - nms-agent: disabled by default; skip injection only when all three managed files and
+      the exact bootstrap command are already present. Partial state is completed.
     """
     import yaml  # stdlib-adjacent; always available in NetBox's Django env via PyYAML
 
@@ -290,6 +444,41 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
             )
         if not any(script_path in str(r) for r in runcmds):
             runcmds.append(["bash", script_path])
+
+    # --- NMS Agent ---
+    nms_agent_enabled = getattr(template, "install_nms_agent", False)
+    injection_complete = False
+    if nms_agent_enabled:
+        bootstrap_path = "/opt/nmulticloud-nms-agent-bootstrap.sh"
+        expected_paths = {
+            "/etc/nms-agent/config.yaml",
+            "/etc/systemd/system/nms-agent.service",
+            bootstrap_path,
+        }
+        existing_paths = {f.get("path") for f in write_files if isinstance(f, dict) and f.get("path")}
+        bootstrap_command = ["bash", bootstrap_path]
+        injection_complete = expected_paths.issubset(existing_paths) and (bootstrap_command in runcmds)
+
+    if nms_agent_enabled and not injection_complete:
+        backend_url = getattr(template, "nms_agent_backend_url", "")
+        allowed_units = _nms_agent_allowed_units(template)
+        nms_files = (
+            ("/etc/nms-agent/config.yaml", "0600", _nms_agent_config(backend_url, allowed_units)),
+            ("/etc/systemd/system/nms-agent.service", "0644", _nms_agent_systemd_unit()),
+            (bootstrap_path, "0750", _nms_agent_bootstrap()),
+        )
+        for path, permissions, content in nms_files:
+            if path not in existing_paths:
+                write_files.append(
+                    {
+                        "path": path,
+                        "permissions": permissions,
+                        "owner": "root:root",
+                        "content": content,
+                    }
+                )
+        if bootstrap_command not in runcmds:
+            runcmds.append(bootstrap_command)
 
     # --- Password SSH auth ---
     # Every cloud-init template must support username+password SSH (key-based
@@ -353,9 +542,7 @@ class PackerBuildJob(JobRunner):
         requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
         endpoint, node = select_build_node(
             template,
-            skip_affinity_check=bool(
-                requested_node and _resolve_endpoint_id(build.variable_overrides)
-            ),
+            skip_affinity_check=bool(requested_node and _resolve_endpoint_id(build.variable_overrides)),
         )
         if requested_node:
             node = requested_node
@@ -434,6 +621,12 @@ class PackerBuildJob(JobRunner):
         log_lines += [
             f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
             f"[INFO] Zabbix Agent 2 injection: {zabbix_status}",
+            "[INFO] NMS Agent injection: "
+            + (
+                f"enabled (backend={_normalize_nms_agent_backend_url(template.nms_agent_backend_url)})"
+                if getattr(template, "install_nms_agent", False)
+                else "disabled"
+            ),
         ]
 
         try:

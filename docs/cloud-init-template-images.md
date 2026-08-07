@@ -336,6 +336,64 @@ content directly. No secret is baked into the image: per-VM username,
 password (`cipassword`), and SSH keys are supplied by Proxmox cloud-init at
 clone time.
 
+## Akvorado 2.4.0 Template
+
+Migrations `0023_packertemplate_nms_agent_and_service_marker.py` and
+`0024_seed_akvorado_cloud_init.py` add the optional NMS host-agent injection
+fields, durable service marker, and Akvorado golden template.
+
+| Field | Value |
+| --- | --- |
+| Template name | `akvorado-2.4.0-ubuntu-2404` |
+| Installer config | `akvorado-2.4.0-ubuntu-2404-cloud-config` version `2.4.0` |
+| Cloud-config source | `netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml` |
+| OS | Ubuntu `24.04` |
+| Template VMID | `9070` |
+| Proxmox endpoint | `https://10.0.30.71:8006` |
+| Proxmox node / SSH host | `10.0.30.71` |
+| Storage | `local` |
+| Service marker | `akvorado` |
+| Lifecycle unit | `akvorado.service` |
+
+On first boot, the cloud-config checksum-verifies the Docker APT signing key,
+installs Docker Engine and the Compose plugin, validates and pulls
+`/opt/akvorado/docker-compose.yml`, then enables `akvorado.service`. That single
+oneshot unit owns the complete Compose lifecycle with `up -d --wait` on start
+and `down` on stop. The Compose stack pins:
+
+- Kafka `apache/kafka:4.2.0` in single-node KRaft mode;
+- Valkey `valkey/valkey:9.0` (there is no Redis server or Redis container);
+- ClickHouse `26.3` (`clickhouse/clickhouse-server:26.3`);
+- Akvorado console, inlet, outlet, and orchestrator at
+  `quay.io/akvorado/akvorado:2.4.0`.
+
+The console uses Akvorado's cache driver named `redis` to speak the
+Redis-compatible protocol to `valkey:6379`; the backing service is Valkey.
+Flow receivers listen on UDP `2055`, `4739`, and `6343`, the BMP receiver on
+TCP `10179`, and the console only on loopback at `127.0.0.1:8081`. Akvorado's
+console trusts an identity header from a fronting authenticating proxy and does
+not authenticate users itself, so the template does not publish it on a
+wildcard host address. Reach it through an SSH tunnel to loopback port `8081`,
+or provision a separate authenticating reverse proxy explicitly. The shipped
+`akvorado.yaml` plus inlet/outlet/console includes is a working credential-free
+default, so no configuration RPC is required before the stack starts.
+
+The seed sets `install_nms_agent=True` only on this template. The build-time
+injector compiles the static agent from one pinned public commit using a
+SHA256-verified Go toolchain, writes a root-only config pointing at
+`https://backend.nms.nmulti.cloud`, and enables its systemd unit. It reuses the
+agent's secure-prefix self-registration flow and contains no enrollment token,
+backend signing key, or other trust material. Zabbix management inside that
+agent is disabled because the existing Zabbix Agent 2 injection remains the
+owner of Zabbix configuration. Its local service allowlist contains exactly
+`akvorado.service`.
+
+Created VMs already store the source template primary key in the
+`source_packer_template` custom field. Downstream integration code follows
+that existing lineage to the read-only
+`PackerTemplate.provisions_service="akvorado"` marker instead of guessing from
+a hostname or introducing another VM tag.
+
 ## Build Verification
 
 After either current InfluxDB build completes, the template row should be
@@ -355,6 +413,16 @@ template on `10.0.30.71`. On a clone before tenant provisioning, Samba and
 nginx should remain inactive, `zabbix-agent2` should point at
 `zabbix.nmulti.cloud`, and `/etc/nms-fileserver-agent/config.env` should contain
 only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
+
+For Akvorado, VMID `9070` should be marked as a template on `10.0.30.71` and
+retain the cloud-init snippet. On a fresh clone, wait for
+`cloud-init status --wait`, then verify `systemctl is-active akvorado.service`
+and `systemctl is-active nms-agent.service`. `docker compose -f
+/opt/akvorado/docker-compose.yml ps` should show all seven services running and
+the Kafka, Valkey, ClickHouse, orchestrator, and console health checks should
+settle healthy. The agent journal should show a bootstrap attempt against
+`backend.nms.nmulti.cloud`; authorization still follows the existing
+secure-prefix policy.
 
 ## Regression Coverage
 
@@ -379,3 +447,8 @@ only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
   `https://10.0.30.71:8006`, production NMS URLs, service-disabled defaults,
   root-only package-index configuration, package-Read credential placeholders,
   YAML parseability, and reversible seeded-row cleanup stable.
+- the Akvorado seed keeps VMID `9070`, Kafka `4.2.0`, Valkey `9.0`, ClickHouse
+  `26.3`, Akvorado `2.4.0`, the exact `akvorado.service` lifecycle contract,
+  loopback-only console, working default config, HTTPS-only agent backend,
+  agent opt-in/default-off behavior, source-template marker, and structural
+  agent deduplication stable.

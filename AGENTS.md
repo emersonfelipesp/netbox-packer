@@ -128,3 +128,31 @@ SSH keys are supplied at clone time by Proxmox cloud-init. This is also the
 only seed migration whose reverse function is fully reversible (it deletes the
 three seeded rows on rollback); every other seed migration's reverse function
 is a no-op to avoid destroying operator data.
+
+## Akvorado Golden Template Guardrail
+
+Migration `0024_seed_akvorado_cloud_init.py` seeds
+`akvorado-2.4.0-ubuntu-2404` with VMID `9070` on CLUSTER01-DC01,
+`https://10.0.30.71:8006` / node `10.0.30.71`. Its verbatim cloud-config is
+`netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml`.
+
+The stack is Kafka `4.2.0`, Valkey `9.0` (never a Redis server image),
+ClickHouse `26.3`, and Akvorado console/inlet/outlet/orchestrator pinned to
+release `2.4.0`. The Compose lifecycle must remain wrapped by the single unit
+named exactly `akvorado.service`, operating
+`/opt/akvorado/docker-compose.yml`. The cloud-config must keep a working
+credential-free default Akvorado configuration so first boot does not depend
+on a config-deploy RPC. No container may use `latest`. Akvorado cannot
+authenticate console users itself, so the console must remain bound to
+`127.0.0.1:8081`; operators may reach it through an SSH tunnel or provision a
+separate authenticating reverse proxy.
+
+Migration `0023_packertemplate_nms_agent_and_service_marker.py` makes the NMS
+host-agent injection optional and default-off. Only the Akvorado seed opts in,
+points at `https://backend.nms.nmulti.cloud`, and sets the non-editable
+`provisions_service="akvorado"` marker. Downstream code follows the existing
+`source_packer_template` VM lineage to that marker. Agent enrollment must reuse
+the existing secure-prefix bootstrap flow; never bake a token, signing key, or
+new trust mechanism. Its local service allowlist contains exactly
+`akvorado.service`, while the existing Zabbix injection remains responsible for
+Zabbix Agent 2.

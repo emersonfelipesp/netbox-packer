@@ -5,6 +5,7 @@ Runs under NetBox: ``python manage.py test netbox_packer``.
 
 from django.test import TestCase
 
+from netbox_packer.api.serializers import PackerTemplateSerializer
 from netbox_packer.choices import OSFamilyChoices
 from netbox_packer.forms import PackerTemplateForm
 from netbox_packer.models import PackerTemplate
@@ -18,6 +19,7 @@ def _base_data(**overrides):
         "proxmox_template_id": 9100,
         "proxmox_node": "pve01",
         "build_status": "pending",
+        "nms_agent_backend_url": "https://backend.nms.nmulti.cloud",
     }
     data.update(overrides)
     return data
@@ -61,3 +63,27 @@ class PackerTemplateFormOSPairingTest(TestCase):
             instance=template,
         )
         self.assertTrue(form.is_valid(), form.errors)
+
+
+class NmsAgentBackendUrlValidationTest(TestCase):
+    def test_form_rejects_plaintext_http_backend(self):
+        form = PackerTemplateForm(
+            data=_base_data(
+                name="http-form-template",
+                nms_agent_backend_url="http://backend.nms.nmulti.cloud",
+            )
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("HTTPS URL", str(form.errors["nms_agent_backend_url"]))
+
+    def test_serializer_rejects_plaintext_http_backend(self):
+        serializer = PackerTemplateSerializer(
+            data=_base_data(
+                name="http-api-template",
+                nms_agent_backend_url="http://backend.nms.nmulti.cloud",
+            )
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("HTTPS URL", str(serializer.errors["nms_agent_backend_url"]))

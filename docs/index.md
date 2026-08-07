@@ -29,6 +29,15 @@ a local PostgreSQL database and nginx (PHP 8.5), initializing the Zabbix
 database schema on first boot. Do not target the production
 `https://10.0.30.9:8006` / `10.0.30.9` cluster with this seed.
 
+The Akvorado seed is `akvorado-2.4.0-ubuntu-2404`, VMID `9070`, on
+CLUSTER01-DC01 (`https://10.0.30.71:8006` / `10.0.30.71`). Its first-boot
+cloud-config installs Docker and starts the pinned Kafka `4.2.0`, Valkey `9.0`,
+ClickHouse `26.3`, and Akvorado `2.4.0` stack under `akvorado.service`. It ships
+a working credential-free default configuration and opts into NMS host-agent
+self-registration; the agent stays opt-in for every other template. The console
+binds only to `127.0.0.1:8081` and requires an SSH tunnel or a separately
+provisioned authenticating reverse proxy.
+
 InfluxDB is available as two endpoint-agnostic profiles: OSS `2.9.1` for
 Proxmox metrics/Flux (VMID `9050`) and Core `3.11.0` for general-purpose
 SQL/InfluxQL workloads (VMID `9051`). Build dispatch supplies proxbox-api

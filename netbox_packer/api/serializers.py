@@ -1,9 +1,15 @@
 import re
+from urllib.parse import urlsplit
 
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 
-from ..models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+from ..models import (
+    PackerBuild,
+    PackerBuildTarget,
+    PackerInstallerConfig,
+    PackerTemplate,
+)
 
 _SECRET_KEY_PARTS = (
     "password",
@@ -47,9 +53,7 @@ def _contains_secret_material(value):
                 pending.append(nested)
         elif isinstance(item, list):
             pending.extend(item)
-        elif isinstance(item, str) and any(
-            pattern.search(item) for pattern in _SECRET_VALUE_PATTERNS
-        ):
+        elif isinstance(item, str) and any(pattern.search(item) for pattern in _SECRET_VALUE_PATTERNS):
             return True
     return False
 
@@ -75,9 +79,7 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
             try:
                 endpoint_id = int(endpoint_id)
             except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    "endpoint_id must be a positive integer."
-                ) from exc
+                raise serializers.ValidationError("endpoint_id must be a positive integer.") from exc
             if endpoint_id < 1:
                 raise serializers.ValidationError("endpoint_id must be a positive integer.")
             result["endpoint_id"] = endpoint_id
@@ -88,9 +90,7 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
             try:
                 template_vmid = int(template_vmid)
             except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    "template_vmid must be an integer >= 100."
-                ) from exc
+                raise serializers.ValidationError("template_vmid must be an integer >= 100.") from exc
             if not 100 <= template_vmid <= 999999999:
                 raise serializers.ValidationError("template_vmid must be an integer >= 100.")
             result["template_vmid"] = template_vmid
@@ -140,6 +140,13 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
     )
     installer_config = PackerInstallerConfigSerializer(nested=True, required=False, allow_null=True)
 
+    def validate_nms_agent_backend_url(self, value):
+        """Reject plaintext agent backends at the API validation boundary."""
+
+        if urlsplit(value).scheme.lower() != "https":
+            raise serializers.ValidationError("Enter an HTTPS URL for the NMS agent backend.")
+        return value
+
     class Meta:
         model = PackerTemplate
         fields = (
@@ -172,12 +179,16 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
+            "install_nms_agent",
+            "nms_agent_backend_url",
+            "provisions_service",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name", "os_family", "os_version", "build_status")
+        read_only_fields = ("provisions_service",)
 
 
 class PackerBuildSerializer(NetBoxModelSerializer):

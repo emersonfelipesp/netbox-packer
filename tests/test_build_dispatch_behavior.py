@@ -257,6 +257,19 @@ def test_build_overrides_allow_typed_non_secret_selectors(isolated_imports) -> N
     )
 
 
+def test_template_serializer_rejects_plaintext_nms_agent_backend(isolated_imports) -> None:
+    serializers = _import_api_serializers_module()
+    serializer = serializers.PackerTemplateSerializer()
+
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        serializer.validate_nms_agent_backend_url("http://backend.nms.nmulti.cloud")
+
+    assert (
+        serializer.validate_nms_agent_backend_url("https://backend.nms.nmulti.cloud")
+        == "https://backend.nms.nmulti.cloud"
+    )
+
+
 class ChainManager:
     def __init__(self):
         self.create = Mock()
