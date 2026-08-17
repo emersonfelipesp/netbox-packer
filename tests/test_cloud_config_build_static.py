@@ -7,8 +7,10 @@ Static (text/AST) assertions plus an isolated functional test of
 from __future__ import annotations
 
 import ast
+import copy
 import importlib.util
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -2256,6 +2258,61 @@ def test_influxdb3_explorer_final_payload_guard_rejects_credentials(
 
     with pytest.raises(RuntimeError, match=expected_reason):
         jobs._validate_influxdb3_explorer_payload(tainted)
+
+
+def test_influxdb3_explorer_payload_guard_resists_encoding_and_path_aliases(
+    monkeypatch,
+) -> None:
+    """The two bypasses round 2 found must stay closed.
+
+    Both defeated a denylist rather than a missing rule, which is why the guard now ends
+    with a write-path allowlist:
+
+    * ``content: !!binary`` loads as ``bytes`` and survives the safe-load/safe-dump
+      injection cycle, so a scan that skipped non-string scalars never inspected it.
+    * ``/etc/influxdb3-explorer/./config.json`` names the same file as the plain path, so
+      an exact string comparison did not recognise it.
+    """
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    base = yaml.safe_load(seed.split("\n", 1)[1])
+    assert len(base["write_files"]) == 5, "mutation target: pristine Explorer write_files changed"
+    allowed = {entry["path"] for entry in base["write_files"]}
+
+    # A base64-encoded Core URL + token, carried as a YAML binary scalar so no `encoding`
+    # key is present and the value is bytes rather than str.
+    secret = json.dumps({"url": "http://core.internal:8181", "token": "apiv3-plaintext"}).encode()
+    binary_payload = copy.deepcopy(base)
+    binary_payload["write_files"].append(
+        {
+            "path": "/usr/local/sbin/run-influxdb3-explorer",  # an ALLOWED path, so only
+            "permissions": "0755",  # the content rule can catch this
+            "owner": "root:root",
+            "content": secret,
+        }
+    )
+    rendered = "#cloud-config\n" + yaml.safe_dump(binary_payload, sort_keys=False)
+    assert "!!binary" in rendered, "mutation target: payload no longer round-trips as binary"
+    with pytest.raises(RuntimeError, match="non-text content"):
+        jobs._validate_influxdb3_explorer_payload(rendered)
+
+    # A path alias for the forbidden config.json, plus an entirely unexpected path. Both
+    # must be refused, the alias by canonicalisation and the other by the allowlist.
+    for alias in ("/etc/influxdb3-explorer/./config.json", "/etc/../etc/influxdb3-explorer/config.json"):
+        assert alias not in allowed
+        assert posixpath.normpath(alias) not in allowed
+        aliased = copy.deepcopy(base)
+        aliased["write_files"].append(
+            {"path": alias, "permissions": "0640", "owner": "root:root", "content": "{}\n"}
+        )
+        with pytest.raises(RuntimeError):
+            jobs._validate_influxdb3_explorer_payload(
+                "#cloud-config\n" + yaml.safe_dump(aliased, sort_keys=False)
+            )
+
+    # The pristine seed must still pass, or the allowlist is simply refusing everything.
+    jobs._validate_influxdb3_explorer_payload(seed)
 
 
 def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(

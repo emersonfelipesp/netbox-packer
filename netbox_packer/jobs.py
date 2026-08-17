@@ -2,6 +2,7 @@
 
 import json
 import logging
+import posixpath
 import re
 import subprocess
 import threading
@@ -584,6 +585,24 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
 
 _EXPLORER_SERVICE_MARKER = "influxdb3-explorer"
 _EXPLORER_CONFIG_PATH = "/etc/influxdb3-explorer/config.json"
+
+# The exact set of files the Explorer golden image is allowed to write. This is an
+# ALLOWLIST on purpose: installer content is operator-editable, and a denylist over
+# editable input only refuses the shapes it happens to enumerate. Refusing an
+# unexpected path instead means a newly invented one fails closed rather than being
+# baked into the template and inherited by every clone.
+_EXPLORER_ALLOWED_WRITE_PATHS = frozenset(
+    {
+        "/etc/default/influxdb3-explorer",
+        "/usr/local/sbin/run-influxdb3-explorer",
+        "/usr/local/sbin/install-influxdb3-explorer",
+        "/etc/systemd/system/influxdb3-explorer.service",
+        "/usr/share/doc/netbox-packer/influxdb3-explorer-provisioning.txt",
+    }
+)
+# Keys a write_files entry may carry. An unknown key is refused rather than ignored,
+# so a future cloud-init feature cannot smuggle content past the content scan.
+_EXPLORER_ALLOWED_WRITE_KEYS = frozenset({"path", "content", "owner", "permissions"})
 _EXPLORER_PLACEHOLDER_SECRET_REF = "nms-secret:<opaque-id>"
 _EXPLORER_ALLOWED_URLS = frozenset({"http://127.0.0.1:8080/"})
 _EXPLORER_CREDENTIAL_KEY_PARTS = (
@@ -644,10 +663,33 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
     for entry in write_files:
         if not isinstance(entry, dict):
             raise _explorer_payload_error("write_files contains a non-mapping entry")
-        if entry.get("path") == _EXPLORER_CONFIG_PATH:
-            raise _explorer_payload_error("the golden image writes Explorer config.json")
+
         if entry.get("encoding"):
             raise _explorer_payload_error("encoded write_files content cannot be inspected safely")
+
+        unknown_keys = sorted(set(map(str, entry)) - _EXPLORER_ALLOWED_WRITE_KEYS)
+        if unknown_keys:
+            # Refusing any unknown key, rather than only the `encoding` name above, means a
+            # future cloud-init key cannot reopen the same hole without being noticed.
+            raise _explorer_payload_error(
+                f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}"
+            )
+
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise _explorer_payload_error("write_files entry has no string path")
+
+        # `content: !!binary` loads as `bytes`, which the credential scan skips as a
+        # non-string scalar — so unscanned base64 could carry a Core URL or token straight
+        # into the baked image. Require plain text so everything is actually scanned.
+        if not isinstance(entry.get("content"), str):
+            raise _explorer_payload_error(
+                f"write_files entry {raw_path!r} has non-text content, which cannot be "
+                "inspected for credentials"
+            )
+
+        if entry.get("path") == _EXPLORER_CONFIG_PATH:
+            raise _explorer_payload_error("the golden image writes Explorer config.json")
 
     pending = [config]
     while pending:
@@ -662,6 +704,17 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         if isinstance(item, list):
             pending.extend(item)
             continue
+        if isinstance(item, (bytes, bytearray)):
+            # PyYAML loads `!!binary` as bytes and the safe-load/safe-dump injection cycle
+            # preserves it. Skipping it here is what let unscanned base64 through, so fail
+            # closed: the payload has no legitimate reason to carry binary.
+            raise _explorer_payload_error(
+                "the payload contains binary content, which cannot be inspected for credentials"
+            )
+        if not isinstance(item, (str, int, float, bool)) and item is not None:
+            raise _explorer_payload_error(
+                f"the payload contains an uninspectable {type(item).__name__} value"
+            )
         if not isinstance(item, str):
             continue
 
@@ -684,6 +737,26 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
             url = match.group(0).rstrip(".,;)]}")
             if url not in _EXPLORER_ALLOWED_URLS:
                 raise _explorer_payload_error("an unapproved connection URL is present")
+
+    # Final catch-all, deliberately last so the specific diagnostics above win when they
+    # apply. Everything before this is a denylist, and a denylist over operator-editable
+    # content only refuses the shapes it happens to enumerate — the encoded-scalar and
+    # path-alias bypasses found in review were both of that kind. This allowlist instead
+    # refuses any file the image is not supposed to write at all, so a newly invented
+    # carrier fails closed rather than waiting to be enumerated.
+    for entry in write_files:
+        raw_path = entry.get("path")
+        # Canonicalise before comparing: `/etc/influxdb3-explorer/./config.json` and
+        # `/x/../etc/…` name the same file, so an exact string comparison is bypassable by
+        # spelling the path differently.
+        canonical_path = posixpath.normpath(raw_path)
+        if not posixpath.isabs(canonical_path):
+            raise _explorer_payload_error(f"write_files path {raw_path!r} is not absolute")
+        if canonical_path not in _EXPLORER_ALLOWED_WRITE_PATHS:
+            raise _explorer_payload_error(
+                f"write_files writes unexpected path {canonical_path!r}; the Explorer image "
+                "may only write its own unit, launcher, installer, defaults, and docs"
+            )
 
 
 class PackerBuildJob(JobRunner):

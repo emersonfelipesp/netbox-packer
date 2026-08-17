@@ -551,7 +551,19 @@ only on the tracked seed. Immediately before `call_proxbox_build()`, any templat
 whose immutable `provisions_service` marker is `influxdb3-explorer` is rejected
 if the final payload contains a Core endpoint/config file, credential-bearing
 key or value, private key, encoded `write_files` content that cannot be inspected,
-or a non-placeholder `nms-secret:` reference. Rejection is logged and proxbox-api
+or a non-placeholder `nms-secret:` reference.
+
+Those content rules are a denylist, and a denylist over operator-editable content only
+refuses the shapes it enumerates — review found two bypasses of exactly that kind, a
+`content: !!binary` scalar (loaded as `bytes` and skipped by a string-only scan) and
+`/etc/influxdb3-explorer/./config.json` (an alias an exact path comparison did not
+recognise). The guard therefore **ends with a write-path allowlist**: every `write_files`
+path is canonicalised with `posixpath.normpath` and must be one of the five files the
+image legitimately writes, unknown entry keys and non-text content are refused outright,
+and binary anywhere in the payload fails closed. The specific content diagnostics run
+first so they still produce the actionable message when they apply; the allowlist is the
+catch-all that makes a newly invented carrier fail closed instead of waiting to be
+enumerated. Rejection is logged and proxbox-api
 is never called with the tainted payload. Keep this runtime boundary alongside
 the static seed assertions whenever injection or rendering changes.
 
