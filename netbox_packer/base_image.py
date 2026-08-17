@@ -1,4 +1,67 @@
-"""Pure helpers for comparing desired and successfully baked base-image sources."""
+"""Pure helpers for validating and comparing cloud base-image sources."""
+
+from urllib.parse import urlsplit, urlunsplit
+
+
+def validate_base_image_url(value: str, *, source: str = "Base image URL") -> str:
+    """Return a credential-free base-image URL or raise ``ValueError``.
+
+    Vendor image artifacts do not need URL userinfo, query parameters, or
+    fragments. Refusing all three structurally closes inline credential paths
+    without trying to maintain a list of every provider-specific secret name.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{source} must be a non-empty URL.")
+    candidate = value.strip()
+    try:
+        parts = urlsplit(candidate)
+        # Accessing hostname/port also rejects malformed bracketed hosts and ports.
+        hostname = parts.hostname
+        _ = parts.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a structurally valid URL.") from exc
+    if not parts.scheme or not hostname:
+        raise ValueError(f"{source} must be a structurally valid URL.")
+    has_query_delimiter = "?" in candidate.split("#", 1)[0]
+    has_fragment_delimiter = "#" in candidate
+    if (
+        parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+        or has_query_delimiter
+        or has_fragment_delimiter
+    ):
+        raise ValueError(
+            f"{source} must not contain userinfo, query parameters, or fragments. "
+            "Authenticated downloads require an opaque secret reference, not inline URL credentials."
+        )
+    return candidate
+
+
+def redact_base_image_url(value: str) -> str:
+    """Remove URL userinfo, query, and fragment data before persistence."""
+
+    if not isinstance(value, str) or not value.strip():
+        return "[REDACTED INVALID BASE IMAGE URL]"
+    candidate = value.strip()
+    try:
+        return validate_base_image_url(candidate)
+    except ValueError:
+        pass
+    try:
+        parts = urlsplit(candidate)
+        hostname = parts.hostname
+        port = parts.port
+    except (TypeError, ValueError):
+        return "[REDACTED INVALID BASE IMAGE URL]"
+    if not parts.scheme or not hostname:
+        return "[REDACTED INVALID BASE IMAGE URL]"
+    safe_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        safe_host = f"{safe_host}:{port}"
+    return urlunsplit((parts.scheme, safe_host, parts.path, "", ""))
 
 
 def pin_differs_from_built_source(

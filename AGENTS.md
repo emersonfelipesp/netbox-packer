@@ -212,6 +212,15 @@ in memory, writes `root:1500` mode-`0640`
 who can reach Explorer inherits that token's permissions, so do not change the
 default bind without an explicit access-control design.
 
+Enforce that guarantee on the fully injected YAML immediately before
+`call_proxbox_build()`, keyed by the immutable
+`provisions_service="influxdb3-explorer"` marker. A Core endpoint/config file,
+credential-bearing key or value, private key, encoded `write_files` content that
+cannot be inspected, or non-placeholder `nms-secret:` reference must fail the
+build with an actionable log entry, and proxbox-api must not receive the payload.
+The static pristine-seed checks remain defense in depth; they do not replace this
+runtime boundary.
+
 `install_zabbix_agent2` and `install_nms_agent` stay false because the shared
 injectors remain Ubuntu- and amd64-only. QEMU guest-agent injection may remain
 enabled. The Explorer installer must be the last entry in the fully injected
@@ -251,6 +260,12 @@ Readiness consumers require both ready status and `not is_stale`. The staleness 
 management command must evaluate pin drift even when `max_age_days` is unset, recover a
 previously orphaned queued auto-rebuild, set the template to `building`, and call
 `dispatch_build()` after changes commit (and after a branch merges).
+
+Base-image URLs must contain no userinfo, query string, or fragment. Parse and
+reject those components at serializer/model boundaries and again in the job;
+defensively redact them before logging, proxbox output, or provenance snapshots.
+Authenticated downloads, if ever supported, require an opaque secret reference
+rather than an inline URL credential.
 
 - **A pinned URL without a digest fails the build, by design.** Never "fix" that by
   making the digest optional for pinned URLs — an unverified pin looks like provenance

@@ -2180,6 +2180,152 @@ def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
     assert "install-influxdb3-explorer" in runcmds[-1], runcmds
     assert config.get("ssh_pwauth") is True
 
+    # The final-payload boundary accepts the pristine, fully injected profile.
+    jobs._validate_influxdb3_explorer_payload(injected)
+
+
+@pytest.mark.parametrize(
+    ("payload_change", "expected_reason"),
+    (
+        ({"api_token": "plaintext-token"}, "credential-bearing YAML key"),
+        (
+            {
+                "path": "/tmp/explorer-token.env",
+                "content": "DEFAULT_API_TOKEN=plaintext-token\n",
+            },
+            "credential-bearing value",
+        ),
+        (
+            {
+                "path": "/tmp/core.env",
+                "content": "INFLUXDB_CORE_HOST=core.internal\n",
+            },
+            "Core endpoint setting",
+        ),
+        (
+            {
+                "path": "/tmp/private-key.pem",
+                "content": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
+            },
+            "private key material",
+        ),
+        (
+            {
+                "path": "/tmp/secret-ref",
+                "content": "nms-secret:environment-specific-id\n",
+            },
+            "non-placeholder nms-secret",
+        ),
+        (
+            {
+                "path": "/tmp/encoded",
+                "encoding": "b64",
+                "content": "cGxhaW50ZXh0LXRva2Vu",
+            },
+            "encoded write_files content",
+        ),
+    ),
+)
+def test_influxdb3_explorer_final_payload_guard_rejects_credentials(
+    monkeypatch,
+    payload_change,
+    expected_reason,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    config = yaml.safe_load(seed.split("\n", 1)[1])
+    if "path" in payload_change:
+        config["write_files"].append(payload_change)
+    else:
+        config.update(payload_change)
+    tainted = "#cloud-config\n" + yaml.safe_dump(config, sort_keys=False)
+
+    with pytest.raises(RuntimeError, match=expected_reason):
+        jobs._validate_influxdb3_explorer_payload(tainted)
+
+
+def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
+    monkeypatch,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    config = yaml.safe_load(seed.split("\n", 1)[1])
+    assert len(config["write_files"]) == 5, "mutation target: pristine Explorer write_files changed"
+    plaintext_token = "round1-plaintext-token"
+    config["write_files"].append(
+        {
+            "path": "/etc/influxdb3-explorer/config.json",
+            "permissions": "0640",
+            "owner": "root:1500",
+            "content": json.dumps(
+                {
+                    "url": "http://core.internal:8181",
+                    "token": plaintext_token,
+                }
+            ),
+        }
+    )
+    tainted = "#cloud-config\n" + yaml.safe_dump(config, sort_keys=False)
+
+    settings_row = SimpleNamespace(
+        proxbox_api_url="https://proxbox.example",
+        get_fileserver_package_read_token=lambda: "",
+        get_proxbox_api_key=lambda: "api-key",
+    )
+    models_module = ModuleType("netbox_packer.models")
+    models_module.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    models_module.PackerTemplate = type("PackerTemplate", (), {})
+    monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
+
+    call_proxbox_build = Mock(return_value={"status": "completed", "vmid": 9053})
+    client_module = ModuleType("netbox_packer.proxbox_client")
+    client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
+    client_module.call_proxbox_build = call_proxbox_build
+    monkeypatch.setitem(sys.modules, "netbox_packer.proxbox_client", client_module)
+
+    installer = SimpleNamespace(
+        content=tainted,
+        installer_type="cloud_config",
+        checksum="e" * 64,
+    )
+    template = SimpleNamespace(
+        pk=53,
+        name="influxdb3-explorer-1.9.0-debian-13",
+        installer_config=installer,
+        storage_pool="local",
+        proxmox_node="node1",
+        proxmox_endpoint="",
+        proxmox_template_id=9053,
+        os_family="debian",
+        os_version="13",
+        base_image_url="",
+        base_image_sha256="",
+        is_fileserver_golden_template=False,
+        install_qemu_guest_agent=True,
+        install_zabbix_agent2=False,
+        zabbix_server="",
+        install_nms_agent=False,
+        provisions_service="influxdb3-explorer",
+    )
+    build = SimpleNamespace(
+        variable_overrides={"endpoint_id": 17, "target_node": "node1"},
+        log="",
+        save=Mock(),
+    )
+
+    with pytest.raises(RuntimeError, match="credential-free boundary"):
+        jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
+
+    call_proxbox_build.assert_not_called()
+    build.save.assert_called_once_with(update_fields=["log"])
+    assert "Refusing InfluxDB 3 Explorer bake" in build.log
+    assert "config.json only after cloning" in build.log
+    assert plaintext_token not in build.log
+
 
 @pytest.mark.parametrize(
     ("host_bind", "expected_publish"),
@@ -2525,6 +2671,77 @@ def test_pinned_base_image_requires_a_verified_digest(monkeypatch) -> None:
     assert sha == ""
 
 
+@pytest.mark.parametrize(
+    ("source", "image_url"),
+    (
+        ("override", "https://images.example/base.qcow2?token=do-not-persist"),
+        (
+            "template",
+            (
+                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
+                "&X-Amz-Signature=do-not-persist"
+            ),
+        ),
+    ),
+)
+def test_credentialed_base_image_urls_fail_at_the_job_boundary(
+    monkeypatch,
+    source,
+    image_url,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    digest = "b" * 64
+    template = _template(
+        base_image_url=image_url if source == "template" else "",
+        base_image_sha256=digest if source == "template" else "",
+    )
+    overrides = (
+        {"image_url": image_url, "image_sha256": digest}
+        if source == "override"
+        else {}
+    )
+
+    with pytest.raises(RuntimeError, match="must not contain") as exc_info:
+        jobs._resolve_cloud_image_source(template, overrides)
+    assert "do-not-persist" not in str(exc_info.value)
+
+
+def test_base_image_url_redaction_removes_all_credential_components() -> None:
+    base_image = _load_base_image_module()
+    tainted = (
+        "https://operator:do-not-persist@images.example:8443/base.qcow2"
+        "?token=do-not-persist#credential"
+    )
+
+    redacted = base_image.redact_base_image_url(tainted)
+
+    assert redacted == "https://images.example:8443/base.qcow2"
+    assert "operator" not in redacted
+    assert "do-not-persist" not in redacted
+    assert "token" not in redacted
+    assert "credential" not in redacted
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        "https://operator:do-not-persist@images.example/base.qcow2",
+        "https://images.example/base.qcow2?token=do-not-persist",
+        "https://images.example/base.qcow2#credential",
+        "https://images.example/base.qcow2?",
+        "https://images.example/base.qcow2#",
+    ),
+)
+def test_base_image_url_validator_rejects_userinfo_query_and_fragment(image_url) -> None:
+    base_image = _load_base_image_module()
+
+    with pytest.raises(ValueError, match="must not contain"):
+        base_image.validate_base_image_url(image_url)
+
+    safe_url = "https://images.example/base.qcow2"
+    assert base_image.validate_base_image_url(safe_url) == safe_url
+
+
 def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None:
     """Plan and execute must carry the same digest; unpinned bodies omit it."""
 
@@ -2566,7 +2783,14 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
 
 
 @pytest.mark.parametrize(
-    ("template_pin", "build_pin", "current_pin", "expected_sha256", "expected_status"),
+    (
+        "template_pin",
+        "build_pin",
+        "current_pin",
+        "expected_sha256",
+        "expected_status",
+        "bypass_url_validation",
+    ),
     [
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
@@ -2574,14 +2798,16 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
             {},
             "d" * 64,
             "ready",
+            False,
         ),
-        ({}, {}, {}, "", "ready"),
+        ({}, {}, {}, "", "ready", False),
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
             {"image_url": "https://vendor.example/override.qcow2", "image_sha256": "c" * 64},
             {},
             "c" * 64,
             "stale",
+            False,
         ),
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
@@ -2589,6 +2815,21 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
             {"base_image_url": "https://vendor.example/edited.qcow2", "base_image_sha256": "c" * 64},
             "d" * 64,
             "stale",
+            False,
+        ),
+        (
+            {},
+            {
+                "image_url": (
+                    "https://operator:do-not-persist@vendor.example/override.qcow2"
+                    "?token=do-not-persist#credential"
+                ),
+                "image_sha256": "c" * 64,
+            },
+            {},
+            "c" * 64,
+            "stale",
+            True,
         ),
     ],
 )
@@ -2599,10 +2840,18 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     current_pin,
     expected_sha256,
     expected_status,
+    bypass_url_validation,
 ) -> None:
     """Protect the job-to-client seam and the atomic provenance snapshots."""
 
     jobs = _load_jobs_isolated(monkeypatch)
+    if bypass_url_validation:
+        # Simulate the structural rejection guard being bypassed so this test
+        # independently proves the persistence/logging redaction backstop.
+        def allow_tainted_url(value, **_kwargs):
+            return value
+
+        jobs.validate_base_image_url = allow_tainted_url
     finished_at = object()
     jobs.timezone.now = lambda: finished_at
     jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
@@ -2646,7 +2895,10 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     models_module.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
     monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
 
-    call_proxbox_build = Mock(return_value={"status": "completed", "vmid": 9052})
+    proxbox_response = {"status": "completed", "vmid": 9052}
+    if bypass_url_validation:
+        proxbox_response["stdout"] = f"downloaded {build_pin['image_url']}"
+    call_proxbox_build = Mock(return_value=proxbox_response)
     client_module = ModuleType("netbox_packer.proxbox_client")
     client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
     client_module.call_proxbox_build = call_proxbox_build
@@ -2717,15 +2969,16 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
         "base_image_url",
         "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
     )
+    safe_expected_url = jobs.redact_base_image_url(expected_url)
     assert client_kwargs["image_url"] == expected_url
     assert client_kwargs["image_sha256"] == expected_sha256
-    assert build.base_image_url_at_build == expected_url
+    assert build.base_image_url_at_build == safe_expected_url
     assert build.base_image_sha256_at_build == expected_sha256
     assert template_updates == [
         {
             "build_status": expected_status,
             "built_at": finished_at,
-            "base_image_url_at_build": expected_url,
+            "base_image_url_at_build": safe_expected_url,
             "base_image_sha256_at_build": expected_sha256,
             "installer_config_checksum_at_build": "e" * 64,
         }
@@ -2734,6 +2987,9 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     assert "base_image_sha256_at_build" in saved_update_fields[0]
     template_manager.select_for_update.assert_called_once_with()
     template_manager.get.assert_called_once_with(pk=template.pk)
+    if bypass_url_validation:
+        assert "do-not-persist" not in build.log
+        assert safe_expected_url in build.log
     assert not atomic_state["active"]
 
 

@@ -340,6 +340,15 @@ baked into cloud-init. The Ubuntu/amd64-only Zabbix and NMS agent injections
 remain off; QEMU guest-agent injection remains on, and the Explorer installer
 stays the last command in the fully injected `runcmd` list.
 
+This is also a runtime bake boundary. For a template marked
+`provisions_service = "influxdb3-explorer"`, netbox-packer parses and validates
+the fully injected YAML immediately before calling proxbox-api. A Core
+endpoint/config file, credential-bearing key or value, private key, encoded
+`write_files` content that cannot be inspected, or any non-placeholder
+`nms-secret:` reference aborts the build with a log entry; proxbox-api is not
+called. The pristine seed checks remain useful, but are not a substitute for
+validating the editable payload that is actually baked.
+
 ## Base Image Pinning (reproducible, verifiable OS bases)
 
 A cloud-init bake downloads a vendor base image that becomes the guest's **entire
@@ -414,6 +423,14 @@ constants alone.
 
 Both may also be supplied per build via `variable_overrides['image_url']` and
 `variable_overrides['image_sha256']`, which take precedence over the template fields.
+
+Image URLs may not contain URL userinfo, a query string, or a fragment. The UI,
+API/model, and build-job boundaries parse and reject those components so inline
+tokens (including signed-download query credentials) cannot be persisted or sent
+to proxbox-api. Build logs, proxbox output, and provenance snapshots additionally
+use a URL with those components removed as defense in depth. A future
+authenticated-download flow must use an opaque secret reference, never an inline
+URL credential.
 
 Migration `0028` adds the two `*_at_build` snapshots to both `PackerBuild` and
 `PackerTemplate`. On success, the build's resolved source and the template's

@@ -6,7 +6,11 @@ from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
-from .base_image import base_image_pin_applies, pin_differs_from_built_source
+from .base_image import (
+    base_image_pin_applies,
+    pin_differs_from_built_source,
+    validate_base_image_url,
+)
 from .choices import (
     BuildStatusChoices,
     OSFamilyChoices,
@@ -288,6 +292,14 @@ class PackerTemplate(NetBoxModel):
 
     def clean(self):
         super().clean()
+        if self.base_image_url:
+            try:
+                self.base_image_url = validate_base_image_url(
+                    self.base_image_url,
+                    source="base_image_url",
+                )
+            except ValueError as exc:
+                raise ValidationError({"base_image_url": str(exc)}) from exc
         # Reject a pin the builder would silently ignore. Accepting one is worse than
         # useless: it looks like the base image is verified while nothing enforces it, and
         # because the local path records no at-build snapshot the template also becomes
@@ -395,6 +407,21 @@ class PackerBuild(NetBoxModel):
         from django.urls import reverse
 
         return reverse("plugins:netbox_packer:packerbuild", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        overrides = self.variable_overrides or {}
+        if not isinstance(overrides, dict):
+            raise ValidationError({"variable_overrides": "variable_overrides must be an object."})
+        image_url = overrides.get("image_url")
+        if image_url not in (None, ""):
+            try:
+                validate_base_image_url(
+                    image_url,
+                    source="variable_overrides['image_url']",
+                )
+            except ValueError as exc:
+                raise ValidationError({"variable_overrides": str(exc)}) from exc
 
 
 class PackerBuildTarget(NetBoxModel):

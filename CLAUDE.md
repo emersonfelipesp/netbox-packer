@@ -388,6 +388,13 @@ override → template field → derived release default (URL only), and forwards
 to proxbox-api as `sha256` (a field its `CloudImageTemplateBuildRequest` already
 accepts), omitting it entirely when empty.
 
+Base-image URLs must be ordinary artifact URLs with no userinfo, query string,
+or fragment. This is parsed structurally at API/model boundaries and rechecked by
+the build job so signed-download query credentials cannot enter persisted build
+state. Logs, proxbox output, and successful-build provenance use a defensively
+redacted URL. If authenticated image downloads are added later, use an opaque
+secret reference rather than inline URL credentials.
+
 **A pinned URL must carry a digest** — supplied by either source — or the build fails
 closed. An unverified pin looks like provenance while guaranteeing nothing about the
 bytes. A malformed digest is refused rather than forwarded; an uppercase one is
@@ -538,6 +545,15 @@ returns `nms-secret:<opaque-id>`; provision-time automation resolves the referen
 only in memory, writes `root:1500` mode-`0640`
 `/etc/influxdb3-explorer/config.json`, and restarts the unit. Never move that
 per-instance step into cloud-init.
+
+The credential-free contract is enforced on the **fully injected** YAML, not
+only on the tracked seed. Immediately before `call_proxbox_build()`, any template
+whose immutable `provisions_service` marker is `influxdb3-explorer` is rejected
+if the final payload contains a Core endpoint/config file, credential-bearing
+key or value, private key, encoded `write_files` content that cannot be inspected,
+or a non-placeholder `nms-secret:` reference. Rejection is logged and proxbox-api
+is never called with the tainted payload. Keep this runtime boundary alongside
+the static seed assertions whenever injection or rendering changes.
 
 First boot refuses non-Debian-13 and unsupported architectures, bounds apt and
 the digest-addressed image pull, applies a maximum accepted image size, and uses
