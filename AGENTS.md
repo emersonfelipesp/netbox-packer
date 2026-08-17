@@ -50,8 +50,25 @@ package — and adds a baked production posture that must not be relaxed:
 - first boot **refuses any release other than Debian 13** (plus non-`amd64`/
   `arm64` architectures and a missing systemd), rather than half-configuring an
   unverified platform;
-- `node-id` is derived from each clone's own hostname, so cloning cannot produce
-  two nodes with the same identity.
+- `node-id` is derived from the **per-VM SMBIOS UUID** (falling back to the
+  per-instance machine-id), and the script fails closed if neither is readable.
+  Do **not** switch this back to the hostname: the Proxmox clone pipeline reuses
+  the template's cicustom meta-data, so clones can share a hostname and would
+  then share a node identity.
+- Every readiness probe carries `--connect-timeout`/`--max-time` and the loop
+  enforces an overall deadline, so a socket that accepts but never answers cannot
+  hang once-per-instance cloud-init.
+- `install_zabbix_agent2` and `install_nms_agent` are **False** on this template
+  because the shared injectors are Ubuntu- and amd64-only (`ubuntu${VERSION_ID}`
+  Zabbix package name; amd64-only NMS bootstrap). Do not enable them for a Debian
+  or arm64 template until those injectors are OS-family- and architecture-aware.
+  This also keeps this seed's installer the **last** `runcmd` entry — cloud-init's
+  `runcmd` wrapper has no `set -e`, so a non-final failure would be masked.
+- `jobs._resolve_cloud_image_url()` resolves Debian images by `os_version` through
+  `_DEBIAN_CODENAMES`; it used to return Bookworm for every Debian row. Keep that
+  map in step with `choices.OS_VERSIONS_BY_FAMILY[debian]`, and remember a
+  `cloud_config` bake never runs cloud-init, so a wrong base image is not caught
+  at build time.
 
 Do not add a remote bind to this image: with token auth enabled, a non-loopback
 listener would carry bearer tokens over plaintext HTTP. Put a TLS reverse proxy

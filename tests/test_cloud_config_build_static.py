@@ -16,6 +16,7 @@ import traceback
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1388,9 +1389,10 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     assert defaults["cloud_init_ready"] is True
     assert defaults["build_status"] == "pending"
     assert defaults["install_qemu_guest_agent"] is True
-    assert defaults["install_zabbix_agent2"] is True
-    assert defaults["install_nms_agent"] is True
-    assert defaults["nms_agent_backend_url"] == "https://backend.nms.nmulti.cloud"
+    # OFF because the shared injectors are Ubuntu/amd64-only — see the composed
+    # cloud-config test below, which proves the injection really stays out.
+    assert defaults["install_zabbix_agent2"] is False
+    assert defaults["install_nms_agent"] is False
     assert defaults["provisions_service"] == "influxdb3-core"
 
     # The seeded os_family/os_version pair must be one the form actually offers,
@@ -1399,14 +1401,17 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     assert 'CHOICE_DEBIAN = "debian"' in choices_source
     assert '("13", "Debian 13 (Trixie)")' in choices_source
 
-    # No VMID may be claimed twice across the whole seeded catalog.
-    seeded_vmids: list[int] = []
-    for migration in sorted((PKG / "migrations").glob("0*.py")):
-        for key, value in _literal_assignments(f"netbox_packer/migrations/{migration.name}").items():
-            if "VMID" in key and isinstance(value, int):
-                seeded_vmids.append(value)
-    assert seeded_vmids.count(9052) == 1, seeded_vmids
-    assert sorted(seeded_vmids) == sorted(set(seeded_vmids)), seeded_vmids
+    # No VMID may be claimed twice across the whole seeded catalog. Collecting only
+    # top-level "*VMID*" constants silently missed the tuple-driven seeds (0016) and
+    # the profile-dict seeds (0020), so a collision with 9040-9042 or 9050-9051
+    # would have passed while the test still claimed whole-catalog coverage.
+    seeded_vmids = _all_seeded_vmids()
+    # Prove the sweep sees the values the old one could not, before trusting it.
+    for previously_missed in (9040, 9041, 9042, 9050, 9051):
+        assert previously_missed in seeded_vmids, (previously_missed, sorted(seeded_vmids))
+    assert 9052 in seeded_vmids
+    duplicates = sorted({v for v in seeded_vmids if seeded_vmids.count(v) > 1})
+    assert not duplicates, duplicates
 
     cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
     assert seed.startswith("#cloud-config\n")
@@ -1450,9 +1455,24 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     assert "Restart=on-failure" in install_script
     assert 'systemctl enable --now "${SERVICE_NAME}"' in install_script
     assert '"http://${HTTP_BIND}/ready"' in install_script
-    # node-id is per-clone, so a cloned template cannot produce duplicate nodes.
-    assert "hostname -s" in install_script
-    assert 'node-id = "${node_id}-node"' in install_script
+    # node-id must come from a genuinely per-VM source. The Proxmox clone pipeline
+    # reuses this template's cicustom meta-data, so the hostname is shared across
+    # clones and must NOT be the identity source.
+    assert "hostname -s" not in install_script
+    assert "/sys/class/dmi/id/product_uuid" in install_script
+    assert "/etc/machine-id" in install_script
+    assert 'node-id = "${node_id}"' in install_script
+    assert 'node_id="influxdb3-${node_suffix}"' in install_script
+    # Fails closed rather than minting a colliding identity.
+    assert "Cannot derive a unique node id" in install_script
+
+    # Every readiness probe is individually bounded and the loop has an overall
+    # deadline: an unbounded curl against a socket that accepts but never responds
+    # would hang once-per-instance cloud-init after a partial install.
+    assert "--connect-timeout 2" in install_script
+    assert "--max-time 5" in install_script
+    assert "readiness_deadline=$((SECONDS + 180))" in install_script
+    assert "seq 1 60" not in install_script
 
     # Credential-free: assert against executable lines only, since the prose
     # comments legitimately explain that token authentication stays enabled.
@@ -1470,6 +1490,141 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
         r"api/v2/setup",
     ):
         assert re.search(pattern, code, re.IGNORECASE) is None, pattern
+
+
+def _all_seeded_vmids() -> list[int]:
+    """Every proxmox_template_id any seed migration assigns, however it is written.
+
+    Evaluates each migration's AST rather than matching variable names, so
+    tuple-driven loops and profile dictionaries are included. Raises rather than
+    skipping if a migration cannot be parsed — a sweep that quietly covers less
+    than it claims is worse than no sweep.
+    """
+
+    vmids: list[int] = []
+    for migration in sorted((PKG / "migrations").glob("0*.py")):
+        rel = f"netbox_packer/migrations/{migration.name}"
+        tree = ast.parse(_read(rel))
+        constants = _literal_assignments(rel)
+        for node in ast.walk(tree):
+            # "proxmox_template_id": <value> inside any defaults dict.
+            if isinstance(node, ast.Dict):
+                for key_node, value_node in zip(node.keys, node.values, strict=True):
+                    if key_node is None:
+                        continue
+                    try:
+                        key = ast.literal_eval(key_node)
+                    except ValueError:
+                        continue
+                    if key not in {"proxmox_template_id", "vmid"}:
+                        continue
+                    try:
+                        value = _resolve_static_value(value_node, constants)
+                    except ValueError:
+                        continue
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        vmids.append(value)
+            # Tuple-driven seed loops: (name, os_version, vmid).
+            if isinstance(node, ast.Tuple):
+                try:
+                    values = [ast.literal_eval(element) for element in node.elts]
+                except ValueError:
+                    continue
+                for value in values:
+                    if isinstance(value, int) and not isinstance(value, bool) and 9000 <= value <= 9999:
+                        vmids.append(value)
+    assert vmids, "VMID sweep found nothing — the extraction is broken"
+    return vmids
+
+
+def test_seeded_vmid_sweep_would_catch_a_duplicate() -> None:
+    """Mutation check on the guard itself: a duplicate must be detectable.
+
+    The sweep is only useful if it both sees every seeded VMID and reports a
+    collision, so assert the detection logic on a known-duplicate list rather than
+    trusting that the clean catalog passing means anything.
+    """
+
+    seeded = _all_seeded_vmids()
+    assert len(seeded) >= 14, sorted(seeded)
+    injected = seeded + [9052]
+    duplicates = sorted({v for v in injected if injected.count(v) > 1})
+    assert duplicates == [9052]
+
+
+def test_influxdb3_core_debian13_build_resolves_a_debian_13_image(monkeypatch) -> None:
+    """The bake must not silently use Bookworm for an os_version="13" template.
+
+    A cloud_config bake never executes cloud-init, so a wrong base image produces
+    an artifact that can still be marked ready and only fails its OS gate later, at
+    clone time.
+    """
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    template = SimpleNamespace(os_family="debian", os_version="13")
+
+    url = jobs._resolve_cloud_image_url(template, None)
+
+    assert "trixie" in url
+    assert "debian-13-genericcloud" in url
+    assert "bookworm" not in url and "debian-12" not in url
+    # Other releases keep working, and an unknown one fails loudly instead of
+    # falling back to some arbitrary image.
+    assert "bookworm" in jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="12"), None)
+    assert "bullseye" in jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="11"), None)
+    with pytest.raises(RuntimeError):
+        jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="99"), None)
+    # An explicit override still wins.
+    assert jobs._resolve_cloud_image_url(template, {"image_url": "http://x/y.qcow2"}) == "http://x/y.qcow2"
+
+
+def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
+    monkeypatch,
+) -> None:
+    """Assert on the FULLY INJECTED config, not just the pristine seed.
+
+    Build-time injection is what actually reaches the guest. Two properties matter:
+    the Ubuntu/amd64-only injections must stay out of a Debian 13 (and arm64)
+    image, and this installer must remain the LAST runcmd entry — cloud-init
+    shellifies runcmd into a plain /bin/sh script with no `set -e`, so a
+    non-final failure would be masked by a later command's success.
+    """
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml")
+    _name, defaults = _packer_template_seed_defaults(
+        "netbox_packer/migrations/0025_seed_influxdb3_core_debian13_cloud_init.py"
+    )
+    template = SimpleNamespace(
+        os_family=defaults["os_family"],
+        os_version=defaults["os_version"],
+        install_qemu_guest_agent=defaults["install_qemu_guest_agent"],
+        install_zabbix_agent2=defaults["install_zabbix_agent2"],
+        install_nms_agent=defaults["install_nms_agent"],
+        zabbix_server="zabbix.nmulti.cloud",
+        nms_agent_backend_url="",
+        provisions_service=defaults["provisions_service"],
+    )
+
+    injected = jobs._inject_monitoring_agents(seed, template)
+    config = yaml.safe_load(injected.split("\n", 1)[1])
+
+    # The Ubuntu Zabbix package name and the amd64-only NMS agent must not appear.
+    assert "zabbix-agent2" not in injected
+    assert "ubuntu${VERSION_ID}" not in injected
+    assert "nms-agent" not in injected
+    assert "go.dev/dl" not in injected
+
+    runcmds = [str(entry) for entry in config["runcmd"]]
+    assert any("install-influxdb3-core" in entry for entry in runcmds)
+    # LAST entry: with no `set -e` in cloud-init's wrapper, the wrapper's exit
+    # status is the final command's, so a failing install must not be followed by
+    # anything that could report success over it.
+    assert "install-influxdb3-core" in runcmds[-1], runcmds
+    # QEMU guest agent is a plain Debian package, so its injection is expected.
+    assert any("qemu-guest-agent" in entry for entry in runcmds)
+    # Password SSH is still enabled for clone-time credentials.
+    assert config.get("ssh_pwauth") is True
 
 
 def test_influxdb3_core_debian13_contract_is_documented() -> None:

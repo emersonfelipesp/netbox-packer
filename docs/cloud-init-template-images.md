@@ -196,11 +196,28 @@ Beyond the shared behaviours listed above, first boot:
   **omitting `plugin-dir`** so the Python Processing Engine stays disabled;
 - installs a `influxdb3-core.service` drop-in with `Restart=on-failure`,
   `RestartSec=5s`, and `TimeoutStopSec=120s`;
-- derives `node-id` from the clone's **own** hostname, so cloning the template
-  can never produce two nodes claiming the same identity;
+- derives `node-id` from the **per-VM SMBIOS UUID**
+  (`/sys/class/dmi/id/product_uuid`, falling back to `/etc/machine-id`) and fails
+  closed if neither is readable — the hostname is not usable for this, because the
+  clone pipeline reuses the template's cicustom meta-data and clones can therefore
+  share a hostname;
 - holds the package with `apt-mark hold` and waits on the unauthenticated
-  `http://127.0.0.1:8181/ready` endpoint, dumping unit status and journal tail
-  before failing the boot script if readiness never arrives.
+  `http://127.0.0.1:8181/ready` endpoint with per-probe
+  `--connect-timeout`/`--max-time` plus an overall deadline, dumping unit status
+  and journal tail before failing the boot script if readiness never arrives.
+
+Two build-path details are specific to this profile:
+
+- **Base image.** `os_version="13"` resolves to the Trixie Debian 13 cloud image.
+  The resolver previously returned Bookworm for every Debian row; since a
+  `cloud_config` bake never executes cloud-init, that would have produced an
+  artifact marked `ready` whose own OS gate fails at clone time.
+- **Monitoring injection.** `install_qemu_guest_agent` is on;
+  `install_zabbix_agent2` and `install_nms_agent` are **off**, because the shared
+  injectors build an Ubuntu Zabbix package name from `VERSION_ID` and the NMS agent
+  bootstrap requires amd64. That also leaves this installer as the last `runcmd`
+  entry, so its failure is not masked by a later command in cloud-init's
+  `set -e`-less wrapper.
 
 Token authentication stays enabled for every data and admin route: the readiness
 probe is the only unauthenticated call the image makes. Because a remote listener

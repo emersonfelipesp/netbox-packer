@@ -48,8 +48,19 @@ INFLUXDB3_CORE_DEBIAN13_CLOUD_CONFIG = r"""#cloud-config
 # os.linux.debian.13.install_influxdb3_core apply the same posture to hosts that
 # already exist; this template is for new guests.
 #
-# node-id is derived from each clone's own hostname at first boot, so cloning the
-# template never produces two nodes claiming the same identity.
+# node-id is derived at first boot from the per-VM SMBIOS UUID (falling back to
+# the per-instance machine-id), never from the hostname: the Proxmox clone
+# pipeline reuses this template's cicustom meta-data, so clones can share a
+# hostname. The script fails closed rather than minting a colliding identity.
+#
+# Zabbix Agent 2 and the NMS host agent are deliberately NOT injected into this
+# template (install_zabbix_agent2 / install_nms_agent are False on the seeded
+# PackerTemplate): the shared injectors build an Ubuntu Zabbix repository package
+# name from VERSION_ID, which yields a nonexistent "ubuntu13" package on Debian
+# 13, and the NMS agent bootstrap accepts only amd64. This installer is therefore
+# the LAST runcmd entry, which also matters: cloud-init shellifies runcmd into a
+# plain /bin/sh script with no `set -e`, so a non-final failing command would be
+# masked by a later success.
 package_update: false
 package_upgrade: false
 packages:
@@ -157,14 +168,27 @@ write_files:
       install -d -o influxdb3 -g influxdb3 -m 0750 /var/lib/influxdb3
       install -d -o influxdb3 -g influxdb3 -m 0750 "${DATA_DIR}"
 
-      # node-id must be unique per clone, so derive it from this host's own name.
-      node_id="$(hostname -s 2>/dev/null || echo primary)"
-      node_id="$(printf '%s' "${node_id}" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')"
-      node_id="${node_id#-}"
-      node_id="${node_id%-}"
-      if [ -z "${node_id}" ]; then
-        node_id='primary'
+      # node-id must be unique per clone, and the hostname is NOT a reliable
+      # source for that: the Proxmox clone pipeline reuses the template's own
+      # cicustom meta-data, whose local-hostname is a fixed placeholder, so every
+      # standard clone can boot with the same name. Derive from the per-VM SMBIOS
+      # UUID, which Proxmox generates for each VM, falling back to the machine-id
+      # cloud-init regenerates per instance. Fail closed rather than silently
+      # minting a colliding identity.
+      node_suffix=''
+      for id_source in /sys/class/dmi/id/product_uuid /etc/machine-id; do
+        if [ -r "${id_source}" ]; then
+          node_suffix="$(tr '[:upper:]' '[:lower:]' < "${id_source}" | tr -cd 'a-f0-9' | cut -c1-12)"
+        fi
+        if [ -n "${node_suffix}" ]; then
+          break
+        fi
+      done
+      if [ -z "${node_suffix}" ]; then
+        echo 'Cannot derive a unique node id: no SMBIOS UUID or machine-id' >&2
+        exit 1
       fi
+      node_id="influxdb3-${node_suffix}"
 
       install -d -o root -g root -m 0755 "${DROPIN_DIR}"
       cat > "${DROPIN_FILE}" <<'DROPIN'
@@ -182,7 +206,7 @@ write_files:
       ${MANAGED_MARKER}
       object-store = "file"
       data-dir = "${DATA_DIR}"
-      node-id = "${node_id}-node"
+      node-id = "${node_id}"
       http-bind = "${HTTP_BIND}"
       log-filter = "${LOG_FILTER}"
       wal-flush-interval = "${WAL_FLUSH_INTERVAL}"
@@ -201,8 +225,16 @@ write_files:
 
       # /ready is the unauthenticated readiness endpoint; token authentication
       # stays enabled for every data and admin route.
-      for _attempt in $(seq 1 60); do
-        if curl --fail --silent "http://${HTTP_BIND}/ready" >/dev/null; then
+      #
+      # Every probe is individually bounded AND the loop enforces an overall
+      # monotonic deadline: without --connect-timeout/--max-time a service that
+      # accepts the connection but never responds would block the first curl
+      # forever, so the nominal attempt count would never be reached and
+      # once-per-instance cloud-init would hang after a partial install.
+      readiness_deadline=$((SECONDS + 180))
+      while [ "${SECONDS}" -lt "${readiness_deadline}" ]; do
+        if curl --fail --silent --connect-timeout 2 --max-time 5 \
+          "http://${HTTP_BIND}/ready" >/dev/null; then
           exit 0
         fi
         sleep 2
@@ -272,11 +304,22 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
         "cloud_init_ready": True,
         "build_status": "pending",
         "packer_template_ref": "",
+        # QEMU guest agent is a plain Debian package, so its injection is safe.
         "install_qemu_guest_agent": True,
-        "install_zabbix_agent2": True,
-        "zabbix_server": "zabbix.nmulti.cloud",
-        "install_nms_agent": True,
-        "nms_agent_backend_url": "https://backend.nms.nmulti.cloud",
+        # Zabbix Agent 2 and the NMS host agent injections are OFF for this
+        # template, and that is a platform constraint rather than a preference:
+        # _inject_monitoring_agents() builds the Zabbix repository package name as
+        # "ubuntu${VERSION_ID}", which is a nonexistent "ubuntu13" package on
+        # Debian 13, and the NMS agent bootstrap hard-requires amd64 while this
+        # image also supports arm64. Injecting either would produce a cloud-config
+        # that fails on the very platform this template declares. Turn them on only
+        # once those injectors are OS-family- and architecture-aware.
+        "install_zabbix_agent2": False,
+        "install_nms_agent": False,
+        # With both of those off, this seed's own installer is the LAST runcmd
+        # entry. That matters: cloud-init shellifies runcmd into a plain /bin/sh
+        # script with no `set -e`, so a failing non-final command would be masked
+        # by a later success.
         "provisions_service": "influxdb3-core",
         "installer_config": config,
         "description": (

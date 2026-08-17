@@ -83,9 +83,13 @@ with token authentication left enabled, disables telemetry upload, omits
 `influxdb3-core.service` systemd drop-in (`Restart=on-failure`). First boot
 refuses to proceed on any release other than Debian 13, verifies the InfluxData
 key fingerprint, installs the pinned `3.11.0` candidate, re-verifies the
-installed version, holds the package, derives `node-id` from the clone's own
-hostname, and waits on the local `/ready` endpoint. It is endpoint-agnostic and
-credential-free like the `0020` profiles — the first administrative token is
+installed version, holds the package, derives `node-id` from the **per-VM SMBIOS
+UUID** (the clone hostname is not usable, because the clone pipeline reuses the
+template's cicustom meta-data), and waits on the local `/ready` endpoint with
+bounded probes and an overall deadline. Its build resolves the Trixie Debian 13
+base image, and the Ubuntu/amd64-only Zabbix and NMS agent injections are disabled
+for it so the composed cloud-config cannot fail on the platform it declares. It is
+endpoint-agnostic and credential-free like the `0020` profiles — the first administrative token is
 created and vaulted only by `service.influxdb.1.bootstrap` through typed NMS
 RPC. For hosts that already exist, the audited procedures
 `os.linux.debian.13.preflight_influxdb3_core` and

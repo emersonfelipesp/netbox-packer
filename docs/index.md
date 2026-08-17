@@ -45,8 +45,10 @@ SQL/InfluxQL workloads on Ubuntu 24.04 (VMID `9051`), and
 `9052`). The Debian 13 profile additionally bakes the production posture —
 managed configuration bound to `127.0.0.1:8181` with token authentication
 enabled, telemetry upload off, Processing Engine off, an `influxdb3-core.service`
-drop-in, a held package, and a per-clone `node-id` — and refuses to install on
-any other Debian release. Its administrative token still comes only from
+drop-in, a held package, and a `node-id` derived from the per-VM SMBIOS UUID
+rather than the shared clone hostname — and refuses to install on any other Debian
+release. Its build resolves the Trixie Debian 13 base image, and the Ubuntu/amd64-only
+Zabbix and NMS agent injections are disabled for it. Its administrative token still comes only from
 `service.influxdb.1.bootstrap`. Build dispatch supplies proxbox-api
 `endpoint_id` and `target_node` explicitly. Cloud-init contains no credentials or
 product setup call; typed NMS RPC owns onboarding and netbox-nms owns encrypted
