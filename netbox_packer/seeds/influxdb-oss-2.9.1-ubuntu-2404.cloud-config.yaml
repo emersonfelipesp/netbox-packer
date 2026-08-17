@@ -21,18 +21,29 @@ write_files:
       # non-zero exit here is masked by a later command's success and cloud-init still
       # reports success. Record a durable marker instead of relying on that exit
       # status, and never delete this script, so a failed guest keeps its evidence.
+      # An EXIT trap, deliberately NOT an ERR trap: bash does not run an ERR trap for
+      # an explicit `exit 1`, and this script rejects prereleases, unexpected installed
+      # versions, and readiness timeouts with exactly that. An EXIT handler covers every
+      # termination path, so no failure mode goes unrecorded. It also owns the temporary
+      # keyring cleanup, since a script may install only one EXIT trap.
       readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
-      record_install_failure() {
+      keyring_workdir=''
+      on_install_exit() {
         local exit_code=$?
-        install -d -m 0755 /var/lib/nms || true
-        {
-          printf 'installer: %s\n' "$0"
-          printf 'exit_code: %s\n' "${exit_code}"
-          printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        } > "${NMS_FAILURE_MARKER}" || true
+        if [ -n "${keyring_workdir}" ]; then
+          rm -rf "${keyring_workdir}" || true
+        fi
+        if [ "${exit_code}" -ne 0 ]; then
+          install -d -m 0755 /var/lib/nms || true
+          {
+            printf 'installer: %s\n' "$0"
+            printf 'exit_code: %s\n' "${exit_code}"
+            printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "${NMS_FAILURE_MARKER}" || true
+        fi
         return "${exit_code}"
       }
-      trap record_install_failure ERR
+      trap on_install_exit EXIT
       readonly PRODUCT_VERSION='2.9.1'
       install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
       # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
@@ -49,10 +60,6 @@ write_files:
       readonly EXPECTED_KEY_FINGERPRINT='24C975CBA61A024EE1B631787C3D57159FC2F927'
       keyring_workdir="$(mktemp -d)"
       chmod 0700 "${keyring_workdir}"
-      cleanup_keyring_workdir() {
-        rm -rf "${keyring_workdir}"
-      }
-      trap cleanup_keyring_workdir EXIT
       curl --fail --silent --show-error --location \
         --proto '=https' --tlsv1.2 \
         --retry 3 --retry-delay 2 --retry-max-time 60 \
@@ -73,8 +80,8 @@ write_files:
       install -o root -g root -m 0644 \
         "${keyring_workdir}/influxdata-archive.gpg" \
         /etc/apt/keyrings/influxdata-archive.gpg
-      cleanup_keyring_workdir
-      trap - EXIT
+      rm -rf "${keyring_workdir}"
+      keyring_workdir=''
       echo 'deb [signed-by=/etc/apt/keyrings/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main' \
         > /etc/apt/sources.list.d/influxdata.list
       apt-get update

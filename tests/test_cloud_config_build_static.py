@@ -1788,8 +1788,20 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
         #    bootstrap AFTER this script, so a non-zero exit here is masked by a later
         #    command's success and cloud-init still reports success.
         assert "set -Eeuo pipefail" in installer, constant
-        assert "trap record_install_failure ERR" in installer, constant
+        # An EXIT trap, not an ERR trap: bash does not run an ERR trap for an explicit
+        # `exit 1`, and these scripts reject prereleases, unexpected installed versions,
+        # and readiness timeouts with exactly that — those paths would record nothing.
+        assert "trap on_install_exit EXIT" in installer, constant
+        # No ERR trap is *installed* (the comment above it may legitimately mention one).
+        assert not re.search(r"^\s*trap\s+\S+\s+ERR\b", installer, re.MULTILINE), constant
         assert "/var/lib/nms/influxdb-install-failed" in installer, constant
+        # Exactly one trap is installed, since a later one would silently replace it.
+        trap_installs = [
+            line for line in installer.splitlines() if re.match(r"\s*trap\s", line)
+        ]
+        assert len(trap_installs) == 1, (constant, trap_installs)
+        # Every explicit failure exit is inside the trapped script, so each one records.
+        assert installer.count("exit 1") >= 3, constant
         # ...and the installer is not deleted, so a failed guest keeps its evidence.
         assert cloud_config["runcmd"] == [["bash", next(iter(files))]], constant
         assert not any("rm" in str(entry) for entry in cloud_config["runcmd"]), constant
