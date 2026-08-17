@@ -50,9 +50,10 @@ creating cloud-init images:
   version stays listed under its optgroup. An existing template whose stored
   version is not in the offered list keeps that value selectable, so editing an
   older template never fails validation.
-- **Machine-managed fields are hidden.** `built_at`, `packer_template_ref`, and
-  `installer_config_checksum_at_build` are written by `PackerBuildJob`, so the
-  form no longer asks operators to fill them in. They remain available via the
+- **Machine-managed fields are hidden.** `built_at`, `packer_template_ref`,
+  `installer_config_checksum_at_build`, `base_image_url_at_build`, and
+  `base_image_sha256_at_build` are written by `PackerBuildJob`, so the form no
+  longer asks operators to fill them in. They remain available read-only via the
   REST API.
 - **Guidance help text** is shown on `os_version`, `proxmox_template_id`,
   `storage_pool`, `cloud_init_ready`, and `installer_config` to make picking the
@@ -297,9 +298,20 @@ different root filesystem, and the artifact is accepted with no integrity check.
 |---|---|
 | `base_image_url` | An exact (normally dated) vendor artifact, replacing the derived release default. |
 | `base_image_sha256` | The reviewed digest, forwarded to proxbox-api as `sha256` and verified after download. |
+| `base_image_url_at_build` | Machine-managed resolved URL used by the last successful cloud-image build. |
+| `base_image_sha256_at_build` | Machine-managed resolved digest used by the last successful cloud-image build. |
 
 Both may also be supplied per build via `variable_overrides['image_url']` and
 `variable_overrides['image_sha256']`, which take precedence over the template fields.
+
+Migration `0028` adds the two `*_at_build` snapshots to both `PackerBuild` and
+`PackerTemplate`. On success, the build's resolved source and the template's
+last-successful source are committed atomically with the ready timestamp/status. Pin
+changes are therefore visible to staleness evaluation: changing or clearing a declared
+pin makes the old artifact stale, and a per-build pin that differs from the template
+also produces a stale template. Pin drift is checked even when `max_age_days` is unset.
+An unpinned build records its derived URL with an empty digest and does not become stale
+merely because historical unpinned snapshots are empty.
 
 **The rule that matters: a pinned URL must carry a digest.** If an explicit URL comes
 from either source and no digest resolves, `jobs._resolve_cloud_image_source()` raises

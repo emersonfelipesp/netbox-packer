@@ -105,8 +105,11 @@ Templates can pin their **base image**: `base_image_url` selects an exact vendor
 artifact instead of the mutable `latest` release directory, and `base_image_sha256`
 carries the reviewed digest that proxbox-api verifies after download (both are also
 settable per build via `variable_overrides`). A pinned URL without a digest fails the
-build closed — an unverified pin looks like provenance while guaranteeing nothing. No
-seeded profile is pinned yet; see
+build closed — an unverified pin looks like provenance while guaranteeing nothing.
+Successful cloud-image builds record the resolved URL and digest on the build and as
+machine-managed last-successful values on the template. Changing or clearing a pin, or
+using a per-build pin that differs from the template, therefore makes the artifact
+stale even when no age policy is configured. No seeded profile is pinned yet; see
 [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md) for the
 procedure, which requires obtaining each digest from the vendor's published checksum
 file and verifying it.

@@ -87,8 +87,9 @@ The template add/edit form is tuned for creating cloud-init templates:
   - Add a new offered version by appending a `("<ver>", "<label>")` tuple to the
     relevant family list in `OS_VERSIONS_BY_FAMILY`; no migration needed.
 - **Machine-managed fields are hidden** from the form (`built_at`,
-  `packer_template_ref`, `installer_config_checksum_at_build`) — they are written
-  by `PackerBuildJob` and remain available via the REST API.
+  `packer_template_ref`, `installer_config_checksum_at_build`,
+  `base_image_url_at_build`, `base_image_sha256_at_build`) — they are written
+  by `PackerBuildJob` and remain available read-only via the REST API.
 - **Help text** guides `os_version`, `proxmox_template_id`, `storage_pool`,
   `cloud_init_ready`, and `installer_config`.
 
@@ -122,8 +123,8 @@ nms UI /virtualization/packer (Create dialog -> Build)
             execute=true, preflight_plan_token=<returned token>
   -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
        on <vm_storage>:snippets -> qm template -> returns vmid
-  -> PackerBuild.result_template_id=vmid, build_status=success;
-     PackerTemplate.build_status=ready, built_at=now()
+  -> PackerBuild.result_template_id=vmid, build_status=success, resolved base source saved;
+     PackerTemplate.build_status=ready, built_at=now(), last successful base source saved
 ```
 
 Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
@@ -274,6 +275,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
 | `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Locked compare-and-set write, so a concurrent operator edit is never overwritten; a row that no longer matches the exact `0020` baseline **fails the migration by name** rather than being skipped; rebake invalidation follows `installer_config_id`; refuses to run while a build is queued/running; reverse is a no-op |
 | `0027` | *(schema only — base image pin)* | — | — | — | Adds optional `base_image_url` + `base_image_sha256` to `PackerTemplate`. A pinned URL without a digest fails the build closed; the digest is forwarded to proxbox-api as `sha256`. Defaults empty, so existing templates are unchanged |
+| `0028` | *(schema only — base image build snapshots)* | — | — | — | Records the resolved URL + digest on each successful cloud-image build and on the template as its last successful source. Desired-vs-built pin drift is stale even without an age policy; snapshot fields are machine-managed |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -350,6 +352,18 @@ at once; that gap closes per profile, by pinning it.
 a *verified* digest are operator judgements — see
 `docs/cloud-init-template-images.md` → "Base Image Pinning" for the procedure, including
 the requirement to record where each digest came from and how it was verified.
+
+#### Migration 0028 — successful-build base image snapshots
+
+Adds machine-managed `base_image_url_at_build` and
+`base_image_sha256_at_build` fields to `PackerBuild` and `PackerTemplate`. A successful
+cloud-image build records the resolved source on its build row and updates the
+template's last-successful source in the same transaction as `build_status="ready"`
+and `built_at`. `PackerTemplate.is_stale` compares a declared pin with those snapshots,
+so changing or clearing a pin, or using a per-build pin that differs from the template,
+cannot silently describe old bytes as current. Pin/checksum staleness is evaluated even
+when `max_age_days` is unset. Existing unpinned rows with empty historical snapshots
+retain their prior behavior.
 
 #### Migration 0025 — InfluxDB 3 Core on Debian 13
 

@@ -183,6 +183,8 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "nms_agent_backend_url",
             "base_image_url",
             "base_image_sha256",
+            "base_image_url_at_build",
+            "base_image_sha256_at_build",
             "provisions_service",
             "tags",
             "custom_fields",
@@ -190,7 +192,11 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name", "os_family", "os_version", "build_status")
-        read_only_fields = ("provisions_service",)
+        read_only_fields = (
+            "provisions_service",
+            "base_image_url_at_build",
+            "base_image_sha256_at_build",
+        )
 
 
 class PackerBuildSerializer(NetBoxModelSerializer):
@@ -216,12 +222,15 @@ class PackerBuildSerializer(NetBoxModelSerializer):
             "exit_code",
             "result_template_id",
             "selected_node",
+            "base_image_url_at_build",
+            "base_image_sha256_at_build",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "status", "queued_at")
+        read_only_fields = ("base_image_url_at_build", "base_image_sha256_at_build")
 
 
 class PackerBuildTargetSerializer(NetBoxModelSerializer):

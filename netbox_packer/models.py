@@ -5,6 +5,7 @@ from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
+from .base_image import pin_differs_from_built_source
 from .choices import (
     BuildStatusChoices,
     OSFamilyChoices,
@@ -242,6 +243,20 @@ class PackerTemplate(NetBoxModel):
             "proves nothing."
         ),
     )
+    base_image_url_at_build = models.URLField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=500,
+        help_text="Resolved base image URL used by the last successful cloud-image build.",
+    )
+    base_image_sha256_at_build = models.CharField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=64,
+        help_text="Resolved base image sha256 used by the last successful cloud-image build.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -266,17 +281,22 @@ class PackerTemplate(NetBoxModel):
 
     @property
     def is_stale(self):
-        if self.max_age_days is None:
-            return False
-        age = self.age_days
-        if age is None:
+        if self.built_at is None:
             return False
         config_stale = (
             self.installer_config is not None
             and self.installer_config_checksum_at_build
             and self.installer_config.checksum != self.installer_config_checksum_at_build
         )
-        return age > self.max_age_days or config_stale
+        base_image_stale = pin_differs_from_built_source(
+            desired_url=self.base_image_url,
+            desired_sha256=self.base_image_sha256,
+            built_url=self.base_image_url_at_build,
+            built_sha256=self.base_image_sha256_at_build,
+        )
+        age = self.age_days
+        age_stale = self.max_age_days is not None and age is not None and age > self.max_age_days
+        return age_stale or config_stale or base_image_stale
 
     @property
     def derived_vms(self):
@@ -318,6 +338,20 @@ class PackerBuild(NetBoxModel):
     exit_code = models.IntegerField(null=True, blank=True)
     result_template_id = models.IntegerField(null=True, blank=True)
     selected_node = models.CharField(max_length=100, blank=True)
+    base_image_url_at_build = models.URLField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=500,
+        help_text="Resolved base image URL used by this successful cloud-image build.",
+    )
+    base_image_sha256_at_build = models.CharField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=64,
+        help_text="Resolved base image sha256 used by this successful cloud-image build.",
+    )
 
     class Meta:
         ordering = ["-queued_at"]

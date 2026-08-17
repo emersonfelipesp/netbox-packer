@@ -199,6 +199,12 @@ incompatible; do not fall back to legacy one-step execution.
 to an exact vendor artifact and its reviewed digest, which
 `jobs._resolve_cloud_image_source()` forwards to proxbox-api as `sha256`.
 `variable_overrides['image_url']` / `['image_sha256']` override them per build.
+Migration `0028` records the resolved URL and digest on the successful `PackerBuild`
+and atomically updates the template's last-successful-build snapshots with
+`build_status="ready"` / `built_at`. Those snapshots are machine-managed and make a
+changed or cleared declared pin stale; a per-build pin that differs from the template
+also leaves the resulting template stale until it is rebuilt from the declared source.
+The staleness job must evaluate pin drift even when `max_age_days` is unset.
 
 - **A pinned URL without a digest fails the build, by design.** Never "fix" that by
   making the digest optional for pinned URLs — an unverified pin looks like provenance

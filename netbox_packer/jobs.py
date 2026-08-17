@@ -735,19 +735,34 @@ class PackerBuildJob(JobRunner):
         if status in {"created", "completed", "already_exists"}:
             build.status = "success"
             build.exit_code = 0
+            build.base_image_url_at_build = image_url
+            build.base_image_sha256_at_build = image_sha256
             if result_vmid:
                 build.result_template_id = int(result_vmid)
-            update = {"build_status": "ready", "built_at": timezone.now()}
+            update = {
+                "build_status": "ready",
+                "built_at": build.finished_at,
+                "base_image_url_at_build": image_url,
+                "base_image_sha256_at_build": image_sha256,
+            }
             if installer:
                 update["installer_config_checksum_at_build"] = installer.checksum
-            PackerTemplate.objects.filter(pk=template.pk).update(**update)
         else:
             build.status = "failed"
             build.exit_code = response.get("returncode") or 1
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
 
         build.log = "\n".join(log_lines)
-        build.save(update_fields=["status", "finished_at", "exit_code", "result_template_id", "log"])
+        build_update_fields = ["status", "finished_at", "exit_code", "result_template_id", "log"]
+        if build.status == "success":
+            from django.db import transaction
+
+            build_update_fields += ["base_image_url_at_build", "base_image_sha256_at_build"]
+            with transaction.atomic():
+                PackerTemplate.objects.filter(pk=template.pk).update(**update)
+                build.save(update_fields=build_update_fields)
+        else:
+            build.save(update_fields=build_update_fields)
 
     def _run_packer(self, build, template, endpoint, node, timeout):
         """Run packer init + packer build, streaming output into build.log."""
@@ -911,7 +926,9 @@ class PackerStalenessCheckJob(JobRunner):
             stale = 0
             queued = 0
 
-            for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+            # Age is only one source of staleness. Installer checksum and base-image
+            # pin drift must still be evaluated when max_age_days is unset.
+            for template in PackerTemplate.objects.exclude(build_status__in=("building",)):
                 checked += 1
                 if not template.is_stale:
                     continue

@@ -13,8 +13,10 @@ import re
 import subprocess
 import sys
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -162,6 +164,17 @@ def _load_jobs_isolated(monkeypatch):
 
     path = PKG / "jobs.py"
     spec = importlib.util.spec_from_file_location("netbox_packer.jobs_isolated", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_base_image_module():
+    spec = importlib.util.spec_from_file_location(
+        "netbox_packer.base_image_isolated",
+        PKG / "base_image.py",
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -2183,22 +2196,9 @@ def test_pinned_base_image_requires_a_verified_digest(monkeypatch) -> None:
 
 
 def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None:
-    """The digest must reach proxbox-api, and an unpinned payload must not change."""
+    """Plan and execute must carry the same digest; unpinned bodies omit it."""
 
-    spec = importlib.util.spec_from_file_location(
-        "netbox_packer.proxbox_client_isolated", PKG / "proxbox_client.py"
-    )
-    assert spec and spec.loader
-    client = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(client)
-
-    captured = {}
-
-    def fake_post_json(**kwargs):
-        captured.update(kwargs)
-        return {"status": "ok"}
-
-    monkeypatch.setattr(client, "_post_json", fake_post_json)
+    client = _load_proxbox_client()
 
     common = {
         "proxbox_api_url": "https://proxbox.example",
@@ -2208,16 +2208,202 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
         "target_node": "node1",
         "image_url": "https://vendor.example/img.qcow2",
         "user_data_yaml": "#cloud-config\n",
+        "endpoint_id": 17,
     }
 
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        client,
+        [_plan_response(), _preflight_response(), _executed_response()],
+    )
     client.call_proxbox_build(**common, image_sha256="c" * 64)
-    assert captured["payload"]["sha256"] == "c" * 64
-    assert captured["path"] == "/cloud/templates/images"
+    assert len(captured) == 3
+    plan_body, _, execute_body = [call["body"] for call in captured]
+    assert plan_body["sha256"] == "c" * 64
+    assert execute_body["sha256"] == "c" * 64
 
-    captured.clear()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        client,
+        [_plan_response(), _preflight_response(), _executed_response()],
+    )
     client.call_proxbox_build(**common)
-    # Omitted entirely, so an unpinned build keeps a byte-for-byte identical payload.
-    assert "sha256" not in captured["payload"]
+    assert len(captured) == 3
+    plan_body, _, execute_body = [call["body"] for call in captured]
+    # Omitted from both recipe-defining bodies, so plan and execute cannot drift.
+    assert "sha256" not in plan_body
+    assert "sha256" not in execute_body
+
+
+@pytest.mark.parametrize(
+    ("template_pin", "expected_sha256"),
+    [
+        ({"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64}, "d" * 64),
+        ({}, ""),
+    ],
+)
+def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
+    monkeypatch,
+    template_pin,
+    expected_sha256,
+) -> None:
+    """Protect the job-to-client seam and the atomic provenance snapshots."""
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    finished_at = object()
+    jobs.timezone.now = lambda: finished_at
+    jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
+
+    atomic_state = {"active": False}
+
+    @contextmanager
+    def atomic():
+        assert not atomic_state["active"]
+        atomic_state["active"] = True
+        try:
+            yield
+        finally:
+            atomic_state["active"] = False
+
+    django_db = ModuleType("django.db")
+    django_db.transaction = SimpleNamespace(atomic=atomic)
+    monkeypatch.setitem(sys.modules, "django.db", django_db)
+
+    template_manager = Mock()
+    template_manager.filter.return_value = template_manager
+    template_updates = []
+
+    def record_template_update(**values):
+        assert atomic_state["active"], "template provenance must be written inside transaction.atomic()"
+        template_updates.append(values)
+
+    template_manager.update.side_effect = record_template_update
+
+    settings_row = SimpleNamespace(
+        proxbox_api_url="https://proxbox.example",
+        get_fileserver_package_read_token=lambda: "",
+        get_proxbox_api_key=lambda: "api-key",
+    )
+    models_module = ModuleType("netbox_packer.models")
+    models_module.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    models_module.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
+    monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
+
+    call_proxbox_build = Mock(return_value={"status": "completed", "vmid": 9052})
+    client_module = ModuleType("netbox_packer.proxbox_client")
+    client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
+    client_module.call_proxbox_build = call_proxbox_build
+    monkeypatch.setitem(sys.modules, "netbox_packer.proxbox_client", client_module)
+
+    installer = SimpleNamespace(
+        content="#cloud-config\n",
+        installer_type="cloud_config",
+        checksum="e" * 64,
+    )
+    template_fields = {
+        "pk": 44,
+        "name": "base-image-test",
+        "installer_config": installer,
+        "storage_pool": "local",
+        "proxmox_node": "node1",
+        "proxmox_endpoint": "",
+        "proxmox_template_id": 9052,
+        "os_family": "ubuntu",
+        "os_version": "24.04",
+        "base_image_url": "",
+        "base_image_sha256": "",
+        "is_fileserver_golden_template": False,
+        "install_qemu_guest_agent": False,
+        "install_zabbix_agent2": False,
+        "zabbix_server": "",
+        "install_nms_agent": False,
+    }
+    template_fields.update(template_pin)
+    template = SimpleNamespace(**template_fields)
+
+    saved_update_fields = []
+
+    def save_build(*, update_fields):
+        assert atomic_state["active"], "build provenance must be written inside transaction.atomic()"
+        saved_update_fields.append(update_fields)
+
+    build = SimpleNamespace(
+        variable_overrides={"endpoint_id": 17, "target_node": "node1"},
+        result_template_id=None,
+        log="",
+        save=save_build,
+    )
+
+    jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
+
+    client_kwargs = call_proxbox_build.call_args.kwargs
+    expected_url = template_pin.get(
+        "base_image_url",
+        "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
+    )
+    assert client_kwargs["image_url"] == expected_url
+    assert client_kwargs["image_sha256"] == expected_sha256
+    assert build.base_image_url_at_build == expected_url
+    assert build.base_image_sha256_at_build == expected_sha256
+    assert template_updates == [
+        {
+            "build_status": "ready",
+            "built_at": finished_at,
+            "base_image_url_at_build": expected_url,
+            "base_image_sha256_at_build": expected_sha256,
+            "installer_config_checksum_at_build": "e" * 64,
+        }
+    ]
+    assert "base_image_url_at_build" in saved_update_fields[0]
+    assert "base_image_sha256_at_build" in saved_update_fields[0]
+    assert not atomic_state["active"]
+
+
+@pytest.mark.parametrize(
+    ("desired_url", "desired_sha256", "built_url", "built_sha256", "expected"),
+    [
+        ("", "", "", "", False),
+        ("", "", "https://vendor.example/latest.qcow2", "", False),
+        ("https://vendor.example/a.qcow2", "a" * 64, "https://vendor.example/a.qcow2", "a" * 64, False),
+        ("https://vendor.example/b.qcow2", "a" * 64, "https://vendor.example/a.qcow2", "a" * 64, True),
+        ("https://vendor.example/a.qcow2", "b" * 64, "https://vendor.example/a.qcow2", "a" * 64, True),
+        ("", "", "https://vendor.example/override.qcow2", "a" * 64, True),
+        ("https://vendor.example/a.qcow2", "a" * 64, "", "", True),
+        ("https://vendor.example/a.qcow2", "A" * 64, "https://vendor.example/a.qcow2", "a" * 64, False),
+    ],
+)
+def test_base_image_pin_staleness(
+    desired_url,
+    desired_sha256,
+    built_url,
+    built_sha256,
+    expected,
+) -> None:
+    helper = _load_base_image_module()
+
+    assert (
+        helper.pin_differs_from_built_source(
+            desired_url=desired_url,
+            desired_sha256=desired_sha256,
+            built_url=built_url,
+            built_sha256=built_sha256,
+        )
+        is expected
+    )
+
+
+def test_staleness_evaluates_pin_drift_without_an_age_policy() -> None:
+    models_src = _read("netbox_packer/models.py")
+    jobs_src = _read("netbox_packer/jobs.py")
+
+    assert "base_image_stale = pin_differs_from_built_source(" in models_src
+    assert "return age_stale or config_stale or base_image_stale" in models_src
+    staleness_job = jobs_src.split("class PackerStalenessCheckJob", 1)[1].split("def dispatch_build", 1)[0]
+    assert '.exclude(max_age_days=None)' not in staleness_job
 
 
 def test_base_image_pin_fields_are_exposed_and_migrated() -> None:
@@ -2240,6 +2426,55 @@ def test_base_image_pin_fields_are_exposed_and_migrated() -> None:
     for field in ("base_image_url", "base_image_sha256"):
         assert f'"{field}"' in forms_src, ("forms", field)
         assert f'"{field}"' in serializer_src, ("serializer", field)
+
+
+def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_linear() -> None:
+    snapshot_fields = ("base_image_url_at_build", "base_image_sha256_at_build")
+    models_src = _read("netbox_packer/models.py")
+    forms_src = _read("netbox_packer/forms.py")
+    serializers_src = _read("netbox_packer/api/serializers.py")
+    template_form = forms_src.split("class PackerTemplateForm", 1)[1].split("\nclass ", 1)[0]
+    template_serializer = serializers_src.split("class PackerTemplateSerializer", 1)[1].split("\nclass ", 1)[0]
+    build_serializer = serializers_src.split("class PackerBuildSerializer", 1)[1].split("\nclass ", 1)[0]
+
+    for field in snapshot_fields:
+        assert models_src.count(f"{field} = models.") == 2
+        assert f'"{field}"' not in template_form
+        assert f'"{field}"' in template_serializer
+        assert f'"{field}"' in build_serializer
+        assert f'"{field}"' in template_serializer.split("read_only_fields =", 1)[1]
+        assert f'"{field}"' in build_serializer.split("read_only_fields =", 1)[1]
+
+    migration_path = PKG / "migrations" / "0028_base_image_build_snapshots.py"
+    migration = migration_path.read_text(encoding="utf-8")
+    assert '("netbox_packer", "0027_packertemplate_base_image_pin")' in migration
+    for model_name in ("packerbuild", "packertemplate"):
+        for field in snapshot_fields:
+            assert f'model_name="{model_name}",' in migration
+            assert f'name="{field}",' in migration
+
+    migration_paths = sorted((PKG / "migrations").glob("[0-9][0-9][0-9][0-9]_*.py"))
+    names = {path.stem for path in migration_paths}
+    numbers = [path.stem.split("_", 1)[0] for path in migration_paths]
+    assert len(numbers) == len(set(numbers)), "netbox-packer has duplicate migration numbers"
+
+    internal_dependencies = set()
+    for path in migration_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        migration_class = next(
+            node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Migration"
+        )
+        dependencies_node = next(
+            node.value
+            for node in migration_class.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "dependencies" for target in node.targets)
+        )
+        for app_label, dependency in ast.literal_eval(dependencies_node):
+            if app_label == "netbox_packer":
+                internal_dependencies.add(dependency)
+
+    assert names - internal_dependencies == {"0028_base_image_build_snapshots"}
 
 
 def test_influxdb3_core_debian13_contract_is_documented() -> None:
@@ -2299,7 +2534,8 @@ def test_serializer_exposes_monitoring_agent_fields() -> None:
     assert '"install_nms_agent"' in src
     assert '"nms_agent_backend_url"' in src
     assert '"provisions_service"' in src
-    assert 'read_only_fields = ("provisions_service",)' in src
+    template_serializer = src.split("class PackerTemplateSerializer", 1)[1].split("\nclass ", 1)[0]
+    assert '"provisions_service"' in template_serializer.split("read_only_fields =", 1)[1]
 
     filter_src = _read("netbox_packer/filtersets.py")
     assert '"provisions_service"' in filter_src
