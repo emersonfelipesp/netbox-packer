@@ -1795,11 +1795,19 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
         # No ERR trap is *installed* (the comment above it may legitimately mention one).
         assert not re.search(r"^\s*trap\s+\S+\s+ERR\b", installer, re.MULTILINE), constant
         assert "/var/lib/nms/influxdb-install-failed" in installer, constant
-        # Exactly one trap is installed, since a later one would silently replace it.
-        trap_installs = [
-            line for line in installer.splitlines() if re.match(r"\s*trap\s", line)
+        # Exactly ONE EXIT trap: a second would silently replace the first. Signal
+        # traps are required alongside it, not forbidden — on an untrapped TERM/INT/HUP
+        # bash runs the EXIT trap with `$?` possibly still 0, so the handler would clean
+        # up and record nothing. Converting each signal to a non-zero exit is what makes
+        # a systemd cancellation, guest shutdown, or external timeout visible.
+        exit_traps = [
+            line
+            for line in installer.splitlines()
+            if re.match(r"\s*trap\s+\S+\s+EXIT\b", line)
         ]
-        assert len(trap_installs) == 1, (constant, trap_installs)
+        assert len(exit_traps) == 1, (constant, exit_traps)
+        for signal, code in (("TERM", 143), ("INT", 130), ("HUP", 129)):
+            assert f"trap 'exit {code}' {signal}" in installer, (constant, signal)
         # Every explicit failure exit is inside the trapped script, so each one records.
         assert installer.count("exit 1") >= 3, constant
         # ...and the installer is not deleted, so a failed guest keeps its evidence.
@@ -1814,6 +1822,12 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
     assert "if config.content != legacy:" in source
     assert "unresolved.append(" in source
     assert "if unresolved:" in source
+    # The baseline check and the write are separate statements, so the row is locked
+    # AND the write re-asserts the baseline as its predicate. Without both, an operator
+    # committing a customization between the two would have it silently overwritten.
+    assert "select_for_update()" in source
+    assert "filter(pk=config.pk, content=legacy).update(" in source
+    assert "if not replaced:" in source
     assert "Refusing to leave a known-vulnerable InfluxDB profile in place" in source
 
     # Rebake invalidation follows the real relationship, not the editable name: a

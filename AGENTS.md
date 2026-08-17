@@ -79,10 +79,23 @@ Four behaviours of `0026` are deliberate and must not be "simplified":
 `/bin/sh` script with no `set -e`, and build-time injection appends the Zabbix bootstrap
 *after* each profile's own installer — so a non-zero exit from the installer is masked
 by a later command's success and cloud-init still reports success. Both profiles
-therefore run under `set -Eeuo pipefail` with an `ERR` trap that writes a durable marker
-to `/var/lib/nms/influxdb-install-failed`, and the `rm` that used to delete the installer
-was removed so a failed guest keeps its evidence. Do not reintroduce that `rm`, and do
-not rely on the runcmd exit status.
+therefore run under `set -Eeuo pipefail` with an **`EXIT`** trap that writes a durable
+marker to `/var/lib/nms/influxdb-install-failed`, and the `rm` that used to delete the
+installer was removed so a failed guest keeps its evidence.
+
+**It must stay an `EXIT` trap, never an `ERR` trap.** Bash does not run an `ERR` trap for
+an explicit `exit 1`, and these scripts reject prereleases, unexpected installed
+versions, and readiness timeouts with exactly that — an `ERR` trap silently misses the
+three failure modes most worth recording. The `EXIT` handler also owns the temporary
+keyring cleanup, because a script may install only one `EXIT` trap.
+
+Alongside it, `TERM`/`INT`/`HUP` are trapped to `exit 143`/`130`/`129`. On an untrapped
+fatal signal bash still runs the `EXIT` trap, but `$?` can still hold the previous
+command's successful status, so the handler would clean up and record nothing — a
+systemd cancellation, guest shutdown, or external timeout would look like success.
+Converting each signal to a non-zero exit is what makes those visible.
+
+Do not reintroduce the `rm`, and do not rely on the runcmd exit status.
 
 Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
 **Debian 13** Core 3 profile. Its verbatim cloud-config is

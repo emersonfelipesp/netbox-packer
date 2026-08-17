@@ -226,6 +226,14 @@ write_files:
         fi
         return "${exit_code}"
       }
+      # Convert fatal signals into non-zero exits FIRST. On an untrapped TERM/INT/HUP
+      # bash still runs the EXIT trap, but `$?` can still hold the previous command's
+      # successful status — so the handler would clean up and record nothing, exactly
+      # the hidden failure the marker exists to expose. Systemd cancellation, guest
+      # shutdown, or an external timeout all take this path.
+      trap 'exit 143' TERM
+      trap 'exit 130' INT
+      trap 'exit 129' HUP
       trap on_install_exit EXIT
       readonly PRODUCT_VERSION='2.9.1'
       install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
@@ -354,6 +362,14 @@ write_files:
         fi
         return "${exit_code}"
       }
+      # Convert fatal signals into non-zero exits FIRST. On an untrapped TERM/INT/HUP
+      # bash still runs the EXIT trap, but `$?` can still hold the previous command's
+      # successful status — so the handler would clean up and record nothing, exactly
+      # the hidden failure the marker exists to expose. Systemd cancellation, guest
+      # shutdown, or an external timeout all take this path.
+      trap 'exit 143' TERM
+      trap 'exit 130' INT
+      trap 'exit 129' HUP
       trap on_install_exit EXIT
       readonly PRODUCT_VERSION='3.11.0'
       install -d -m 0755 \
@@ -481,7 +497,12 @@ def harden_influxdb_0020_profiles(apps, schema_editor):
     unresolved = []
 
     for name, version, hardened, legacy, _template_names in _PROFILES:
-        config = PackerInstallerConfig.objects.filter(name=name, version=version).first()
+        # Lock the row for the rest of the transaction. The baseline check and the
+        # save are separate statements, so without this an operator could commit a
+        # customization between them and have it silently overwritten from a stale
+        # in-memory instance — the exact data loss this migration promises not to
+        # cause.
+        config = PackerInstallerConfig.objects.select_for_update().filter(name=name, version=version).first()
         if config is None:
             continue
 
@@ -514,12 +535,22 @@ def harden_influxdb_0020_profiles(apps, schema_editor):
                 unresolved.append(f"{name!r} version {version!r}")
                 continue
 
-            config.content = hardened
-            config.checksum = hardened_checksum
             description = config.description or ""
             if _HARDENED_DESCRIPTION_SUFFIX.strip() not in description:
-                config.description = (description + _HARDENED_DESCRIPTION_SUFFIX).strip()
-            config.save(update_fields=["content", "checksum", "description"])
+                description = (description + _HARDENED_DESCRIPTION_SUFFIX).strip()
+
+            # Compare-and-set: the predicate re-asserts the baseline content at write
+            # time, so even if the lock above were ever lost or unsupported, a row
+            # changed underneath us is not overwritten — the update simply affects no
+            # rows and the profile is reported as unresolved instead.
+            replaced = PackerInstallerConfig.objects.filter(pk=config.pk, content=legacy).update(
+                content=hardened,
+                checksum=hardened_checksum,
+                description=description,
+            )
+            if not replaced:
+                unresolved.append(f"{name!r} version {version!r}")
+                continue
 
         # Invalidate by the real relationship, not by canonical name: template names
         # are editable and several templates can share one installer config, so a

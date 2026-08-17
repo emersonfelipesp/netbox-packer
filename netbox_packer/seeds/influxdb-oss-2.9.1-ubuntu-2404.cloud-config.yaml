@@ -43,6 +43,14 @@ write_files:
         fi
         return "${exit_code}"
       }
+      # Convert fatal signals into non-zero exits FIRST. On an untrapped TERM/INT/HUP
+      # bash still runs the EXIT trap, but `$?` can still hold the previous command's
+      # successful status — so the handler would clean up and record nothing, exactly
+      # the hidden failure the marker exists to expose. Systemd cancellation, guest
+      # shutdown, or an external timeout all take this path.
+      trap 'exit 143' TERM
+      trap 'exit 130' INT
+      trap 'exit 129' HUP
       trap on_install_exit EXIT
       readonly PRODUCT_VERSION='2.9.1'
       install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
