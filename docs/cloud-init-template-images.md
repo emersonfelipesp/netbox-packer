@@ -284,6 +284,57 @@ only and builds nothing. Confirm VMID `9052` is free on the destination cluster
 before baking, and supersede a bad artifact by baking a new VMID rather than
 deleting the previous one.
 
+### InfluxDB 3 Explorer on Debian 13 (`0030`)
+
+`0030_seed_influxdb3_explorer_debian13_cloud_init.py` adds the independent
+`influxdb3-explorer-1.9.0-debian-13` template at VMID `9053`. A separate
+template gives Core and Explorer separate build runs and artifacts. Like the
+Debian Core profile it is endpoint-agnostic, so each build supplies proxbox-api
+`endpoint_id` and `target_node`.
+
+| Field | Value |
+| --- | --- |
+| Template name | `influxdb3-explorer-1.9.0-debian-13` |
+| Installer config | `influxdb3-explorer-1.9.0-debian-13-cloud-config` version `1.9.0` |
+| OS | Debian `13` (Trixie) |
+| Template VMID | `9053` |
+| Proxmox endpoint / node | selected at build (`endpoint_id` + `target_node`) |
+| Storage | `local` |
+| Container image | `influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc` |
+| Listener | configurable host IP, default `127.0.0.1:8080` |
+| Persistent data | `/var/lib/influxdb3-explorer` mounted at `/db` |
+| Provisioned config | `/etc/influxdb3-explorer` mounted read-only at `/app-root/config` |
+| Systemd unit | `influxdb3-explorer.service` |
+| Service marker | `provisions_service = "influxdb3-explorer"` |
+
+The verbatim cloud-config source of truth is
+`netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml`;
+the migration constant must stay byte-identical to it. First boot refuses a
+non-Debian-13 or unsupported-architecture guest, installs `docker.io` only from
+Debian's signed repository, pulls the digest-addressed multi-architecture
+manifest under an overall deadline, applies a maximum accepted image size,
+and starts the container through the single systemd lifecycle owner. The local
+readiness probe has per-attempt and overall deadlines. An `EXIT` trap plus
+`TERM`/`INT`/`HUP` conversion records failures durably at
+`/var/lib/nms/influxdb-install-failed`.
+
+The default bind in `/etc/default/influxdb3-explorer` is loopback. An operator
+may replace it with a specific host IP, but Explorer does not provide a second
+user-authentication boundary around a configured InfluxDB connection: anyone
+who can reach Explorer inherits that connection token's permissions. Remote
+access therefore needs an explicit access-control design, normally an
+authenticating TLS reverse proxy.
+
+The golden image deliberately starts with no InfluxDB connection. After clone,
+`service.influxdb.1.token_create` mints and vaults the Core token and returns
+only an `nms-secret:<opaque-id>` reference. Provision-time automation resolves
+that reference only in memory, writes root-owned mode-`0640`
+`/etc/influxdb3-explorer/config.json`, and restarts
+`influxdb3-explorer.service`. Neither the reference nor its resolved value is
+baked into cloud-init. The Ubuntu/amd64-only Zabbix and NMS agent injections
+remain off; QEMU guest-agent injection remains on, and the Explorer installer
+stays the last command in the fully injected `runcmd` list.
+
 ## Base Image Pinning (reproducible, verifiable OS bases)
 
 A cloud-init bake downloads a vendor base image that becomes the guest's **entire
@@ -652,6 +703,14 @@ contain a template with a `cicustom` user-data snippet. Clone verification must
 confirm the exact package version, held package state, systemd state, and local
 health/readiness endpoint before typed RPC onboarding begins.
 
+For InfluxDB 3 Explorer, VMID `9053` should be a template on the selected
+endpoint. On a fresh clone, wait for `cloud-init status --wait`, confirm
+`systemctl is-active influxdb3-explorer.service`, and inspect the running image
+reference for the reviewed digest. `curl http://127.0.0.1:8080/` should answer,
+while `/etc/influxdb3-explorer/config.json` should not exist before provision-time
+automation resolves the clone's `nms-secret:<opaque-id>` reference. After
+provisioning, confirm that file is root-owned mode `0640` and the unit restarted.
+
 For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
 on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
 `127.0.0.1:5300`, `pdns-recursor` should listen on the primary IPv4 address on
@@ -689,6 +748,9 @@ secure-prefix policy.
 - OSS 2.9.1 and Core 3.11.0 cloud-configs parse as YAML, pin and hold exact
   package versions, verify the InfluxData signing key, and contain no setup
   request or credential material;
+- Explorer 1.9.0 uses the exact `influxdata/influxdb3-ui` manifest digest,
+  Debian `docker.io`, a loopback-default systemd lifecycle, bounded first boot,
+  collision-safe VMID `9053` seeding, and no baked Core connection or credential;
 - build requests validate explicit endpoint, node, VMID, and storage selectors
   and suppress legacy SSH-host metadata when an endpoint ID is selected;
 - project docs and LLM files cover both profiles, typed RPC onboarding, and the

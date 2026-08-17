@@ -101,6 +101,17 @@ RPC. For hosts that already exist, the audited procedures
 `os.linux.debian.13.preflight_influxdb3_core` and
 `os.linux.debian.13.install_influxdb3_core` apply the same posture over SSH.
 
+Migration `0030` adds the separate endpoint-agnostic
+`influxdb3-explorer-1.9.0-debian-13` template (VMID `9053`). Debian's
+`docker.io` package runs
+`influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`
+under `influxdb3-explorer.service`, publishing container port `8080` on
+`127.0.0.1` by default. No Core URL or credential is baked. After cloning,
+`service.influxdb.1.token_create` returns an `nms-secret:<opaque-id>` reference;
+provision-time automation resolves it in memory, writes the root-only Explorer
+connection configuration, and restarts the unit. Zabbix and NMS host-agent
+injection remain off for this Debian/arm64-capable profile.
+
 Templates can pin their **base image**: `base_image_url` selects an exact vendor
 artifact instead of the mutable `latest` release directory, and `base_image_sha256`
 carries the reviewed digest that proxbox-api verifies after download (both are also

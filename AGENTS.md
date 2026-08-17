@@ -176,6 +176,42 @@ apply the same posture over audited SSH; the onboarding sequence is
 must not import, depend on, or reference `netbox-rpc`** — that dependency is
 one-way, and these procedures are named here as documentation only.
 
+## InfluxDB 3 Explorer Guardrail
+
+Migration `0030` seeds `influxdb3-explorer-1.9.0-debian-13` at VMID `9053` as
+an endpoint-agnostic Debian 13 cloud-init profile. Its verbatim source is
+`netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml`, and
+the migration constant must remain byte-identical. Migration `0030` depends on
+`0029` and must remain the sole migration leaf unless a later linear migration
+supersedes it. Collision handling follows `0025`: compare existing rows, report
+all mismatched fields, never overwrite them, exclude mutable build state, and
+leave reverse as a no-op because VMID `9053` may already be baked.
+
+The only valid container repository is `influxdata/influxdb3-ui`, and release
+`1.9.0` is pinned everywhere by multi-architecture manifest digest
+`sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`.
+Docker must come from Debian's signed repository (`docker.io`), never a remote
+shell installer. `influxdb3-explorer.service` is the sole lifecycle owner. It
+publishes container port `8080` using the configurable `EXPLORER_HOST_BIND`,
+which defaults to `127.0.0.1`, and mounts persistent `/db` separately from the
+read-only provisioned configuration directory. Keep image pulls bounded and
+size-checked, local readiness bounded, and the installer's `set -Eeuo pipefail`
+plus one `EXIT` trap and signal conversion intact.
+
+This golden image must contain no Core URL, token, password, TLS private key,
+session secret, or environment-specific secret reference. After cloning,
+`service.influxdb.1.token_create` mints and vaults the Core token and returns
+only `nms-secret:<opaque-id>`. Provision-time automation resolves that reference
+in memory, writes root-owned mode-`0640`
+`/etc/influxdb3-explorer/config.json`, and restarts the Explorer unit. Anyone
+who can reach Explorer inherits that token's permissions, so do not change the
+default bind without an explicit access-control design.
+
+`install_zabbix_agent2` and `install_nms_agent` stay false because the shared
+injectors remain Ubuntu- and amd64-only. QEMU guest-agent injection may remain
+enabled. The Explorer installer must be the last entry in the fully injected
+`runcmd` list so cloud-init's `set -e`-less wrapper cannot mask it.
+
 ## Signed Preflight Build Guardrail
 
 Every executable cloud-config build uses the proxbox-api signed handshake in

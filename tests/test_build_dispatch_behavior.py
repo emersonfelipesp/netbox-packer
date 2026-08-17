@@ -928,3 +928,135 @@ def test_migration_0029_rejects_a_zero_row_compare_and_set(isolated_imports) -> 
 
     assert row.base_image_url == ""
     assert row.base_image_sha256 == ""
+
+
+def _load_migration_0030():
+    django_db = types.ModuleType("django.db")
+
+    class Migration:
+        pass
+
+    class RunPython:
+        def __init__(self, forwards, backwards):
+            self.forwards = forwards
+            self.backwards = backwards
+
+    django_db.migrations = SimpleNamespace(Migration=Migration, RunPython=RunPython)
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.db"] = django_db
+
+    path = PKG / "migrations" / "0030_seed_influxdb3_explorer_debian13_cloud_init.py"
+    spec = importlib.util.spec_from_file_location("migration_0030_behavior", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SeedRowManager:
+    def __init__(self, rows, first_pk):
+        self.rows = rows
+        self.first_pk = first_pk
+
+    def get_or_create(self, defaults, **identity):
+        for row in self.rows:
+            if all(getattr(row, field) == expected for field, expected in identity.items()):
+                return row, False
+
+        row_values = {**identity, **defaults}
+        row = SimpleNamespace(pk=self.first_pk + len(self.rows), **row_values)
+        if "installer_config" in defaults:
+            row.installer_config_id = defaults["installer_config"].pk
+        self.rows.append(row)
+        return row, True
+
+
+def _migration_0030_apps(config_manager, template_manager):
+    models = {
+        "PackerInstallerConfig": type(
+            "PackerInstallerConfig",
+            (),
+            {"objects": config_manager},
+        ),
+        "PackerTemplate": type(
+            "PackerTemplate",
+            (),
+            {"objects": template_manager},
+        ),
+    }
+    return SimpleNamespace(
+        get_model=Mock(side_effect=lambda _app, model_name: models[model_name])
+    )
+
+
+def test_migration_0030_seeds_and_reapplies_after_build_state_changes(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert len(configs) == 1
+    assert configs[0].name == migration.CONFIG_NAME
+    assert configs[0].version == migration.CONFIG_VERSION
+    assert configs[0].content == migration.INFLUXDB3_EXPLORER_DEBIAN13_CLOUD_CONFIG
+    assert len(templates) == 1
+    assert templates[0].name == migration.TEMPLATE_NAME
+    assert templates[0].proxmox_template_id == 9053
+    assert templates[0].installer_config_id == configs[0].pk
+
+    # These fields are written by a successful build and must not turn a safe
+    # rollback/reapply into a false collision.
+    templates[0].build_status = "ready"
+    templates[0].packer_template_ref = "artifact/explorer/9053"
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    assert templates[0].build_status == "ready"
+    assert templates[0].packer_template_ref == "artifact/explorer/9053"
+
+
+def test_migration_0030_refuses_installer_config_collision_without_overwrite(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    configs[0].description = "operator-owned description"
+
+    with pytest.raises(RuntimeError, match="installer config.*description"):
+        migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert configs[0].description == "operator-owned description"
+    assert len(configs) == 1
+    assert len(templates) == 1
+
+
+def test_migration_0030_refuses_template_collision_without_overwrite(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    templates[0].storage_pool = "operator-storage"
+
+    with pytest.raises(RuntimeError, match="template.*storage_pool"):
+        migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert templates[0].storage_pool == "operator-storage"
+    assert len(configs) == 1
+    assert len(templates) == 1
