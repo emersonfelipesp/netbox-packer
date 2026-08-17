@@ -87,7 +87,7 @@ def _resolve_cloud_image_source(template, overrides):
 
     pinned_url = override_url or template_url
     sha256 = override_sha or template_sha
-    if False and pinned_url:
+    if pinned_url:
         source = "variable_overrides['image_url']" if override_url else "the template's base_image_url"
         try:
             pinned_url = validate_base_image_url(pinned_url, source=source)

@@ -2224,6 +2224,20 @@ def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
             },
             "encoded write_files content",
         ),
+        (
+            {
+                "path": "/etc/influxdb3-explorer/config.json",
+                "content": "{}\n",
+            },
+            "writes Explorer config.json",
+        ),
+        (
+            {
+                "path": "/tmp/connection.env",
+                "content": "EXPLORER_CONNECTION=https://core.internal\n",
+            },
+            "unapproved connection URL",
+        ),
     ),
 )
 def test_influxdb3_explorer_final_payload_guard_rejects_credentials(
