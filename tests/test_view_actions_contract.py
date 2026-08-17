@@ -68,6 +68,5 @@ def test_action_assignments_are_tuples_of_names() -> None:
         assert isinstance(value, ast.Tuple), f"{location}: actions must be a tuple"
         for element in value.elts:
             assert isinstance(element, ast.Name), (
-                f"{location}: actions entries must be ObjectAction classes, not "
-                f"{ast.dump(element)[:60]}"
+                f"{location}: actions entries must be ObjectAction classes, not {ast.dump(element)[:60]}"
             )

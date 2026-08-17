@@ -211,9 +211,7 @@ def seed_influxdb_profiles(apps, schema_editor):
             "credentials; use the typed RPC onboarding flow after cloning."
         )
         legacy.save(update_fields=["content", "checksum", "description"])
-        PackerTemplate.objects.filter(
-            name="influxdb-2-ubuntu-2404-proxmox-collector"
-        ).update(
+        PackerTemplate.objects.filter(name="influxdb-2-ubuntu-2404-proxmox-collector").update(
             build_status="pending",
             built_at=None,
             installer_config_checksum_at_build="",
@@ -227,9 +225,7 @@ def seed_influxdb_profiles(apps, schema_editor):
 def unseed_influxdb_profiles(apps, schema_editor):
     PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
-    PackerTemplate.objects.filter(
-        name__in=[profile["template_name"] for profile in PROFILES]
-    ).delete()
+    PackerTemplate.objects.filter(name__in=[profile["template_name"] for profile in PROFILES]).delete()
     for profile in PROFILES:
         PackerInstallerConfig.objects.filter(
             name=profile["config_name"],

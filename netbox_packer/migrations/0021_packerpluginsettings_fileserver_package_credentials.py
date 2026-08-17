@@ -19,10 +19,7 @@ class Migration(migrations.Migration):
                 blank=True,
                 default="",
                 editable=False,
-                help_text=(
-                    "Fernet-encrypted package-index read token "
-                    "(set via set_fileserver_package_read_token())."
-                ),
+                help_text=("Fernet-encrypted package-index read token (set via set_fileserver_package_read_token())."),
                 max_length=512,
             ),
         ),
