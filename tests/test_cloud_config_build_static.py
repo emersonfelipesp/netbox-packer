@@ -1701,6 +1701,157 @@ def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
     assert config.get("ssh_pwauth") is True
 
 
+def test_injected_zabbix_download_is_bounded() -> None:
+    """The injected Zabbix bootstrap runs on nearly every template.
+
+    It is appended after each template's own installer, so an unbounded download there
+    can hang first boot for any image that opts into Zabbix — not just the InfluxDB
+    profiles this branch hardens.
+    """
+
+    jobs_src = _read("netbox_packer/jobs.py")
+    zabbix_download = next(
+        line for line in _logical_shell_lines(jobs_src) if "zabbix-release.deb" in line and "curl" in line
+    )
+    for flag in ("--connect-timeout", "--max-time", "--retry-max-time", "--max-filesize"):
+        assert flag in zabbix_download, (flag, zabbix_download[:120])
+
+
+def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
+    """The 0020 profiles must carry the same three fixes as the Debian 13 profile.
+
+    They share its shell shape, so they shared its defects: a keyring trust boundary
+    that admitted extra keys, a version match that accepted prereleases, and
+    unbounded downloads. Asserted against the tracked seed files and the migration
+    constants that must equal them.
+    """
+
+    rel = "netbox_packer/migrations/0026_harden_influxdb_0020_profiles.py"
+    source = _read(rel)
+    constants = _literal_assignments(rel)
+
+    seeds = {
+        "HARDENED_OSS2_CLOUD_CONFIG": (
+            "netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml",
+            "influxdb2",
+            "2.9.1",
+            "http://127.0.0.1:8086/health",
+        ),
+        "HARDENED_CORE3_CLOUD_CONFIG": (
+            "netbox_packer/seeds/influxdb-core-3.11.0-ubuntu-2404.cloud-config.yaml",
+            "influxdb3-core",
+            "3.11.0",
+            "http://127.0.0.1:8181/ready",
+        ),
+    }
+
+    for constant, (seed_rel, package, version, health_url) in seeds.items():
+        seed = _read(seed_rel)
+        assert constants[constant] == seed, constant
+
+        cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+        files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+        installer = next(iter(files.values()))
+        subprocess.run(["bash", "-n"], input=installer, text=True, check=True)
+
+        # 1. exactly one signing key is trusted
+        assert "gpg --dearmor" not in installer, constant
+        assert "--export --export-options export-minimal" in installer, constant
+        assert "GNUPGHOME=" in installer, constant
+        assert "grep -c '^pub:'" in installer, constant
+        assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in installer, constant
+
+        # 2. final releases only — a tilde version sorts before the release it
+        #    qualifies, so accepting one silently installs an unreviewed build
+        assert f"Refusing prerelease {package}" in installer, constant
+        assert f"{version}|{version}-*)" in installer, constant
+        assert f"{version}[-+~]*" not in installer, constant
+        assert "([+~-]|$)" not in installer, constant
+
+        # 3. every download bounded, and the readiness loop actually bounded
+        invocations = [
+            line for line in _logical_shell_lines(installer) if not line.lstrip().startswith("#") and "curl " in line
+        ]
+        assert len(invocations) >= 2, (constant, invocations)
+        for invocation in invocations:
+            for flag in ("--connect-timeout", "--max-time"):
+                assert flag in invocation, (constant, flag, invocation[:110])
+        key_download = next(i for i in invocations if "influxdata-archive.key" in i)
+        assert "--retry-max-time" in key_download, constant
+        assert "--max-filesize" in key_download, constant
+        assert "readiness_deadline=$((SECONDS + 180))" in installer, constant
+        assert "seq 1 60" not in installer, constant
+        assert health_url in installer, constant
+
+        # 4. an installer failure must leave durable evidence. Cloud-init's runcmd
+        #    wrapper has no `set -e` and build-time injection appends the Zabbix
+        #    bootstrap AFTER this script, so a non-zero exit here is masked by a later
+        #    command's success and cloud-init still reports success.
+        assert "set -Eeuo pipefail" in installer, constant
+        # An EXIT trap, not an ERR trap: bash does not run an ERR trap for an explicit
+        # `exit 1`, and these scripts reject prereleases, unexpected installed versions,
+        # and readiness timeouts with exactly that — those paths would record nothing.
+        assert "trap on_install_exit EXIT" in installer, constant
+        # No ERR trap is *installed* (the comment above it may legitimately mention one).
+        assert not re.search(r"^\s*trap\s+\S+\s+ERR\b", installer, re.MULTILINE), constant
+        assert "/var/lib/nms/influxdb-install-failed" in installer, constant
+        # Exactly ONE EXIT trap: a second would silently replace the first. Signal
+        # traps are required alongside it, not forbidden — on an untrapped TERM/INT/HUP
+        # bash runs the EXIT trap with `$?` possibly still 0, so the handler would clean
+        # up and record nothing. Converting each signal to a non-zero exit is what makes
+        # a systemd cancellation, guest shutdown, or external timeout visible.
+        exit_traps = [line for line in installer.splitlines() if re.match(r"\s*trap\s+\S+\s+EXIT\b", line)]
+        assert len(exit_traps) == 1, (constant, exit_traps)
+        for signal, code in (("TERM", 143), ("INT", 130), ("HUP", 129)):
+            assert f"trap 'exit {code}' {signal}" in installer, (constant, signal)
+        # Every explicit failure exit is inside the trapped script, so each one records.
+        assert installer.count("exit 1") >= 3, constant
+        # ...and the installer is not deleted, so a failed guest keeps its evidence.
+        assert cloud_config["runcmd"] == [["bash", next(iter(files))]], constant
+        assert not any("rm" in str(entry) for entry in cloud_config["runcmd"]), constant
+
+    # A row that no longer matches the 0020 baseline is neither rewritten (that would
+    # discard an operator edit) nor silently skipped (that would let an operator
+    # believe the vector was removed everywhere). It fails the migration by name.
+    assert "LEGACY_OSS2_CLOUD_CONFIG" in constants
+    assert "LEGACY_CORE3_CLOUD_CONFIG" in constants
+    assert "if config.content != legacy:" in source
+    assert "unresolved.append(" in source
+    assert "if unresolved:" in source
+    # The baseline check and the write are separate statements, so the row is locked
+    # AND the write re-asserts the baseline as its predicate. Without both, an operator
+    # committing a customization between the two would have it silently overwritten.
+    assert "select_for_update()" in source
+    assert "filter(pk=config.pk, content=legacy).update(" in source
+    assert "if not replaced:" in source
+    assert "Refusing to leave a known-vulnerable InfluxDB profile in place" in source
+
+    # Rebake invalidation follows the real relationship, not the editable name: a
+    # renamed or additional consumer would otherwise keep `ready` and its old artifact.
+    assert "installer_config_id=config.pk" in source
+    assert "exclude(installer_config_checksum_at_build=hardened_checksum)" in source
+    assert "name__in=list(template_names)" not in source
+
+    # A build already in flight read the old content and would write `ready` over the
+    # rebake marker, so the migration refuses to race it.
+    assert 'status__in=("queued", "running")' in source
+    assert "are queued or running against its templates" in source
+    # The legacy constants must be the genuine 0020 content, or the equality guard
+    # silently never matches and the migration becomes a no-op.
+    legacy_020 = _literal_assignments("netbox_packer/migrations/0020_seed_influxdb_profiles.py")
+    assert constants["LEGACY_OSS2_CLOUD_CONFIG"] == legacy_020["INFLUXDB_OSS2_CLOUD_CONFIG"]
+    assert constants["LEGACY_CORE3_CLOUD_CONFIG"] == legacy_020["INFLUXDB_CORE3_CLOUD_CONFIG"]
+    # ...and they must be the *vulnerable* shape, so the guard targets what it claims.
+    assert "gpg --dearmor" in constants["LEGACY_OSS2_CLOUD_CONFIG"]
+    assert "seq 1 60" in constants["LEGACY_CORE3_CLOUD_CONFIG"]
+
+    # Linked templates are marked for a rebake, and nothing is deleted.
+    assert 'build_status="pending"' in source
+    assert 'installer_config_checksum_at_build=""' in source
+    assert ".delete()" not in source
+    assert 'dependencies = [\n        ("netbox_packer", "0025_seed_influxdb3_core_debian13_cloud_init"),' in source
+
+
 def test_influxdb3_core_debian13_contract_is_documented() -> None:
     required = (
         "influxdb-core-3.11.0-debian-13",

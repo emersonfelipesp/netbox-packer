@@ -253,7 +253,10 @@ export DEBIAN_FRONTEND=noninteractive
 UBUNTU_CODENAME="${{UBUNTU_CODENAME:-${{VERSION_CODENAME}}}}"
 VERSION_ID="${{VERSION_ID:-24.04}}"
 ZABBIX_RELEASE_DEB="https://repo.zabbix.com/zabbix/7.4/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.4+ubuntu${{VERSION_ID}}_all.deb"
-curl -fsSL -o /tmp/zabbix-release.deb "${{ZABBIX_RELEASE_DEB}}"
+curl -fsSL --proto '=https' --tlsv1.2 \
+  --retry 3 --retry-delay 2 --retry-max-time 60 \
+  --connect-timeout 10 --max-time 60 --max-filesize 10485760 \
+  -o /tmp/zabbix-release.deb "${{ZABBIX_RELEASE_DEB}}"
 dpkg -i /tmp/zabbix-release.deb
 apt-get update -qq
 apt-get install -y zabbix-agent2

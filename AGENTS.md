@@ -35,6 +35,68 @@ endpoint (`10.0.30.139`) and must never be retargeted to production. Additive
 migration `0020` replaces the database row's credential-generating content and
 marks it pending without deleting any existing artifact.
 
+Migration `0026` brings both `0020` profiles (and the legacy `9011` row, which `0020`
+rewrote with the OSS 2 content) to parity with the `0025` hardening. All three shared
+its shell shape and therefore its three defects:
+
+- **the keyring trust boundary admitted extra keys** — proving the downloaded file
+  *contained* the fingerprint and then dearmoring all of it also trusts an attacker key
+  bundled alongside the genuine one, which can sign repository metadata and gain root
+  during `apt-get install`. Now: isolated `GNUPGHOME`, export only the expected primary
+  fingerprint, assert the exported keyring holds exactly one `pub` record;
+- **prereleases were accepted as the pinned release** — a `~` version sorts *before* the
+  release it qualifies, so the script could install and hold an unreviewed build while
+  reporting success. Now: final versions only, `~` refused explicitly;
+- **downloads and the readiness loop were unbounded** — `--retry` does not help against a
+  server that completes TLS and then goes silent, so first boot could hang forever. Now:
+  connection, per-attempt, and overall retry deadlines plus a size cap, and a bounded
+  readiness loop.
+
+The hardened sources are tracked verbatim at
+`netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml` and
+`netbox_packer/seeds/influxdb-core-3.11.0-ubuntu-2404.cloud-config.yaml`; the `0026`
+constants must stay byte-identical to them.
+
+Four behaviours of `0026` are deliberate and must not be "simplified":
+
+- **A row that no longer matches the exact `0020` baseline fails the migration**, with
+  the offending rows named. It is not rewritten (that would discard an operator edit)
+  and not silently skipped (that would let an operator deploy believing the
+  root-compromise vector was removed everywhere while an untouched row keeps it).
+- **Rebake invalidation follows `installer_config_id`, not the template name.** Names
+  are editable and several templates can share one config, so a renamed or additional
+  consumer would otherwise keep `ready` state and its pre-hardening artifact. Any linked
+  template whose recorded build checksum differs from the hardened checksum is marked
+  `pending` — including when the content was already hardened by hand but the *artifact*
+  was baked from legacy content.
+- **The migration refuses to run while a build is queued or running against a linked
+  template.** That build read the old content and would finish by writing `ready` over
+  the rebake marker, leaving a vulnerable artifact recorded as current.
+- **The reverse is a no-op**, because rolling back must not restore a keyring that
+  accepts attacker-supplied keys, nor discard rebake state.
+
+**An installer failure must stay visible.** Cloud-init shellifies `runcmd` into a plain
+`/bin/sh` script with no `set -e`, and build-time injection appends the Zabbix bootstrap
+*after* each profile's own installer — so a non-zero exit from the installer is masked
+by a later command's success and cloud-init still reports success. Both profiles
+therefore run under `set -Eeuo pipefail` with an **`EXIT`** trap that writes a durable
+marker to `/var/lib/nms/influxdb-install-failed`, and the `rm` that used to delete the
+installer was removed so a failed guest keeps its evidence.
+
+**It must stay an `EXIT` trap, never an `ERR` trap.** Bash does not run an `ERR` trap for
+an explicit `exit 1`, and these scripts reject prereleases, unexpected installed
+versions, and readiness timeouts with exactly that — an `ERR` trap silently misses the
+three failure modes most worth recording. The `EXIT` handler also owns the temporary
+keyring cleanup, because a script may install only one `EXIT` trap.
+
+Alongside it, `TERM`/`INT`/`HUP` are trapped to `exit 143`/`130`/`129`. On an untrapped
+fatal signal bash still runs the `EXIT` trap, but `$?` can still hold the previous
+command's successful status, so the handler would clean up and record nothing — a
+systemd cancellation, guest shutdown, or external timeout would look like success.
+Converting each signal to a non-zero exit is what makes those visible.
+
+Do not reintroduce the `rm`, and do not rely on the runcmd exit status.
+
 Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
 **Debian 13** Core 3 profile. Its verbatim cloud-config is
 `netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml` and the
