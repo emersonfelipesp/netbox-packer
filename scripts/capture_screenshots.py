@@ -52,9 +52,7 @@ def capture(page, base_url: str, slug: str, path: str, out_dir: pathlib.Path) ->
 def main() -> None:
     netbox_base_url = os.environ.get("NETBOX_BASE_URL", "http://127.0.0.1:18080").rstrip("/")
 
-    screenshots_dir = pathlib.Path(
-        os.getenv("SCREENSHOTS_DIR", str(_REPO_ROOT / "docs" / "assets" / "screenshots"))
-    )
+    screenshots_dir = pathlib.Path(os.getenv("SCREENSHOTS_DIR", str(_REPO_ROOT / "docs" / "assets" / "screenshots")))
     screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Screenshots will be written to: {screenshots_dir}")

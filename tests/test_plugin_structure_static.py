@@ -67,8 +67,18 @@ def test_plugin_config_fields() -> None:
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
-    assert 'min_version = "4.5.8"' in src
-    assert 'max_version = "4.6.99"' in src
+    # Bounds are sourced from the shared compat module rather than re-typed
+    # here, so assert the wiring in the source AND the values in compat.py --
+    # a source substring alone would pass for any constant name.
+    assert "min_version = PLUGIN_MIN_VERSION" in src
+    assert "max_version = PLUGIN_MAX_VERSION" in src
+    compat_src = _read("netbox_packer/compat.py")
+    assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
+    assert 'STABLE_MAX_NETBOX_VERSION = "4.6.99"' in compat_src
+    assert 'EXPERIMENTAL_MIN_NETBOX_VERSION = "4.7.0"' in compat_src
+    assert 'EXPERIMENTAL_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src
+    assert "PLUGIN_MAX_VERSION = EXPERIMENTAL_MAX_NETBOX_VERSION" in compat_src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 
@@ -558,3 +568,24 @@ def test_template_form_validates_family_version_pairing() -> None:
     assert "def clean(self)" in block, "PackerTemplateForm must add a clean() cross-field guard"
     assert "OS_VERSIONS_BY_FAMILY" in block, "clean() must check the family->versions map"
     assert "add_error" in block, "clean() must raise a field error for a mismatched os_version"
+
+
+def test_packaging_is_a_declared_dependency() -> None:
+    """`compat.py` imports packaging at module scope, so the metadata must say so.
+
+    Inside a NetBox install it happens to be present transitively — NetBox core
+    uses it on the very same `PluginConfig.validate` path — and pytest drags it
+    in during CI. Neither is a declaration. Without this the wheel's metadata
+    misstates what the package imports, and a consumer resolving it outside a
+    NetBox environment gets an ImportError at plugin import time.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = data["project"]["dependencies"]
+
+    assert any(spec.split(">=")[0].strip() == "packaging" for spec in declared), (
+        f"packaging must be declared in [project.dependencies]; got {declared}"
+    )

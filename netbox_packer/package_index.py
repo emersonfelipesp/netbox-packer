@@ -76,8 +76,7 @@ def render_fileserver_package_index(
     ]
     if missing:
         raise RuntimeError(
-            "File Server package-index credentials are not configured in PackerPluginSettings: "
-            + ", ".join(missing)
+            "File Server package-index credentials are not configured in PackerPluginSettings: " + ", ".join(missing)
         )
 
     return user_data_yaml.replace(PACKAGE_READ_USER_PLACEHOLDER, quote(package_user, safe="")).replace(

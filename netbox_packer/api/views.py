@@ -30,8 +30,7 @@ class InfluxDBProfileListView(APIView):
             raise PermissionDenied("view_packertemplate permission is required.")
         template_names = [profile["template_name"] for profile in INFLUXDB_PROFILES]
         templates = {
-            template.name: template
-            for template in models.PackerTemplate.objects.filter(name__in=template_names)
+            template.name: template for template in models.PackerTemplate.objects.filter(name__in=template_names)
         }
         profiles = []
         for profile in INFLUXDB_PROFILES:

@@ -627,17 +627,20 @@ def test_fileserver_package_settings_comment_migration_contract() -> None:
 
     assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
     assert constants["CONFIG_VERSION"] == "1.0.1"
-    historical_content = _literal_assignments(
-        "netbox_packer/migrations/0017_update_fileserver_agent_package_index.py"
-    )["FILESERVER_ALLINONE_CLOUD_CONFIG"]
+    historical_content = _literal_assignments("netbox_packer/migrations/0017_update_fileserver_agent_package_index.py")[
+        "FILESERVER_ALLINONE_CLOUD_CONFIG"
+    ]
     assert constants["STALE_PIP_CONF_COMMENT"] in historical_content
     assert constants["STALE_PIP_CONF_COMMENT"] not in seed
     assert constants["SETTINGS_PIP_CONF_COMMENT"] in seed
-    assert historical_content.replace(
-        constants["STALE_PIP_CONF_COMMENT"],
-        constants["SETTINGS_PIP_CONF_COMMENT"],
-        1,
-    ) == seed
+    assert (
+        historical_content.replace(
+            constants["STALE_PIP_CONF_COMMENT"],
+            constants["SETTINGS_PIP_CONF_COMMENT"],
+            1,
+        )
+        == seed
+    )
     assert "updated_content = config.content.replace(" in src
     assert "checksum=hashlib.sha256(updated_content.encode()).hexdigest()" in src
     assert 'update(build_status="pending")' in src
@@ -1456,7 +1459,7 @@ def test_nms_agent_injection_renders_bootstrap_and_deduplicates(monkeypatch) -> 
     bootstrap = files["/opt/nmulticloud-nms-agent-bootstrap.sh"]["content"]
     assert "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb" in bootstrap
     assert "readonly GO_VERSION='1.24.13'" in bootstrap
-    assert 'go${GO_VERSION}.linux-amd64.tar.gz' in bootstrap
+    assert "go${GO_VERSION}.linux-amd64.tar.gz" in bootstrap
     assert "sha256sum --check --strict" in bootstrap
     assert "git -C" in bootstrap and "rev-parse HEAD" in bootstrap
     assert "curl | bash" not in bootstrap
@@ -1469,9 +1472,7 @@ def test_nms_agent_injection_renders_bootstrap_and_deduplicates(monkeypatch) -> 
     rerendered_config = yaml.safe_load(rerendered.split("\n", 1)[1])
     paths = [item["path"] for item in rerendered_config["write_files"]]
     assert len(paths) == len(set(paths)) == 3
-    assert rerendered_config["runcmd"].count(
-        ["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]
-    ) == 1
+    assert rerendered_config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
 
 
 def test_nms_agent_injection_defaults_off_and_rejects_unsafe_backend(monkeypatch) -> None:
@@ -1638,9 +1639,11 @@ def test_akvorado_seed_contract() -> None:
     assert "systemctl enable --now akvorado.service" in install_script
     assert "curl | bash" not in install_script
     subprocess.run(["bash", "-n"], input=install_script, text=True, check=True)
-    assert install_script.index("/etc/apt/keyrings/docker.asc") < install_script.index(
-        "cat > /etc/apt/sources.list.d/docker.sources"
-    ) < install_script.index("apt-get update")
+    assert (
+        install_script.index("/etc/apt/keyrings/docker.asc")
+        < install_script.index("cat > /etc/apt/sources.list.d/docker.sources")
+        < install_script.index("apt-get update")
+    )
     assert "nms-agent" not in seed
 
 

@@ -9,6 +9,12 @@ requires-python = ">=3.12.0"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
+    # compat.py imports packaging at module scope to compare NetBox release
+    # strings. Inside a NetBox install it is transitively guaranteed (NetBox
+    # core uses it on the same PluginConfig.validate path), but this package
+    # imports it directly, so it belongs in the metadata rather than being
+    # inherited by luck.
+    "packaging>=23.0",
     "pydantic>=2.0.0",
 ]
 authors = [
@@ -75,3 +81,13 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
 ignore = ["B008", "B904", "ARG001", "ARG002"]
+
+[tool.ruff.format]
+# `netbox_packer/compat.py` is vendored byte-identically across every Proxbox-family
+# NetBox plugin, and those repositories use different `line-length` settings
+# (88 here upstream, 100 and 120 elsewhere). Letting each repo reformat it would
+# silently break the byte-identity that the cross-repo drift check depends on —
+# and that check is the only thing keeping five copies of a compatibility policy
+# in agreement. The file is formatted once, at the narrowest width, in
+# netbox-proxbox; every other copy takes it verbatim.
+exclude = ["netbox_packer/compat.py"]
