@@ -655,6 +655,7 @@ class PackerBuildJob(JobRunner):
                 if getattr(template, "install_nms_agent", False)
                 else "disabled"
             ),
+            "[INFO] proxbox-api signed handshake: plan -> preflight -> execute",
         ]
 
         try:

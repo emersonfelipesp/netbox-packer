@@ -176,6 +176,23 @@ apply the same posture over audited SSH; the onboarding sequence is
 must not import, depend on, or reference `netbox-rpc`** — that dependency is
 one-way, and these procedures are named here as documentation only.
 
+## Signed Preflight Build Guardrail
+
+Every executable cloud-config build uses the proxbox-api signed handshake in
+this exact order: `POST /cloud/templates/images` with `execute=false` to obtain
+the server-rendered `recipe_digest`; `POST /cloud/templates/images/preflight`
+contract `1.0` with the endpoint, target, provider, storage fields, and digest to
+obtain an unexpired `plan_token`; then `POST /cloud/templates/images` with the
+same build fields, `execute=true`, and that token. Never compute the recipe
+digest locally or allow request fields to drift between plan and execute.
+
+This requires the signed-preflight contract in `proxbox-api >= 0.0.19.post5`.
+Preflight unavailability or findings, `ready=false`, writes disabled, missing or
+expired tokens, execute-time mismatch/expiry, and responses without both
+confirmed execution and artifact verification fail the build with an actionable
+log entry. A 404 from the preflight endpoint means the proxbox-api service is
+incompatible; do not fall back to legacy one-step execution.
+
 ## Build Dispatch Guardrail
 
 Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the

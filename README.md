@@ -25,13 +25,17 @@ build-target, staleness, and HCP Packer registry sync support, plus a
 A `PackerInstallerConfig` with `installer_type = "cloud_config"` holds a verbatim
 `#cloud-config`. When a `PackerTemplate` using such a config is built, the plugin
 delegates the real Proxmox work to `proxbox-api`
-(`POST /cloud/templates/images`), which downloads the base image, writes the
-cloud-config as a Proxmox `cicustom` user-data snippet, and runs `qm template` —
-producing a real, bootable VM template. The flow is triggerable from the NMS UI
+using a signed plan → preflight → execute handshake. The client first renders a
+non-executing plan at `POST /cloud/templates/images`, submits its server-authored
+recipe digest to `POST /cloud/templates/images/preflight`, then sends the signed,
+unexpired plan token with the otherwise identical execute request. `proxbox-api`
+downloads the base image, writes the cloud-config as a Proxmox `cicustom`
+user-data snippet, and runs `qm template` — producing a real, bootable VM
+template. The flow is triggerable from the NMS UI
 at `nms.nmulti.cloud/virtualization/packer` (Installer Configs + a "Create
 cloud-init template image" dialog + per-row Build button).
 
-Requirements: `proxbox-api >= 0.0.18` with
+Requirements: `proxbox-api >= 0.0.19.post5` with the signed-preflight contract,
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 `snippets,import,images`. Configure `proxbox_api_url` and an encrypted API key
@@ -40,6 +44,8 @@ on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
 Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, Akvorado,
 a File Server all-in-one image, and base Ubuntu LTS cloud-init templates.
+An older service that returns 404 for the preflight endpoint is incompatible;
+the client fails the build and never falls back to legacy one-step execution.
 
 The Akvorado seed is `akvorado-2.4.0-ubuntu-2404`, VMID `9070`, on
 CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. First boot

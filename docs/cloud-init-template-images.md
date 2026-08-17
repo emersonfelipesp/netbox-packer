@@ -15,15 +15,29 @@
    `/virtualization/packer`.
 4. `PackerBuildJob` resolves the build node, base cloud image URL, storage, and
    SSH host.
-5. `proxbox-api` downloads the base image, creates the VM, writes the cloud-init
-   snippet as Proxmox `cicustom` user-data, converts the VM to a template with
-   `qm template`, and returns the resulting VMID.
+5. The client sends the exact build body with `execute=false`; proxbox-api
+   renders it and returns the server-authored `recipe_digest`.
+6. The client submits that digest and the endpoint, node, VMID, provider, and
+   storage target to `POST /cloud/templates/images/preflight` contract `1.0`.
+7. Only when preflight reports ready and returns an unexpired signed
+   `plan_token`, the client resends the unchanged build fields with
+   `execute=true` and `preflight_plan_token` set.
+8. `proxbox-api` downloads the base image, creates the VM, writes the cloud-init
+   snippet as Proxmox `cicustom` user-data, converts the VM to a template, and
+   returns a completed, executed, artifact-verified response.
 
 The `PackerPluginSettings` singleton row must include `proxbox_api_url` and an
 encrypted proxbox-api key (see [Configuration](configuration.md) — today this
 is set via the Python shell only, not a UI page or REST endpoint). The target
 `ProxmoxEndpoint` in netbox-proxbox must allow writes, and the selected Proxmox
 storage must support `snippets`, `import`, and `images`.
+
+This requires the signed-preflight contract available in
+`proxbox-api >= 0.0.19.post5`. If the preflight endpoint returns 404, the service
+is incompatible: netbox-packer fails the build with an upgrade message and does
+not fall back to the unsafe legacy one-step execute call. Unreachable/not-ready
+preflight, returned findings, missing or expired plan tokens, plan mismatch, and
+unverified execution all remain visible in the build log and fail closed.
 
 ## Creating a template from the web form
 
@@ -541,6 +555,10 @@ secure-prefix policy.
 `tests/test_cloud_config_build_static.py` locks the cloud-init build contract:
 
 - the cloud-config branch delegates to `proxbox-api /cloud/templates/images`;
+- the client performs plan → signed preflight → execute in order, keeps all
+  build fields stable, and forwards the returned plan token;
+- unavailable/not-ready/incompatible preflight, missing or expired tokens,
+  execute-time plan rejection, and unverified execution all fail the build;
 - unset target nodes are sent as `None`, not an empty string;
 - historical migration `0007` remains byte-for-byte unchanged while additive
   migration `0020` safely retires its database row;

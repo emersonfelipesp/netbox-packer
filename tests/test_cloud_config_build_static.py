@@ -209,6 +209,7 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "redact_fileserver_package_token(str(value), fileserver_package_read_token)" in src
     assert "raise sanitized_fileserver_package_error(exc, fileserver_package_read_token) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
+    assert "proxbox-api signed handshake: plan -> preflight -> execute" in src
     # Gap 1: PackerBuild creation must enqueue the job.
     assert "def dispatch_build(build):" in src
     # PackerBuild is not a jobs-assignable object type in NetBox, so the job must
@@ -247,8 +248,10 @@ def test_build_actions_dispatch_the_job() -> None:
 def test_proxbox_client_targets_template_images_endpoint() -> None:
     src = _read("netbox_packer/proxbox_client.py")
     assert "/cloud/templates/images" in src
+    assert "/cloud/templates/images/preflight" in src
     assert '"X-Proxbox-API-Key": proxbox_api_key' in src
     assert '"user_data_yaml": user_data_yaml' in src
+    assert '"preflight_plan_token": plan_token' in src
 
 
 def test_migrations_present_for_settings_and_seed() -> None:
@@ -1010,43 +1013,300 @@ class _FakeResp:
         return False
 
 
-def test_call_proxbox_build_posts_cloud_config(monkeypatch) -> None:
-    mod = _load_proxbox_client()
-    captured: dict = {}
+_RECIPE_DIGEST = "a" * 64
+_PLAN_TOKEN = "signed-plan-token-" + ("b" * 64)
+
+
+def _proxbox_build_kwargs() -> dict:
+    return {
+        "proxbox_api_url": "http://10.0.30.207:8000/",
+        "proxbox_api_key": "secret-key",
+        "name": "zabbix-7.4-ubuntu-2604-pgsql-nginx",
+        "vmid": 9010,
+        "target_node": "pve-dev-1",
+        "image_url": "https://cloud-images.ubuntu.com/releases/26.04/release/img.img",
+        "user_data_yaml": "#cloud-config\nruncmd:\n  - echo hi\n",
+        "endpoint_id": 17,
+        "image_storage": "local",
+        "vm_storage": "local",
+        "storage": "local",
+        "snippets_storage": "local",
+        "ssh_host": "10.0.30.139",
+    }
+
+
+def _plan_response() -> dict:
+    return {
+        "contract_version": "2.0",
+        "status": "planned",
+        "vmid": 9010,
+        "recipe_digest": _RECIPE_DIGEST,
+    }
+
+
+def _preflight_response(**overrides) -> dict:
+    response = {
+        "contract_version": "1.0",
+        "ready": True,
+        "writes_enabled": True,
+        "recipe_digest": _RECIPE_DIGEST,
+        "plan_token": _PLAN_TOKEN,
+        "expires_at": 4_000_000_000.0,
+        "capabilities": [],
+        "findings": [],
+    }
+    response.update(overrides)
+    return response
+
+
+def _executed_response(**overrides) -> dict:
+    response = {
+        "contract_version": "2.0",
+        "status": "completed",
+        "vmid": 9010,
+        "template_vmid": 9010,
+        "operation_id": "operation-1",
+        "verified": True,
+        "execution_enabled": True,
+        "execution": {
+            "attempted": True,
+            "enabled": True,
+            "exit_code": 0,
+        },
+        "diagnostics": [],
+    }
+    response.update(overrides)
+    return response
+
+
+def _install_proxbox_responses(monkeypatch, mod, responses: list[dict | BaseException]) -> list[dict]:
+    captured: list[dict] = []
 
     def fake_urlopen(req, timeout=0):
-        captured["url"] = req.full_url
-        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
-        captured["body"] = json.loads(req.data.decode())
-        return _FakeResp(b'{"status": "completed", "vmid": 9010}')
+        captured.append(
+            {
+                "url": req.full_url,
+                "headers": {key.lower(): value for key, value in req.header_items()},
+                "body": json.loads(req.data.decode()),
+                "timeout": timeout,
+            }
+        )
+        response = responses[len(captured) - 1]
+        if isinstance(response, BaseException):
+            raise response
+        return _FakeResp(json.dumps(response).encode())
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+def test_call_proxbox_build_uses_signed_preflight_sequence(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), _preflight_response(), _executed_response()],
+    )
+
+    out = mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert out == _executed_response()
+    assert [call["url"] for call in captured] == [
+        "http://10.0.30.207:8000/cloud/templates/images",
+        "http://10.0.30.207:8000/cloud/templates/images/preflight",
+        "http://10.0.30.207:8000/cloud/templates/images",
+    ]
+    assert all(call["headers"]["x-proxbox-api-key"] == "secret-key" for call in captured)
+
+    plan_body, preflight_body, execute_body = [call["body"] for call in captured]
+    assert plan_body["execute"] is False
+    assert plan_body["user_data_yaml"].startswith("#cloud-config")
+    assert preflight_body == {
+        "contract_version": "1.0",
+        "endpoint_id": 17,
+        "target_node": "pve-dev-1",
+        "vmid": 9010,
+        "provider": "release_image",
+        "image_storage": "local",
+        "vm_storage": "local",
+        "snippets_storage": "local",
+        "recipe_digest": _RECIPE_DIGEST,
+        "snippets_required": True,
+    }
+    assert execute_body["execute"] is True
+    assert execute_body["preflight_plan_token"] == _PLAN_TOKEN
+    assert set(execute_body) == set(plan_body) | {"preflight_plan_token"}
+    for key in set(plan_body) - {"execute"}:
+        assert execute_body[key] == plan_body[key], f"build field drifted between plan and execute: {key}"
+
+
+def test_call_proxbox_build_fails_when_preflight_is_unreachable(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), mod.urllib.error.URLError("connection refused")],
+    )
+
+    with pytest.raises(mod.ProxboxApiError, match="signed preflight failed.*unreachable"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+def test_call_proxbox_build_surfaces_not_ready_findings(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    finding = {
+        "code": "vmid_unavailable",
+        "severity": "error",
+        "target": "vmid:9010",
+        "message": "VMID 9010 is already allocated.",
+    }
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), _preflight_response(ready=False, plan_token=None, findings=[finding])],
+    )
+
+    with pytest.raises(mod.ProxboxApiError, match="vmid_unavailable.*already allocated"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+def test_call_proxbox_build_fails_when_preflight_returns_no_plan_token(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), _preflight_response(plan_token=None)],
+    )
+
+    with pytest.raises(mod.ProxboxApiError, match="ready=true but no plan_token"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+def test_call_proxbox_build_fails_when_preflight_writes_are_disabled(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), _preflight_response(writes_enabled=False)],
+    )
+
+    with pytest.raises(mod.ProxboxApiError, match="writes_enabled=false"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+def test_call_proxbox_build_fails_expired_plan_before_execute(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [_plan_response(), _preflight_response(expires_at=999.0)],
+    )
+
+    with pytest.raises(mod.ProxboxApiError, match="plan expired before execution"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+def test_call_proxbox_build_rejects_older_api_without_preflight(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured: list[dict] = []
+
+    def fake_urlopen(req, timeout=0):
+        captured.append(json.loads(req.data.decode()))
+        if len(captured) == 1:
+            return _FakeResp(json.dumps(_plan_response()).encode())
+        raise mod.urllib.error.HTTPError(
+            req.full_url,
+            404,
+            "Not Found",
+            {},
+            fp=__import__("io").BytesIO(b'{"detail":"Not Found"}'),
+        )
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
 
-    out = mod.call_proxbox_build(
-        proxbox_api_url="http://10.0.30.207:8000/",
-        proxbox_api_key="secret-key",
-        name="zabbix-7.4-ubuntu-2604-pgsql-nginx",
-        vmid=9010,
-        target_node="",
-        image_url="https://cloud-images.ubuntu.com/releases/26.04/release/img.img",
-        user_data_yaml="#cloud-config\nruncmd:\n  - echo hi\n",
-        image_storage="local",
-        vm_storage="local",
-        storage="local",
-        snippets_storage="local",
-        ssh_host="10.0.30.139",
+    with pytest.raises(mod.ProxboxApiError, match="incompatible proxbox-api.*legacy one-step"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 2
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    (
+        ("preflight_plan_expired", "expired before execution"),
+        ("preflight_plan_mismatch", "did not match the server-rendered plan"),
+    ),
+)
+def test_call_proxbox_build_surfaces_execute_plan_rejection(
+    monkeypatch,
+    error_code,
+    expected,
+) -> None:
+    mod = _load_proxbox_client()
+    captured: list[dict] = []
+
+    def fake_urlopen(req, timeout=0):
+        captured.append(json.loads(req.data.decode()))
+        if len(captured) == 1:
+            return _FakeResp(json.dumps(_plan_response()).encode())
+        if len(captured) == 2:
+            return _FakeResp(json.dumps(_preflight_response()).encode())
+        body = json.dumps({"detail": {"code": error_code, "message": "rejected"}}).encode()
+        raise mod.urllib.error.HTTPError(
+            req.full_url,
+            409,
+            "Conflict",
+            {},
+            fp=__import__("io").BytesIO(body),
+        )
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(mod.ProxboxApiError, match=expected):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 3
+    assert captured[-1]["preflight_plan_token"] == _PLAN_TOKEN
+
+
+def test_call_proxbox_build_rejects_unverified_execute_response(monkeypatch) -> None:
+    mod = _load_proxbox_client()
+    captured = _install_proxbox_responses(
+        monkeypatch,
+        mod,
+        [
+            _plan_response(),
+            _preflight_response(),
+            _executed_response(
+                status="recovery_required",
+                verified=False,
+                diagnostics=[
+                    {
+                        "code": "artifact_verification_failed",
+                        "severity": "error",
+                        "target": "vmid:9010",
+                        "message": "Preserve the partial artifact for recovery.",
+                    }
+                ],
+            ),
+        ],
     )
 
-    assert out == {"status": "completed", "vmid": 9010}
-    assert captured["url"] == "http://10.0.30.207:8000/cloud/templates/images"
-    assert captured["headers"]["x-proxbox-api-key"] == "secret-key"
-    body = captured["body"]
-    assert body["user_data_yaml"].startswith("#cloud-config")
-    assert body["execute"] is True
-    assert body["provider"] == "release_image"
-    assert body["ssh_host"] == "10.0.30.139"
-    assert body["snippets_storage"] == "local"
-    assert body["vmid"] == 9010
+    with pytest.raises(mod.ProxboxApiError, match="did not confirm.*artifact_verification_failed"):
+        mod.call_proxbox_build(**_proxbox_build_kwargs())
+
+    assert len(captured) == 3
 
 
 def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
@@ -1064,10 +1324,11 @@ def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
             proxbox_api_url="http://x",
             proxbox_api_key="k",
             name="n",
-            vmid=1,
-            target_node="",
+            vmid=100,
+            target_node="pve-1",
             image_url="https://x/y.img",
             user_data_yaml="#cloud-config\n",
+            endpoint_id=1,
         )
     except mod.ProxboxApiError as exc:
         assert "403" in str(exc)
