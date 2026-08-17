@@ -62,8 +62,8 @@ Explorer uses Debian's `docker.io` package and the immutable image reference
 `influxdb3-explorer.service` publishes port `8080` on loopback by default. Its
 golden image has no Core URL or credential: `service.influxdb.1.token_create`
 returns an `nms-secret:<opaque-id>` reference, which provision-time automation
-resolves only when writing the cloned guest's root-only Explorer connection
-configuration.
+resolves only when writing the cloned guest's root-owned `root:1500` Explorer
+connection configuration.
 
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)

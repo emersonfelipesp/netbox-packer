@@ -527,12 +527,15 @@ from `/etc/influxdb3-explorer` read-only at `/app-root/config`. Container port
 `8080` is published on the configurable `EXPLORER_HOST_BIND`, whose default is
 `127.0.0.1`. Anyone who can reach Explorer inherits its configured Core token's
 permissions, so any non-loopback bind requires an explicit access-control design.
+Explorer 1.9.0 runs as non-root uid/gid `1500`, so `/db` must stay
+`1500:1500` mode `0700`; the config directory stays `root:1500` mode `0750` and
+provisioned `config.json` is mode `0640`.
 
 The seed is entirely credential-free. It contains no Core URL, token, password,
 TLS private key, session secret, or environment-specific secret reference. After
 clone, `service.influxdb.1.token_create` mints and vaults the Core token and
 returns `nms-secret:<opaque-id>`; provision-time automation resolves the reference
-only in memory, writes root-owned mode-`0640`
+only in memory, writes `root:1500` mode-`0640`
 `/etc/influxdb3-explorer/config.json`, and restarts the unit. Never move that
 per-instance step into cloud-init.
 

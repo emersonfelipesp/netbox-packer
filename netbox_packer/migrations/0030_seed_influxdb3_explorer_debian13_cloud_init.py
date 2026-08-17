@@ -8,7 +8,7 @@ container lifecycle with a loopback-default published address.
 
 The image stays credential-free. Typed NMS RPC mints and vaults the Core token,
 returns only an ``nms-secret:<opaque-id>`` reference, and provision-time
-automation resolves it when writing the cloned guest's root-only Explorer
+automation resolves it when writing the cloned guest's root-owned Explorer
 connection configuration. No token, Core URL, password, private key, or
 environment-specific secret reference is present in the golden image.
 
@@ -39,7 +39,7 @@ INFLUXDB3_EXPLORER_DEBIAN13_CLOUD_CONFIG = r"""#cloud-config
 # password, TLS private key, or Explorer session secret. After cloning, typed NMS RPC
 # service.influxdb.1.token_create mints and vaults the Core token and returns only an
 # nms-secret:<opaque-id> reference. Provision-time automation resolves that reference
-# in memory, writes the root-only Explorer connection configuration under
+# in memory, writes the root-owned, Explorer-group-readable connection under
 # /etc/influxdb3-explorer, and restarts influxdb3-explorer.service. The reference and
 # its resolved value are both per-instance state and must never be baked here.
 #
@@ -132,7 +132,7 @@ write_files:
       nms-secret:<opaque-id> reference, never plaintext. Provision-time automation
       resolves that reference only in memory, writes the per-instance Explorer
       connection configuration to /etc/influxdb3-explorer/config.json with mode
-      0640 and root ownership, then restarts influxdb3-explorer.service.
+      0640 with owner root:1500, then restarts influxdb3-explorer.service.
 
       Never write the secret reference or its resolved value into a golden image.
   - path: /usr/local/sbin/install-influxdb3-explorer
@@ -147,6 +147,8 @@ write_files:
       readonly EXPLORER_IMAGE_REPOSITORY='influxdata/influxdb3-ui'
       readonly EXPLORER_IMAGE_DIGEST='sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc'
       readonly EXPLORER_IMAGE="${EXPLORER_IMAGE_REPOSITORY}@${EXPLORER_IMAGE_DIGEST}"
+      readonly EXPLORER_UID='1500'
+      readonly EXPLORER_GID='1500'
       readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
       readonly MAX_IMAGE_SIZE_BYTES='2147483648'
 
@@ -216,8 +218,12 @@ write_files:
         apt-get "${APT_BOUNDS[@]}" install -y --no-install-recommends \
           ca-certificates curl docker.io
 
-      install -d -o root -g root -m 0750 /etc/influxdb3-explorer
-      install -d -o root -g root -m 0750 /var/lib/influxdb3-explorer
+      # Explorer 1.9.0 runs as non-root uid/gid 1500. Keep provisioned
+      # configuration root-owned and group-readable, and give the container
+      # exclusive ownership of its writable SQLite directory.
+      install -d -o root -g "${EXPLORER_GID}" -m 0750 /etc/influxdb3-explorer
+      install -d -o "${EXPLORER_UID}" -g "${EXPLORER_GID}" -m 0700 \
+        /var/lib/influxdb3-explorer
 
       systemctl enable --now docker.service
 

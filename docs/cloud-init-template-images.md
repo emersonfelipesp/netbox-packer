@@ -318,6 +318,11 @@ readiness probe has per-attempt and overall deadlines. An `EXIT` trap plus
 `TERM`/`INT`/`HUP` conversion records failures durably at
 `/var/lib/nms/influxdb-install-failed`.
 
+Explorer 1.9.0 runs as non-root uid/gid `1500`. The installer therefore creates
+the writable `/var/lib/influxdb3-explorer` data directory as `1500:1500` mode
+`0700`, while `/etc/influxdb3-explorer` stays `root:1500` mode `0750` and is
+mounted read-only into the container. Provisioned `config.json` is mode `0640`.
+
 The default bind in `/etc/default/influxdb3-explorer` is loopback. An operator
 may replace it with a specific host IP, but Explorer does not provide a second
 user-authentication boundary around a configured InfluxDB connection: anyone
@@ -328,7 +333,7 @@ authenticating TLS reverse proxy.
 The golden image deliberately starts with no InfluxDB connection. After clone,
 `service.influxdb.1.token_create` mints and vaults the Core token and returns
 only an `nms-secret:<opaque-id>` reference. Provision-time automation resolves
-that reference only in memory, writes root-owned mode-`0640`
+that reference only in memory, writes `root:1500` mode-`0640`
 `/etc/influxdb3-explorer/config.json`, and restarts
 `influxdb3-explorer.service`. Neither the reference nor its resolved value is
 baked into cloud-init. The Ubuntu/amd64-only Zabbix and NMS agent injections
@@ -709,7 +714,7 @@ endpoint. On a fresh clone, wait for `cloud-init status --wait`, confirm
 reference for the reviewed digest. `curl http://127.0.0.1:8080/` should answer,
 while `/etc/influxdb3-explorer/config.json` should not exist before provision-time
 automation resolves the clone's `nms-secret:<opaque-id>` reference. After
-provisioning, confirm that file is root-owned mode `0640` and the unit restarted.
+provisioning, confirm that file is `root:1500` mode `0640` and the unit restarted.
 
 For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
 on `10.0.30.71`. On first boot from a clone, `pdns` should listen on

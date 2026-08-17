@@ -108,9 +108,9 @@ Migration `0030` adds the separate endpoint-agnostic
 under `influxdb3-explorer.service`, publishing container port `8080` on
 `127.0.0.1` by default. No Core URL or credential is baked. After cloning,
 `service.influxdb.1.token_create` returns an `nms-secret:<opaque-id>` reference;
-provision-time automation resolves it in memory, writes the root-only Explorer
-connection configuration, and restarts the unit. Zabbix and NMS host-agent
-injection remain off for this Debian/arm64-capable profile.
+provision-time automation resolves it in memory, writes the root-owned
+`root:1500` Explorer connection configuration, and restarts the unit. Zabbix
+and NMS host-agent injection remain off for this Debian/arm64-capable profile.
 
 Templates can pin their **base image**: `base_image_url` selects an exact vendor
 artifact instead of the mutable `latest` release directory, and `base_image_sha256`

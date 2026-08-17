@@ -198,11 +198,16 @@ read-only provisioned configuration directory. Keep image pulls bounded and
 size-checked, local readiness bounded, and the installer's `set -Eeuo pipefail`
 plus one `EXIT` trap and signal conversion intact.
 
+Explorer 1.9.0 runs as non-root uid/gid `1500`. The writable host data directory
+must remain `1500:1500` mode `0700`; the configuration directory remains
+`root:1500` mode `0750`, with provisioned `config.json` mode `0640`, so only
+root and the Explorer group can read it through the container's read-only mount.
+
 This golden image must contain no Core URL, token, password, TLS private key,
 session secret, or environment-specific secret reference. After cloning,
 `service.influxdb.1.token_create` mints and vaults the Core token and returns
 only `nms-secret:<opaque-id>`. Provision-time automation resolves that reference
-in memory, writes root-owned mode-`0640`
+in memory, writes `root:1500` mode-`0640`
 `/etc/influxdb3-explorer/config.json`, and restarts the Explorer unit. Anyone
 who can reach Explorer inherits that token's permissions, so do not change the
 default bind without an explicit access-control design.

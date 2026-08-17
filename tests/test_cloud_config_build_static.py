@@ -2067,6 +2067,13 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
     assert "download.docker.com" not in seed
     assert "get.docker.com" not in seed
     assert not re.search(r"curl[^\n|]*\|\s*(?:ba)?sh", installer)
+    # Explorer 1.9.0 runs as non-root uid/gid 1500. The writable database must
+    # belong to it, while provisioned config remains root-owned and readable by
+    # only the Explorer group through the read-only container mount.
+    assert "EXPLORER_UID='1500'" in installer
+    assert "EXPLORER_GID='1500'" in installer
+    assert '-o root -g "${EXPLORER_GID}" -m 0750 /etc/influxdb3-explorer' in installer
+    assert '-o "${EXPLORER_UID}" -g "${EXPLORER_GID}" -m 0700' in installer
 
     # Silent apt or registry stalls cannot hold first boot forever. apt has
     # connection/retry bounds, every long-running fetch has an overall timeout,
