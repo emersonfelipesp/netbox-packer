@@ -298,6 +298,57 @@ different root filesystem, and the artifact is accepted with no integrity check.
 |---|---|
 | `base_image_url` | An exact (normally dated) vendor artifact, replacing the derived release default. |
 | `base_image_sha256` | The reviewed digest, forwarded to proxbox-api as `sha256` and verified after download. |
+
+### Currently pinned: one profile
+
+Migration `0029` pins **`influxdb-core-3.11.0-debian-13`** (VMID 9052) and nothing else:
+
+```
+base_image_url    = https://cloud.debian.org/images/cloud/trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2
+base_image_sha256 = 34f5481f320aef28408720a861582dcfe3a81781ee69f3910a64c29ad5395b89
+```
+
+Every other seeded profile is still unpinned and still resolves the vendor's mutable
+`latest` directory with no digest. That is a **known, accepted gap**, not an oversight —
+it closes per profile, by an operator who has verified a digest. Pinning is not free:
+changing the pin on a template that is already `ready` marks it pending for rebake, so a
+blanket pin across the catalog demands estate-wide rebakes.
+
+### Obtaining a digest you can defend
+
+**Debian publishes only `SHA512SUMS` for cloud images.** There is no `SHA256SUMS`, and a
+SHA-256 cannot be derived from a SHA-512, so the digest must come from hashing the
+artifact yourself:
+
+```bash
+SNAP=20260509-2473                      # a DATED directory, never latest/
+FILE=debian-13-genericcloud-amd64-$SNAP.qcow2
+BASE=https://cloud.debian.org/images/cloud/trixie/$SNAP
+
+# 1. the vendor's published checksum for this exact file
+curl -sSf "$BASE/SHA512SUMS" | grep "  $FILE$"
+
+# 2. the artifact itself
+curl -sSfL --proto '=https' --tlsv1.2 -o "$FILE" "$BASE/$FILE"
+
+# 3. THE STEP THAT MATTERS: prove the bytes you hashed are the bytes Debian published
+#    a checksum for. If this does not match, stop — do not pin.
+sha512sum "$FILE"
+
+# 4. only now derive the value for base_image_sha256
+sha256sum "$FILE"
+```
+
+Never skip step 3, and never copy a checksum out of a listing into the field: that proves
+only that the listing and the field agree, while looking exactly like provenance.
+
+**Limit worth stating plainly:** these snapshot directories carry no `SHA512SUMS.sign`, so
+the trust chain is TLS to `cloud.debian.org` plus the published checksum. That is
+meaningfully stronger than an unpinned mutable URL and meaningfully weaker than an
+offline-verifiable Debian signature. Do not call a pinned image signature-verified.
+
+To refresh a pin, repeat the whole procedure against the new snapshot — do not edit the
+constants alone.
 | `base_image_url_at_build` | Machine-managed resolved URL used by the last successful cloud-image build. |
 | `base_image_sha256_at_build` | Machine-managed resolved digest used by the last successful cloud-image build. |
 

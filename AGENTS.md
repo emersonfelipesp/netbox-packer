@@ -217,6 +217,16 @@ The staleness job must evaluate pin drift even when `max_age_days` is unset.
   a blanket requirement, which would break every existing template at once.
 - A malformed digest is refused rather than forwarded; an uppercase digest is
   normalised. Keep both behaviours.
+- **Exactly one profile is pinned** (`influxdb-core-3.11.0-debian-13`, migration `0029`).
+  Do not pin others casually: pinning an already-`ready` template marks it pending for
+  rebake, so a blanket pin demands estate-wide rebakes. That is an operator decision.
+- **Debian publishes only `SHA512SUMS` for cloud images.** There is no `SHA256SUMS`, and
+  SHA-256 cannot be derived from SHA-512. To obtain a digest: fetch `SHA512SUMS`,
+  download the exact dated artifact, verify its SHA-512 against the published value,
+  then hash it for SHA-256. Never skip the verify step and never copy a checksum out of
+  a listing — that proves only that the listing and the field agree.
+- The Debian snapshot directory has **no GPG signature**, so this trust chain is TLS plus
+  a published checksum. Do not describe a pinned image as signature-verified.
 
 ## Build Dispatch Guardrail
 

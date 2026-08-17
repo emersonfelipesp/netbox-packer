@@ -276,6 +276,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Locked compare-and-set write, so a concurrent operator edit is never overwritten; a row that no longer matches the exact `0020` baseline **fails the migration by name** rather than being skipped; rebake invalidation follows `installer_config_id`; refuses to run while a build is queued/running; reverse is a no-op |
 | `0027` | *(schema only — base image pin)* | — | — | — | Adds optional `base_image_url` + `base_image_sha256` to `PackerTemplate`. A pinned URL without a digest fails the build closed; the digest is forwarded to proxbox-api as `sha256`. Defaults empty, so existing templates are unchanged |
 | `0028` | *(schema only — base image build snapshots)* | — | — | — | Records the resolved URL + digest on each successful cloud-image build and on the template as its last successful source. Desired-vs-built pin drift is stale even without an age policy; snapshot fields are machine-managed |
+| `0029` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | Pins the one Debian 13 profile to the **dated** snapshot `trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2` and its verified sha256. Debian publishes only SHA512SUMS, so the digest was produced by downloading the artifact, matching its SHA-512 to the published value, then hashing for SHA-256. No GPG signature exists in that directory, so trust is TLS + published checksum. Compare-and-set against the unpinned state; refuses to overwrite an operator's own pin; reverse is a no-op |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -331,6 +332,34 @@ that lineage to `provisions_service="akvorado"`; do not replace this with
 hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
+
+#### Migration 0029 — the one pinned profile
+
+`0027` added the pin fields and `0028` their at-build snapshots, but no profile used
+them, so the mechanism protected nothing. `0029` pins exactly one:
+`influxdb-core-3.11.0-debian-13` (VMID 9052).
+
+**Only this profile, deliberately.** Pinning a template that is already `ready` marks it
+pending for rebake (`pin_differs_from_built_source`), so pinning the whole seeded catalog
+would demand estate-wide rebakes — an operator decision. 9052 has no baked artifact, so
+pinning it invalidates nothing.
+
+**Obtaining a digest (the required procedure).** Debian publishes **only `SHA512SUMS`**
+for cloud images — there is no `SHA256SUMS`, and SHA-256 cannot be derived from SHA-512.
+So: fetch `SHA512SUMS` from the dated snapshot directory, download the exact dated
+`.qcow2`, confirm its SHA-512 equals the published value, and only then compute the
+SHA-256. Step 3 is what makes the digest mean anything — it proves the hashed bytes are
+the bytes Debian published a checksum for. A checksum copied from a listing without
+hashing the artifact proves only that the listing and the field agree.
+
+**Honest limit:** the snapshot directory carries no `SHA512SUMS.sign`, so this chain is
+TLS to `cloud.debian.org` plus the published checksum — better than an unpinned mutable
+URL, weaker than an offline-verifiable Debian signature. Do not describe it as
+signature-verified.
+
+Refreshing the pin means repeating the whole procedure against the new snapshot, never
+editing the constants alone. Every other seeded profile remains unpinned; that gap closes
+per profile, by an operator who has verified a digest.
 
 #### Migration 0027 — base image pin
 

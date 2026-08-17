@@ -2474,7 +2474,52 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0028_base_image_build_snapshots"}
+    assert names - internal_dependencies == {"0029_pin_influxdb3_debian13_base_image"}
+
+
+def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
+    """The one pinned profile must name a dated artifact and a well-formed digest.
+
+    Migrations 0027/0028 built the pin machinery; 0029 is the only place it is actually
+    used. The value of the whole feature collapses if this pin silently points back at a
+    mutable directory, so assert the shape here rather than trusting review.
+    """
+    migration = (PKG / "migrations" / "0029_pin_influxdb3_debian13_base_image.py").read_text(
+        encoding="utf-8"
+    )
+    namespace: dict[str, object] = {}
+    tree = ast.parse(migration)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            try:
+                namespace[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+
+    url = namespace["PINNED_IMAGE_URL"]
+    digest = namespace["PINNED_IMAGE_SHA256"]
+    assert isinstance(url, str) and isinstance(digest, str)
+
+    # A pin whose URL still resolves through `latest/` pins nothing: Debian rewrites
+    # that directory on every publish, so the digest would start failing verification
+    # the moment a new snapshot lands.
+    assert "/latest/" not in url
+    assert re.search(r"/images/cloud/trixie/\d{8}-\d+/", url), url
+    assert url.endswith(".qcow2")
+    assert "genericcloud-amd64" in url, "pin must match the artifact the resolver derives"
+    assert url.startswith("https://")
+
+    assert re.fullmatch(r"[0-9a-f]{64}", digest), "digest must be 64 lowercase hex chars"
+
+    assert namespace["TEMPLATE_NAME"] == "influxdb-core-3.11.0-debian-13"
+    assert '("netbox_packer", "0028_base_image_build_snapshots")' in migration
+
+    # The write must not clobber an operator's own pin, and rollback must not restore
+    # the unverified mutable base.
+    assert "select_for_update()" in migration
+    assert 'base_image_url="", base_image_sha256=""' in migration
+    assert "Refusing to overwrite an existing base image pin" in migration
+    assert "Intentionally a no-op" in migration
 
 
 def test_influxdb3_core_debian13_contract_is_documented() -> None:
