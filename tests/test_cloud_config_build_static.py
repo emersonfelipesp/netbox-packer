@@ -1800,11 +1800,7 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
         # bash runs the EXIT trap with `$?` possibly still 0, so the handler would clean
         # up and record nothing. Converting each signal to a non-zero exit is what makes
         # a systemd cancellation, guest shutdown, or external timeout visible.
-        exit_traps = [
-            line
-            for line in installer.splitlines()
-            if re.match(r"\s*trap\s+\S+\s+EXIT\b", line)
-        ]
+        exit_traps = [line for line in installer.splitlines() if re.match(r"\s*trap\s+\S+\s+EXIT\b", line)]
         assert len(exit_traps) == 1, (constant, exit_traps)
         for signal, code in (("TERM", 143), ("INT", 130), ("HUP", 129)):
             assert f"trap 'exit {code}' {signal}" in installer, (constant, signal)
