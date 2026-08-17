@@ -259,6 +259,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 | `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
 | `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
+| `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
 
@@ -313,6 +314,100 @@ that lineage to `provisions_service="akvorado"`; do not replace this with
 hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
+
+#### Migration 0025 — InfluxDB 3 Core on Debian 13
+
+Seeds `influxdb-core-3.11.0-debian-13` (VMID `9052`) with installer config
+`influxdb-core-3.11.0-debian-13-cloud-config` v`3.11.0`, `os_family="debian"`,
+`os_version="13"`. Endpoint-agnostic like the `0020` profiles
+(`proxmox_endpoint=""`, `proxmox_node="select-at-build"`), so build dispatch
+supplies `endpoint_id` and `target_node`. The verbatim cloud-config lives at
+`netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml`, and the
+migration constant must stay byte-identical to it (asserted by
+`tests/test_cloud_config_build_static.py::test_influxdb3_core_debian13_seed_contract`).
+
+The difference from the Ubuntu Core 3 profile (`9051`) is that this one bakes a
+**production posture** instead of package defaults:
+
+- managed `/etc/influxdb3/influxdb3-core.conf` (`root:influxdb3`, `0640`) with
+  `object-store = "file"`, explicit `data-dir`, `http-bind = "127.0.0.1:8181"`,
+  `log-filter`, `wal-flush-interval`, and `disable-telemetry-upload = true`;
+- **`plugin-dir` deliberately omitted** — the Python Processing Engine stays off;
+- `influxdb3-core.service` drop-in `20-production.conf` with
+  `Restart=on-failure`, `RestartSec=5s`, `TimeoutStopSec=120s`;
+- `node-id` derived at first boot from the **per-VM SMBIOS UUID**
+  (`/sys/class/dmi/id/product_uuid`), falling back to the per-instance
+  `/etc/machine-id`, and failing closed if neither is readable. **Not** the
+  hostname: the Proxmox clone pipeline reuses this template's own cicustom
+  meta-data (its `local-hostname` is a fixed placeholder) and clone provisioning
+  changes only the Proxmox VM name, so every standard clone can boot with the same
+  hostname — deriving the node id from it would hand every clone the same InfluxDB
+  node identity;
+- Debian-13-only gate on `/etc/os-release` plus `amd64`/`arm64` and systemd
+  checks, exiting non-zero rather than half-configuring another platform;
+- a **single-key** trust boundary: the downloaded key is imported into an isolated
+  `GNUPGHOME` and only the expected primary fingerprint is exported
+  (`--export-options export-minimal`), with the exported keyring then asserted to
+  hold exactly one `pub` key with that fingerprint. Checking that the downloaded file
+  merely *contains* the fingerprint and dearmoring all of it would also trust an
+  attacker key bundled alongside the genuine one, which could sign repository
+  metadata and gain root during install;
+- an `apt-cache madison` pin to a **final** `3.11.0` (any `~` prerelease is refused
+  in both candidate selection and the post-install `dpkg-query` check),
+  `apt-mark hold`, and a genuinely bounded
+  wait on the unauthenticated `http://127.0.0.1:8181/ready` endpoint — each probe
+  carries `--connect-timeout`/`--max-time` and the loop enforces an overall
+  deadline, so a socket that accepts but never answers cannot hang
+  once-per-instance cloud-init after a partial install.
+
+**Monitoring injection is deliberately partial for this template.**
+`install_qemu_guest_agent` is on (a plain Debian package), but
+`install_zabbix_agent2` and `install_nms_agent` are **off**, and that is a
+platform constraint rather than a preference: `_inject_monitoring_agents()` builds
+the Zabbix repository package name as `ubuntu${VERSION_ID}`, which is a
+nonexistent `ubuntu13` package on Debian 13, and the NMS agent bootstrap
+hard-requires `amd64` while this image also declares `arm64`. Enabling either
+would produce a cloud-config that fails on the very platform the template
+declares. Turn them on only once those injectors are OS-family- and
+architecture-aware.
+
+That choice also makes this seed's installer the **last** `runcmd` entry, which
+matters: cloud-init shellifies `runcmd` into a plain `/bin/sh` script with no
+`set -e`, so a failing non-final command is masked by a later command's success.
+`test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe` asserts
+both properties against the **fully injected** config, not the pristine seed.
+
+**Base image resolution was fixed for this seed.**
+`jobs._resolve_cloud_image_url()` previously returned the Bookworm Debian 12 image
+for *every* `os_family="debian"` row, ignoring `os_version`. It now resolves the
+release codename from `os_version` via `_DEBIAN_CODENAMES`
+(`11`→bullseye, `12`→bookworm, `13`→trixie), raises for an unknown release
+instead of falling back, and keeps the Debian 12 default only for a row with no
+version. Without this the Debian 13 template would have baked on a Debian 12
+image; because a `cloud_config` bake never executes cloud-init, that unusable
+artifact could still be marked `ready` and would only fail its own OS gate later,
+at clone time. Keep `_DEBIAN_CODENAMES` in step with
+`choices.OS_VERSIONS_BY_FAMILY[debian]`.
+
+Seeding uses `0024`'s collision guard: `get_or_create` plus a `RuntimeError`
+listing mismatched fields, so a pre-existing row is reported and left untouched
+rather than overwritten. The reverse function is intentionally a no-op because an
+operator may already have baked the VMID.
+
+**Credential-free, deliberately.** No admin token, TLS material, or per-bake
+state is written. The first administrative token is created and vaulted only by
+`service.influxdb.1.bootstrap` (`family="core3"`) through typed NMS RPC, which
+returns an `nms-secret:` reference. Do not add token generation here. Token
+authentication remains enabled in the guest, which is why the bind stays on
+loopback — a remote listener would expose bearer tokens over plaintext HTTP; put
+a TLS reverse proxy in front, or use the audited RPC installer with TLS material.
+
+For hosts that already exist, `netbox-rpc` seeds
+`os.linux.debian.13.preflight_influxdb3_core` (read, no approval) and
+`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
+apply the same posture over audited SSH and accept the operator installer's
+parameters. `netbox-packer` must not import or depend on `netbox-rpc`; those
+procedure names appear here as documentation only.
 
 #### Migration 0009 — Kubernetes 1.31 base node
 

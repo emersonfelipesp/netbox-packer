@@ -43,6 +43,16 @@ def _get_plugin_setting(key, default=None):
     return plugin_cfg.get(key, default)
 
 
+# Debian publishes cloud images under the release codename, so a numeric
+# os_version cannot be interpolated into the URL directly. Keep this in step with
+# choices.OS_VERSIONS_BY_FAMILY[debian].
+_DEBIAN_CODENAMES = {
+    "11": "bullseye",
+    "12": "bookworm",
+    "13": "trixie",
+}
+
+
 def _resolve_cloud_image_url(template, overrides):
     """Resolve the base cloud image URL for a cloud_config build.
 
@@ -57,7 +67,22 @@ def _resolve_cloud_image_url(template, overrides):
     if fam == "ubuntu" and ver:
         return f"https://cloud-images.ubuntu.com/releases/{ver}/release/ubuntu-{ver}-server-cloudimg-amd64.img"
     if fam == "debian":
-        return "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+        # Resolve by os_version. Returning Bookworm for every Debian row silently
+        # baked a Debian 12 image for a template declaring os_version="13", and
+        # because a cloud_config bake never executes cloud-init, that unusable
+        # artifact could still be marked ready — the guest's own OS gate would only
+        # fail later, at clone time. The bare-major fallback keeps the historical
+        # behavior for a Debian row that carries no version.
+        major = ver.split(".", 1)[0] if ver else "12"
+        codename = _DEBIAN_CODENAMES.get(major)
+        if codename is None:
+            raise RuntimeError(
+                f"No base cloud image URL for os_family={fam!r} os_version={ver!r}; "
+                "add the release to _DEBIAN_CODENAMES or set "
+                "variable_overrides['image_url'] on the build."
+            )
+        base = "https://cloud.debian.org/images/cloud"
+        return f"{base}/{codename}/latest/debian-{major}-genericcloud-amd64.qcow2"
     raise RuntimeError(
         f"No base cloud image URL for os_family={fam!r} os_version={ver!r}; "
         "set variable_overrides['image_url'] on the build."

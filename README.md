@@ -74,6 +74,27 @@ references—never in cloud-init. The legacy VMID `9011` development profile is
 hardened in place and marked pending by additive migration `0020`, while the
 historical `0007` migration remains immutable; the row stays development-only.
 
+Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
+**Debian 13** (Trixie) InfluxDB 3 Core profile. Unlike the Ubuntu profile above
+it bakes an explicit production posture rather than package defaults: the
+managed `/etc/influxdb3/influxdb3-core.conf` binds only to `127.0.0.1:8181`
+with token authentication left enabled, disables telemetry upload, omits
+`plugin-dir` so the Python Processing Engine stays off, and is paired with a
+`influxdb3-core.service` systemd drop-in (`Restart=on-failure`). First boot
+refuses to proceed on any release other than Debian 13, verifies the InfluxData
+key fingerprint, installs the pinned `3.11.0` candidate, re-verifies the
+installed version, holds the package, derives `node-id` from the **per-VM SMBIOS
+UUID** (the clone hostname is not usable, because the clone pipeline reuses the
+template's cicustom meta-data), and waits on the local `/ready` endpoint with
+bounded probes and an overall deadline. Its build resolves the Trixie Debian 13
+base image, and the Ubuntu/amd64-only Zabbix and NMS agent injections are disabled
+for it so the composed cloud-config cannot fail on the platform it declares. It is
+endpoint-agnostic and credential-free like the `0020` profiles — the first administrative token is
+created and vaulted only by `service.influxdb.1.bootstrap` through typed NMS
+RPC. For hosts that already exist, the audited procedures
+`os.linux.debian.13.preflight_influxdb3_core` and
+`os.linux.debian.13.install_influxdb3_core` apply the same posture over SSH.
+
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)
 that installs containerd + kubelet/kubeadm/kubectl 1.31 and pre-pulls

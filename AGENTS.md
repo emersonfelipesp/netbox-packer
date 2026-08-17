@@ -35,6 +35,85 @@ endpoint (`10.0.30.139`) and must never be retargeted to production. Additive
 migration `0020` replaces the database row's credential-generating content and
 marks it pending without deleting any existing artifact.
 
+Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
+**Debian 13** Core 3 profile. Its verbatim cloud-config is
+`netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml` and the
+migration constant must stay byte-identical to it. It inherits every rule above
+— endpoint-agnostic, credential-free, fingerprint-verified key, pinned-and-held
+package — and adds a baked production posture that must not be relaxed:
+
+- the managed `/etc/influxdb3/influxdb3-core.conf` binds only to
+  `127.0.0.1:8181` with token authentication left enabled, sets
+  `disable-telemetry-upload = true`, and **omits `plugin-dir`** so the Python
+  Processing Engine stays disabled;
+- an `influxdb3-core.service` drop-in supplies `Restart=on-failure`;
+- first boot **refuses any release other than Debian 13** (plus non-`amd64`/
+  `arm64` architectures and a missing systemd), rather than half-configuring an
+  unverified platform;
+- `node-id` is derived from the **per-VM SMBIOS UUID** (falling back to the
+  per-instance machine-id), and the script fails closed if neither is readable.
+  Do **not** switch this back to the hostname: the Proxmox clone pipeline reuses
+  the template's cicustom meta-data, so clones can share a hostname and would
+  then share a node identity.
+- **Every `curl` in the installer must be time-bounded**, not just the readiness
+  probe. The script is the final `runcmd` entry, so a `curl` that never returns
+  hangs cloud-init forever and the clone never reaches the readiness diagnostics;
+  `--retry` does not help, because a server that completes TLS and then stops
+  sending data produces no error to retry. The readiness probes carry
+  `--connect-timeout`/`--max-time` plus an overall loop deadline, and the signing-key
+  download additionally caps `--retry-max-time` and `--max-filesize` so a hostile
+  endpoint cannot fill the temp directory before the key is filtered by fingerprint.
+  `test_influxdb3_core_debian13_seed_contract` asserts this over every `curl`
+  invocation, so a new unbounded one fails the suite.
+- `install_zabbix_agent2` and `install_nms_agent` are **False** on this template
+  because the shared injectors are Ubuntu- and amd64-only (`ubuntu${VERSION_ID}`
+  Zabbix package name; amd64-only NMS bootstrap). Do not enable them for a Debian
+  or arm64 template until those injectors are OS-family- and architecture-aware.
+  This also keeps this seed's installer the **last** `runcmd` entry — cloud-init's
+  `runcmd` wrapper has no `set -e`, so a non-final failure would be masked.
+- `jobs._resolve_cloud_image_url()` resolves Debian images by `os_version` through
+  `_DEBIAN_CODENAMES`; it used to return Bookworm for every Debian row. Keep that
+  map in step with `choices.OS_VERSIONS_BY_FAMILY[debian]`, and remember a
+  `cloud_config` bake never runs cloud-init, so a wrong base image is not caught
+  at build time.
+- **Only the expected repository signing key may be trusted.** The script imports
+  the downloaded key into an isolated `GNUPGHOME` and exports **only** the expected
+  primary fingerprint (`--export-options export-minimal`), then asserts the exported
+  keyring holds exactly one `pub` key with that fingerprint. Do not go back to
+  `grep`-ing the downloaded file for the fingerprint and `gpg --dearmor`-ing the
+  whole thing: a substituted file carrying the genuine key **plus** an attacker key
+  passes that check, and the attacker key could then sign repository metadata and
+  obtain root during `apt-get install`.
+- **Only a final `3.11.0` package version is accepted.** A tilde sorts *before* the
+  release it qualifies, so `3.11.0~rc1` is a prerelease; the candidate regex and the
+  post-install `dpkg-query` check both refuse any `~` version, so the profile cannot
+  silently install and hold an unreviewed vendor build while reporting success.
+- **The collision guard must not compare mutable build state.** It excludes
+  `build_status` and `packer_template_ref` (`_MUTABLE_BUILD_STATE_FIELDS`), because a
+  successful bake flips `build_status` from `pending` to `ready` — comparing it would
+  make rolling `0025` back and reapplying it raise a bogus collision on the row the
+  migration created itself, blocking deployment recovery and migration replay.
+- **Known accepted risk: the base image is the mutable vendor `latest`, with no
+  digest.** This is pre-existing for every seeded profile, not specific to this one,
+  and is tracked in issue #96 (pin a dated image plus a reviewed `sha256`, forwarded
+  through `call_proxbox_build` to `proxbox-api`, failing closed when a pinned profile
+  has none). Do not add a digest without recording how it was obtained and verified —
+  an unverified digest looks like provenance while proving nothing.
+
+Do not add a remote bind to this image: with token auth enabled, a non-loopback
+listener would carry bearer tokens over plaintext HTTP. Put a TLS reverse proxy
+in front of it, or use the audited RPC installer with explicit TLS material.
+
+Do not add token creation to this seed. The first administrative token is
+created and vaulted only by `service.influxdb.1.bootstrap` (`family="core3"`).
+For hosts that already exist, `netbox-rpc` seeds
+`os.linux.debian.13.preflight_influxdb3_core` (read) and
+`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
+apply the same posture over audited SSH; the onboarding sequence is
+`preflight` -> `install` -> `service.influxdb.1.bootstrap`. **`netbox-packer`
+must not import, depend on, or reference `netbox-rpc`** — that dependency is
+one-way, and these procedures are named here as documentation only.
+
 ## Build Dispatch Guardrail
 
 Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the

@@ -1,0 +1,259 @@
+#cloud-config
+# InfluxDB 3 Core 3.11.0 on Debian 13 (Trixie), baked with the production posture
+# of the operator installer rather than package defaults:
+#
+#   - binds only to 127.0.0.1:8181, with token authentication left enabled
+#   - telemetry upload disabled
+#   - Python Processing Engine disabled (no plugin-dir)
+#   - explicit managed configuration file plus a systemd drop-in
+#   - package held after install, for controlled upgrades
+#   - only the expected repository signing key is trusted, and only a final
+#     (non-prerelease) 3.11.0 package version is accepted
+#
+# Credential-free by design. No administrative token, TLS material, or per-bake
+# state is written into this image: the first admin token is created and vaulted
+# only by typed NMS RPC (service.influxdb.1.bootstrap, family=core3), which
+# returns an nms-secret reference and never plaintext. The audited procedures
+# os.linux.debian.13.preflight_influxdb3_core and
+# os.linux.debian.13.install_influxdb3_core apply the same posture to hosts that
+# already exist; this template is for new guests.
+#
+# node-id is derived at first boot from the per-VM SMBIOS UUID (falling back to
+# the per-instance machine-id), never from the hostname: the Proxmox clone
+# pipeline reuses this template's cicustom meta-data, so clones can share a
+# hostname. The script fails closed rather than minting a colliding identity.
+#
+# Zabbix Agent 2 and the NMS host agent are deliberately NOT injected into this
+# template (install_zabbix_agent2 / install_nms_agent are False on the seeded
+# PackerTemplate): the shared injectors build an Ubuntu Zabbix repository package
+# name from VERSION_ID, which yields a nonexistent "ubuntu13" package on Debian
+# 13, and the NMS agent bootstrap accepts only amd64. This installer is therefore
+# the LAST runcmd entry, which also matters: cloud-init shellifies runcmd into a
+# plain /bin/sh script with no `set -e`, so a non-final failing command would be
+# masked by a later success.
+package_update: false
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+write_files:
+  - path: /usr/local/sbin/install-influxdb3-core
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      umask 027
+      export DEBIAN_FRONTEND=noninteractive
+
+      readonly PRODUCT_VERSION='3.11.0'
+      readonly PACKAGE_NAME='influxdb3-core'
+      readonly SERVICE_NAME='influxdb3-core.service'
+      readonly EXPECTED_KEY_FINGERPRINT='24C975CBA61A024EE1B631787C3D57159FC2F927'
+      readonly KEYRING_FILE='/etc/apt/keyrings/influxdata-archive.gpg'
+      readonly SOURCE_FILE='/etc/apt/sources.list.d/influxdata.list'
+      readonly CONFIG_DIR='/etc/influxdb3'
+      readonly CONFIG_FILE='/etc/influxdb3/influxdb3-core.conf'
+      readonly DATA_DIR='/var/lib/influxdb3/data'
+      readonly HTTP_BIND='127.0.0.1:8181'
+      readonly LOG_FILTER='info'
+      readonly WAL_FLUSH_INTERVAL='100ms'
+      readonly DROPIN_DIR='/etc/systemd/system/influxdb3-core.service.d'
+      readonly DROPIN_FILE='/etc/systemd/system/influxdb3-core.service.d/20-production.conf'
+      readonly MANAGED_MARKER='# Managed by netbox-packer influxdb-core-3.11.0-debian-13'
+
+      # Debian 13 only. The apt suite, the packaged unit's sandbox, and the
+      # configuration keys below are what this image was built and verified
+      # against; refuse rather than half-configure another release.
+      test -r /etc/os-release
+      # shellcheck disable=SC1091
+      . /etc/os-release
+      if [ "${ID:-}" != 'debian' ]; then
+        echo "This image supports Debian only; found ID=${ID:-unknown}" >&2
+        exit 1
+      fi
+      case "${VERSION_ID:-}" in
+        13|13.*) ;;
+        *)
+          echo "This image requires Debian 13; found VERSION_ID=${VERSION_ID:-unknown}" >&2
+          exit 1
+          ;;
+      esac
+
+      architecture="$(dpkg --print-architecture)"
+      case "${architecture}" in
+        amd64|arm64) ;;
+        *)
+          echo "Unsupported architecture: ${architecture}" >&2
+          exit 1
+          ;;
+      esac
+
+      if [ ! -d /run/systemd/system ]; then
+        echo 'systemd is not running as PID 1' >&2
+        exit 1
+      fi
+
+      install -d -m 0755 /etc/apt/keyrings
+
+      # Trust EXACTLY ONE key. Checking that the downloaded file *contains* the
+      # expected fingerprint and then dearmoring the whole file would also trust
+      # any extra key bundled alongside it — a substituted file carrying the
+      # genuine key plus an attacker key passes a `grep` check, and that attacker
+      # key could then sign repository metadata and get root during install. So
+      # import into an isolated keyring and export only the expected primary
+      # fingerprint, then prove the exported keyring holds that one key and
+      # nothing else.
+      keyring_workdir="$(mktemp -d)"
+      chmod 0700 "${keyring_workdir}"
+      cleanup_keyring_workdir() {
+        rm -rf "${keyring_workdir}"
+      }
+      trap cleanup_keyring_workdir EXIT
+      # Every bound here matters: this runs as the final runcmd entry, so a curl
+      # that never returns hangs cloud-init forever and the clone never reaches the
+      # bounded readiness diagnostics below. --retry alone does not help — a server
+      # that completes TLS and then simply stops sending data produces no error to
+      # retry. --max-filesize also stops a hostile endpoint from filling /tmp before
+      # the key is ever filtered by fingerprint.
+      curl --fail --silent --show-error --location \
+        --proto '=https' --tlsv1.2 \
+        --retry 3 --retry-delay 2 --retry-max-time 60 \
+        --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
+        --output "${keyring_workdir}/influxdata-archive.key" \
+        https://repos.influxdata.com/influxdata-archive.key
+      GNUPGHOME="${keyring_workdir}" gpg --batch --quiet \
+        --import "${keyring_workdir}/influxdata-archive.key"
+      GNUPGHOME="${keyring_workdir}" gpg --batch --yes \
+        --export --export-options export-minimal \
+        "${EXPECTED_KEY_FINGERPRINT}" > "${keyring_workdir}/influxdata-archive.gpg"
+      test -s "${keyring_workdir}/influxdata-archive.gpg"
+      # Exactly one primary key, and it is the expected fingerprint.
+      exported_primaries="$(gpg --show-keys --with-colons \
+        "${keyring_workdir}/influxdata-archive.gpg" | grep -c '^pub:' || true)"
+      test "${exported_primaries}" = '1'
+      gpg --show-keys --with-colons "${keyring_workdir}/influxdata-archive.gpg" \
+        | grep -q "^fpr:::::::::${EXPECTED_KEY_FINGERPRINT}:$"
+      install -o root -g root -m 0644 \
+        "${keyring_workdir}/influxdata-archive.gpg" "${KEYRING_FILE}"
+      cleanup_keyring_workdir
+      trap - EXIT
+      echo "deb [signed-by=${KEYRING_FILE}] https://repos.influxdata.com/debian stable main" \
+        > "${SOURCE_FILE}"
+
+      apt-get update
+
+      # Pin to the requested semantic patch version, then verify what apt
+      # actually installed before holding it.
+      # Accept only a FINAL 3.11.0 release, optionally with a Debian revision.
+      # A tilde sorts before the release it qualifies, so "3.11.0~rc1" is a
+      # prerelease: matching it would silently install and hold an unreviewed
+      # vendor build while still reporting success for the 3.11.0 profile.
+      package_version="$(apt-cache madison "${PACKAGE_NAME}" | awk '
+        {
+          candidate=$3
+          normalized=candidate
+          sub(/^[0-9]+:/, "", normalized)
+          if (normalized ~ /^3[.]11[.]0(-[0-9A-Za-z.+]+)?$/) { print candidate; exit }
+        }')"
+      test -n "${package_version}"
+      apt-get install -y --no-install-recommends "${PACKAGE_NAME}=${package_version}"
+      installed="$(dpkg-query -W -f='${Version}' "${PACKAGE_NAME}")"
+      normalized="${installed#*:}"
+      case "${normalized}" in
+        *'~'*)
+          echo "Refusing prerelease ${PACKAGE_NAME} version: ${installed}" >&2
+          exit 1
+          ;;
+      esac
+      case "${normalized}" in
+        3.11.0|3.11.0-*) ;;
+        *)
+          echo "Unexpected ${PACKAGE_NAME} version: ${installed}" >&2
+          exit 1
+          ;;
+      esac
+      id influxdb3 >/dev/null 2>&1
+
+      install -d -o root -g influxdb3 -m 0750 "${CONFIG_DIR}"
+      install -d -o influxdb3 -g influxdb3 -m 0750 /var/lib/influxdb3
+      install -d -o influxdb3 -g influxdb3 -m 0750 "${DATA_DIR}"
+
+      # node-id must be unique per clone, and the hostname is NOT a reliable
+      # source for that: the Proxmox clone pipeline reuses the template's own
+      # cicustom meta-data, whose local-hostname is a fixed placeholder, so every
+      # standard clone can boot with the same name. Derive from the per-VM SMBIOS
+      # UUID, which Proxmox generates for each VM, falling back to the machine-id
+      # cloud-init regenerates per instance. Fail closed rather than silently
+      # minting a colliding identity.
+      node_suffix=''
+      for id_source in /sys/class/dmi/id/product_uuid /etc/machine-id; do
+        if [ -r "${id_source}" ]; then
+          node_suffix="$(tr '[:upper:]' '[:lower:]' < "${id_source}" | tr -cd 'a-f0-9' | cut -c1-12)"
+        fi
+        if [ -n "${node_suffix}" ]; then
+          break
+        fi
+      done
+      if [ -z "${node_suffix}" ]; then
+        echo 'Cannot derive a unique node id: no SMBIOS UUID or machine-id' >&2
+        exit 1
+      fi
+      node_id="influxdb3-${node_suffix}"
+
+      install -d -o root -g root -m 0755 "${DROPIN_DIR}"
+      cat > "${DROPIN_FILE}" <<'DROPIN'
+      [Service]
+      Restart=on-failure
+      RestartSec=5s
+      TimeoutStopSec=120s
+      DROPIN
+      chmod 0644 "${DROPIN_FILE}"
+
+      # Explicit production configuration for the packaged systemd launcher.
+      # plugin-dir is deliberately omitted: the Processing Engine stays off.
+      umask 077
+      cat > "${CONFIG_FILE}.tmp" <<CONFIG
+      ${MANAGED_MARKER}
+      object-store = "file"
+      data-dir = "${DATA_DIR}"
+      node-id = "${node_id}"
+      http-bind = "${HTTP_BIND}"
+      log-filter = "${LOG_FILTER}"
+      wal-flush-interval = "${WAL_FLUSH_INTERVAL}"
+      disable-telemetry-upload = true
+      # plugin-dir intentionally omitted: Processing Engine disabled.
+      CONFIG
+      umask 027
+      chown root:influxdb3 "${CONFIG_FILE}.tmp"
+      chmod 0640 "${CONFIG_FILE}.tmp"
+      mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+
+      apt-mark hold "${PACKAGE_NAME}"
+
+      systemctl daemon-reload
+      systemctl enable --now "${SERVICE_NAME}"
+
+      # /ready is the unauthenticated readiness endpoint; token authentication
+      # stays enabled for every data and admin route.
+      #
+      # Every probe is individually bounded AND the loop enforces an overall
+      # monotonic deadline: without --connect-timeout/--max-time a service that
+      # accepts the connection but never responds would block the first curl
+      # forever, so the nominal attempt count would never be reached and
+      # once-per-instance cloud-init would hang after a partial install.
+      readiness_deadline=$((SECONDS + 180))
+      while [ "${SECONDS}" -lt "${readiness_deadline}" ]; do
+        if curl --fail --silent --connect-timeout 2 --max-time 5 \
+          "http://${HTTP_BIND}/ready" >/dev/null; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo 'InfluxDB 3 Core readiness endpoint did not become ready' >&2
+      systemctl status "${SERVICE_NAME}" --no-pager >&2 || true
+      journalctl --unit "${SERVICE_NAME}" -n 120 --no-pager >&2 || true
+      exit 1
+runcmd:
+  - [bash, /usr/local/sbin/install-influxdb3-core]
