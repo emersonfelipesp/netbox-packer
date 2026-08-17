@@ -111,8 +111,16 @@ write_files:
         rm -rf "${keyring_workdir}"
       }
       trap cleanup_keyring_workdir EXIT
+      # Every bound here matters: this runs as the final runcmd entry, so a curl
+      # that never returns hangs cloud-init forever and the clone never reaches the
+      # bounded readiness diagnostics below. --retry alone does not help — a server
+      # that completes TLS and then simply stops sending data produces no error to
+      # retry. --max-filesize also stops a hostile endpoint from filling /tmp before
+      # the key is ever filtered by fingerprint.
       curl --fail --silent --show-error --location \
-        --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
+        --proto '=https' --tlsv1.2 \
+        --retry 3 --retry-delay 2 --retry-max-time 60 \
+        --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
         --output "${keyring_workdir}/influxdata-archive.key" \
         https://repos.influxdata.com/influxdata-archive.key
       GNUPGHOME="${keyring_workdir}" gpg --batch --quiet \

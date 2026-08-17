@@ -55,9 +55,16 @@ package — and adds a baked production posture that must not be relaxed:
   Do **not** switch this back to the hostname: the Proxmox clone pipeline reuses
   the template's cicustom meta-data, so clones can share a hostname and would
   then share a node identity.
-- Every readiness probe carries `--connect-timeout`/`--max-time` and the loop
-  enforces an overall deadline, so a socket that accepts but never answers cannot
-  hang once-per-instance cloud-init.
+- **Every `curl` in the installer must be time-bounded**, not just the readiness
+  probe. The script is the final `runcmd` entry, so a `curl` that never returns
+  hangs cloud-init forever and the clone never reaches the readiness diagnostics;
+  `--retry` does not help, because a server that completes TLS and then stops
+  sending data produces no error to retry. The readiness probes carry
+  `--connect-timeout`/`--max-time` plus an overall loop deadline, and the signing-key
+  download additionally caps `--retry-max-time` and `--max-filesize` so a hostile
+  endpoint cannot fill the temp directory before the key is filtered by fingerprint.
+  `test_influxdb3_core_debian13_seed_contract` asserts this over every `curl`
+  invocation, so a new unbounded one fails the suite.
 - `install_zabbix_agent2` and `install_nms_agent` are **False** on this template
   because the shared injectors are Ubuntu- and amd64-only (`ubuntu${VERSION_ID}`
   Zabbix package name; amd64-only NMS bootstrap). Do not enable them for a Debian

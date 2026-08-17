@@ -45,6 +45,23 @@ def _resolve_static_value(node: ast.AST, constants: dict[str, object]) -> object
     return ast.literal_eval(node)
 
 
+def _logical_shell_lines(script: str) -> list[str]:
+    """Join backslash-continued shell lines so a flag check sees a whole command."""
+
+    logical: list[str] = []
+    buffer = ""
+    for raw in script.splitlines():
+        stripped = raw.rstrip()
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1].strip() + " "
+            continue
+        logical.append((buffer + stripped.strip()) if buffer else stripped)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+    return logical
+
+
 def _frozenset_members(rel: str, name: str) -> set[str]:
     """Return the string members of a module-level ``name = frozenset({...})``.
 
@@ -1510,11 +1527,24 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     # Fails closed rather than minting a colliding identity.
     assert "Cannot derive a unique node id" in install_script
 
-    # Every readiness probe is individually bounded and the loop has an overall
-    # deadline: an unbounded curl against a socket that accepts but never responds
-    # would hang once-per-instance cloud-init after a partial install.
-    assert "--connect-timeout 2" in install_script
-    assert "--max-time 5" in install_script
+    # EVERY curl in the installer must be time-bounded, not just the readiness
+    # probe. This script is the final runcmd entry, so a curl that never returns
+    # hangs cloud-init forever and the clone never reaches the diagnostics below;
+    # --retry does not help, because a server that completes TLS and then stops
+    # sending data produces no error to retry.
+    curl_invocations = [
+        line for line in _logical_shell_lines(install_script) if not line.lstrip().startswith("#") and "curl " in line
+    ]
+    assert len(curl_invocations) >= 2, curl_invocations
+    for invocation in curl_invocations:
+        for flag in ("--connect-timeout", "--max-time"):
+            assert flag in invocation, (flag, invocation[:120])
+    # The key download additionally caps total retry time and response size, so a
+    # hostile endpoint cannot fill the temp directory before fingerprint filtering.
+    key_download = next(inv for inv in curl_invocations if "influxdata-archive.key" in inv)
+    assert "--retry-max-time" in key_download
+    assert "--max-filesize" in key_download
+    # The readiness loop has an overall deadline on top of the per-probe bounds.
     assert "readiness_deadline=$((SECONDS + 180))" in install_script
     assert "seq 1 60" not in install_script
 
