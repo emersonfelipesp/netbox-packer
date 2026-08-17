@@ -124,7 +124,8 @@ nms UI /virtualization/packer (Create dialog -> Build)
   -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
        on <vm_storage>:snippets -> qm template -> returns vmid
   -> PackerBuild.result_template_id=vmid, build_status=success, resolved base source saved;
-     PackerTemplate.build_status=ready, built_at=now(), last successful base source saved
+     PackerTemplate records built_at + last successful source and becomes ready only
+     when that source still matches its current declared pin (otherwise stale)
 ```
 
 Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
@@ -148,6 +149,10 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   appends an error line to the build log, and sets the template back to
   `failed` unless another build is still queued/running. UI and API callers must
   surface the failure instead of reporting a false queued success.
+- Auto-rebuild staleness scans follow the same dispatch invariant. They include pin
+  drift when `max_age_days` is unset, recover queued rows left by the old
+  create-without-dispatch path, set the template to `building`, and dispatch only
+  after an optional branching merge succeeds.
 - Local `packer init` / `packer build` subprocesses must honor
   `PACKER_BUILD_TIMEOUT_SECONDS` even when the process emits no stdout. The
   watchdog in `_run_subprocess()` is intentionally independent of output
@@ -339,6 +344,10 @@ aligned whenever this seed changes.
 them, so the mechanism protected nothing. `0029` pins exactly one:
 `influxdb-core-3.11.0-debian-13` (VMID 9052).
 
+The migration fails closed if that exact template row is missing, and its
+compare-and-set must update exactly one row. A rename, deletion, or concurrent edit
+cannot let migration `0029` be recorded as a zero-effect success.
+
 **Only this profile, deliberately.** Pinning a template that is already `ready` marks it
 pending for rebake (`pin_differs_from_built_source`), so pinning the whole seeded catalog
 would demand estate-wide rebakes — an operator decision. 9052 has no baked artifact, so
@@ -387,8 +396,10 @@ the requirement to record where each digest came from and how it was verified.
 Adds machine-managed `base_image_url_at_build` and
 `base_image_sha256_at_build` fields to `PackerBuild` and `PackerTemplate`. A successful
 cloud-image build records the resolved source on its build row and updates the
-template's last-successful source in the same transaction as `build_status="ready"`
-and `built_at`. `PackerTemplate.is_stale` compares a declared pin with those snapshots,
+template's last-successful source in the same locked transaction as `built_at`.
+The template becomes `ready` only when its current declared pin still matches the
+resolved source; an override mismatch or a pin edited during the build is committed as
+`stale`. `PackerTemplate.is_stale` compares a declared pin with those snapshots,
 so changing or clearing a pin, or using a per-build pin that differs from the template,
 cannot silently describe old bytes as current. Pin/checksum staleness is evaluated even
 when `max_age_days` is unset. Existing unpinned rows with empty historical snapshots

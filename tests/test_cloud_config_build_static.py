@@ -2236,16 +2236,39 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
 
 
 @pytest.mark.parametrize(
-    ("template_pin", "expected_sha256"),
+    ("template_pin", "build_pin", "current_pin", "expected_sha256", "expected_status"),
     [
-        ({"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64}, "d" * 64),
-        ({}, ""),
+        (
+            {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
+            {},
+            {},
+            "d" * 64,
+            "ready",
+        ),
+        ({}, {}, {}, "", "ready"),
+        (
+            {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
+            {"image_url": "https://vendor.example/override.qcow2", "image_sha256": "c" * 64},
+            {},
+            "c" * 64,
+            "stale",
+        ),
+        (
+            {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
+            {},
+            {"base_image_url": "https://vendor.example/edited.qcow2", "base_image_sha256": "c" * 64},
+            "d" * 64,
+            "stale",
+        ),
     ],
 )
 def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     monkeypatch,
     template_pin,
+    build_pin,
+    current_pin,
     expected_sha256,
+    expected_status,
 ) -> None:
     """Protect the job-to-client seam and the atomic provenance snapshots."""
 
@@ -2324,6 +2347,21 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     }
     template_fields.update(template_pin)
     template = SimpleNamespace(**template_fields)
+    locked_template_fields = {
+        "pk": template.pk,
+        "base_image_url": template.base_image_url,
+        "base_image_sha256": template.base_image_sha256,
+    }
+    locked_template_fields.update(current_pin)
+    locked_template = SimpleNamespace(**locked_template_fields)
+
+    def get_locked_template(*, pk):
+        assert atomic_state["active"], "template pin must be reloaded under transaction.atomic()"
+        assert pk == template.pk
+        return locked_template
+
+    template_manager.select_for_update.return_value = template_manager
+    template_manager.get.side_effect = get_locked_template
 
     saved_update_fields = []
 
@@ -2332,7 +2370,11 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
         saved_update_fields.append(update_fields)
 
     build = SimpleNamespace(
-        variable_overrides={"endpoint_id": 17, "target_node": "node1"},
+        variable_overrides={
+            "endpoint_id": 17,
+            "target_node": "node1",
+            **build_pin,
+        },
         result_template_id=None,
         log="",
         save=save_build,
@@ -2341,7 +2383,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
 
     client_kwargs = call_proxbox_build.call_args.kwargs
-    expected_url = template_pin.get(
+    expected_url = build_pin.get("image_url") or template_pin.get(
         "base_image_url",
         "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
     )
@@ -2351,7 +2393,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     assert build.base_image_sha256_at_build == expected_sha256
     assert template_updates == [
         {
-            "build_status": "ready",
+            "build_status": expected_status,
             "built_at": finished_at,
             "base_image_url_at_build": expected_url,
             "base_image_sha256_at_build": expected_sha256,
@@ -2360,6 +2402,8 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     ]
     assert "base_image_url_at_build" in saved_update_fields[0]
     assert "base_image_sha256_at_build" in saved_update_fields[0]
+    template_manager.select_for_update.assert_called_once_with()
+    template_manager.get.assert_called_once_with(pk=template.pk)
     assert not atomic_state["active"]
 
 

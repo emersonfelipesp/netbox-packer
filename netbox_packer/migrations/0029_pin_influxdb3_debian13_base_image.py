@@ -61,9 +61,13 @@ def pin_influxdb3_debian13_base_image(apps, schema_editor):
         PackerTemplate.objects.select_for_update().filter(name=TEMPLATE_NAME).first()
     )
     if template is None:
-        # The 0025 seed is skipped on deployments that already owned the VMID, so a
-        # missing row is legitimate rather than an error.
-        return
+        raise RuntimeError(
+            f"Cannot pin the required base image because {TEMPLATE_NAME!r} is missing. "
+            "Restore or rename the expected template, reconcile it by hand (see "
+            "docs/cloud-init-template-images.md -> Base Image Pinning), then rerun "
+            "this migration. Refusing to record migration 0029 while zero profiles "
+            "are pinned."
+        )
 
     if template.base_image_url or template.base_image_sha256:
         if (
@@ -80,14 +84,22 @@ def pin_influxdb3_debian13_base_image(apps, schema_editor):
             "Pinning), then rerun this migration."
         )
 
-    # Compare-and-set against the unpinned state: a row pinned concurrently is not
-    # overwritten, the update simply affects no rows.
-    PackerTemplate.objects.filter(
+    # Compare-and-set against the unpinned state so a concurrent operator edit is
+    # never overwritten. A missed compare-and-set fails the migration below.
+    updated = PackerTemplate.objects.filter(
         pk=template.pk, base_image_url="", base_image_sha256=""
     ).update(
         base_image_url=PINNED_IMAGE_URL,
         base_image_sha256=PINNED_IMAGE_SHA256,
     )
+    if updated != 1:
+        raise RuntimeError(
+            f"Could not pin {TEMPLATE_NAME!r}: expected to update exactly one "
+            f"unpinned row, updated {updated}. A concurrent operator edit may have "
+            "changed the row. Reconcile it by hand (see "
+            "docs/cloud-init-template-images.md -> Base Image Pinning), then rerun "
+            "this migration."
+        )
 
 
 def unpin_influxdb3_debian13_base_image(apps, schema_editor):

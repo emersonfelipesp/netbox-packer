@@ -10,6 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 from netbox.jobs import JobRunner
 
+from .base_image import pin_differs_from_built_source
 from .package_index import (
     redact_fileserver_package_token,
     render_fileserver_package_index,
@@ -739,14 +740,6 @@ class PackerBuildJob(JobRunner):
             build.base_image_sha256_at_build = image_sha256
             if result_vmid:
                 build.result_template_id = int(result_vmid)
-            update = {
-                "build_status": "ready",
-                "built_at": build.finished_at,
-                "base_image_url_at_build": image_url,
-                "base_image_sha256_at_build": image_sha256,
-            }
-            if installer:
-                update["installer_config_checksum_at_build"] = installer.checksum
         else:
             build.status = "failed"
             build.exit_code = response.get("returncode") or 1
@@ -759,7 +752,22 @@ class PackerBuildJob(JobRunner):
 
             build_update_fields += ["base_image_url_at_build", "base_image_sha256_at_build"]
             with transaction.atomic():
-                PackerTemplate.objects.filter(pk=template.pk).update(**update)
+                current_template = PackerTemplate.objects.select_for_update().get(pk=template.pk)
+                source_drifted = pin_differs_from_built_source(
+                    desired_url=current_template.base_image_url,
+                    desired_sha256=current_template.base_image_sha256,
+                    built_url=image_url,
+                    built_sha256=image_sha256,
+                )
+                update = {
+                    "build_status": "stale" if source_drifted else "ready",
+                    "built_at": build.finished_at,
+                    "base_image_url_at_build": image_url,
+                    "base_image_sha256_at_build": image_sha256,
+                }
+                if installer:
+                    update["installer_config_checksum_at_build"] = installer.checksum
+                PackerTemplate.objects.filter(pk=current_template.pk).update(**update)
                 build.save(update_fields=build_update_fields)
         else:
             build.save(update_fields=build_update_fields)
@@ -924,7 +932,7 @@ class PackerStalenessCheckJob(JobRunner):
         def _run_staleness(PackerBuild, PackerTemplate):
             checked = 0
             stale = 0
-            queued = 0
+            rebuild_ids = []
 
             # Age is only one source of staleness. Installer checksum and base-image
             # pin drift must still be evaluated when max_age_days is unset.
@@ -939,33 +947,41 @@ class PackerStalenessCheckJob(JobRunner):
                 if not template.auto_rebuild:
                     continue
 
-                # Only queue if no build is already active
-                active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
-                if active:
+                if PackerBuild.objects.filter(template=template, status="running").exists():
                     continue
 
-                build = PackerBuild.objects.create(
-                    template=template,
-                    triggered_by="PackerStalenessCheckJob",
-                    status="queued",
+                build = (
+                    PackerBuild.objects.filter(template=template, status="queued")
+                    .order_by("queued_at")
+                    .first()
                 )
-                logger.info(
-                    "Auto-queued rebuild for stale template '%s' (build #%s)",
-                    template.name,
-                    build.pk,
-                )
-                queued += 1
+                if build is None:
+                    build = PackerBuild.objects.create(
+                        template=template,
+                        triggered_by="PackerStalenessCheckJob",
+                        status="queued",
+                    )
+                    logger.info(
+                        "Auto-queued rebuild for stale template '%s' (build #%s)",
+                        template.name,
+                        build.pk,
+                    )
+                else:
+                    logger.warning(
+                        "Recovering queued rebuild #%s for stale template '%s'",
+                        build.pk,
+                        template.name,
+                    )
+                rebuild_ids.append(build.pk)
 
-            logger.info(
-                "Staleness check complete: %d templates checked, %d stale, %d rebuilds queued",
-                checked,
-                stale,
-                queued,
-            )
+            return checked, stale, rebuild_ids
 
+        checked = 0
+        stale = 0
+        rebuild_ids = []
         if branch is not None:
             with activate_branch_context(branch):
-                _run_staleness(PackerBuild, PackerTemplate)
+                checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
             merged, msg = merge_branch(
                 branch=branch,
                 user=None,
@@ -975,8 +991,27 @@ class PackerStalenessCheckJob(JobRunner):
                 logger.info("Staleness check branch merged: %s", msg)
             else:
                 logger.warning("Staleness check branch merge failed: %s", msg)
+                rebuild_ids = []
         else:
-            _run_staleness(PackerBuild, PackerTemplate)
+            checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
+
+        dispatched = 0
+        for build_id in rebuild_ids:
+            build = PackerBuild.objects.select_related("template").get(pk=build_id)
+            PackerTemplate.objects.filter(pk=build.template_id).update(build_status="building")
+            try:
+                dispatch_build(build)
+            except Exception:
+                logger.exception("Auto-rebuild dispatch failed for build #%s", build_id)
+                continue
+            dispatched += 1
+
+        logger.info(
+            "Staleness check complete: %d templates checked, %d stale, %d rebuilds dispatched",
+            checked,
+            stale,
+            dispatched,
+        )
 
 
 def dispatch_build(build):

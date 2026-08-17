@@ -200,11 +200,16 @@ to an exact vendor artifact and its reviewed digest, which
 `jobs._resolve_cloud_image_source()` forwards to proxbox-api as `sha256`.
 `variable_overrides['image_url']` / `['image_sha256']` override them per build.
 Migration `0028` records the resolved URL and digest on the successful `PackerBuild`
-and atomically updates the template's last-successful-build snapshots with
-`build_status="ready"` / `built_at`. Those snapshots are machine-managed and make a
+and atomically updates the template's last-successful-build snapshots with `built_at`.
+The success transaction locks and reloads the template: it writes `build_status="ready"`
+only if the resolved source still matches the current declared pin, otherwise it writes
+`stale`. Those snapshots are machine-managed and make a
 changed or cleared declared pin stale; a per-build pin that differs from the template
 also leaves the resulting template stale until it is rebuilt from the declared source.
-The staleness job must evaluate pin drift even when `max_age_days` is unset.
+Readiness consumers require both ready status and `not is_stale`. The staleness job and
+management command must evaluate pin drift even when `max_age_days` is unset, recover a
+previously orphaned queued auto-rebuild, set the template to `building`, and call
+`dispatch_build()` after changes commit (and after a branch merges).
 
 - **A pinned URL without a digest fails the build, by design.** Never "fix" that by
   making the digest optional for pinned URLs — an unverified pin looks like provenance
@@ -220,6 +225,8 @@ The staleness job must evaluate pin drift even when `max_age_days` is unset.
 - **Exactly one profile is pinned** (`influxdb-core-3.11.0-debian-13`, migration `0029`).
   Do not pin others casually: pinning an already-`ready` template marks it pending for
   rebake, so a blanket pin demands estate-wide rebakes. That is an operator decision.
+  Migration `0029` must fail when that expected row is missing and must update exactly
+  one row when applying the pin; it may never be recorded as a zero-effect success.
 - **Debian publishes only `SHA512SUMS` for cloud images.** There is no `SHA256SUMS`, and
   SHA-256 cannot be derived from SHA-512. To obtain a digest: fetch `SHA512SUMS`,
   download the exact dated artifact, verify its SHA-512 against the published value,

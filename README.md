@@ -107,9 +107,11 @@ carries the reviewed digest that proxbox-api verifies after download (both are a
 settable per build via `variable_overrides`). A pinned URL without a digest fails the
 build closed — an unverified pin looks like provenance while guaranteeing nothing.
 Successful cloud-image builds record the resolved URL and digest on the build and as
-machine-managed last-successful values on the template. Changing or clearing a pin, or
-using a per-build pin that differs from the template, therefore makes the artifact
-stale even when no age policy is configured. No seeded profile is pinned yet; see
+machine-managed last-successful values on the template. The success transaction reloads
+the current declared pin under a lock and marks a mismatched override or concurrent pin
+edit `stale`, never `ready`. Changing or clearing a pin therefore makes the artifact
+stale even when no age policy is configured. Migration `0029` pins exactly the Debian 13
+InfluxDB 3 Core profile and fails closed if that expected row is missing; see
 [`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md) for the
 procedure, which requires obtaining each digest from the vendor's published checksum
 file and verifying it.
@@ -185,6 +187,10 @@ immediately enqueue `PackerBuildJob` through the shared dispatcher using the
 `build_id` keyword argument. If the queue cannot accept the job, the build is
 marked `failed`, an error is appended to the build log, and the API/UI reports
 that the build was not queued.
+
+Automatic staleness remediation uses the same dispatcher, including pin-only drift
+with no age policy. It recovers queued rows left by the former create-only path and
+dispatches after any configured branch merge succeeds.
 
 For local Packer builds, `PACKER_BUILD_TIMEOUT_SECONDS` is enforced by a
 watchdog that kills the subprocess even when `packer init` or `packer build`

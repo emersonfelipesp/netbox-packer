@@ -308,6 +308,10 @@ base_image_url    = https://cloud.debian.org/images/cloud/trixie/20260509-2473/d
 base_image_sha256 = 34f5481f320aef28408720a861582dcfe3a81781ee69f3910a64c29ad5395b89
 ```
 
+Migration `0029` fails closed if that exact template row is missing and requires its
+compare-and-set to update exactly one row, so a rename, deletion, or concurrent edit
+cannot be recorded as a successful migration that pinned zero profiles.
+
 Every other seeded profile is still unpinned and still resolves the vendor's mutable
 `latest` directory with no digest. That is a **known, accepted gap**, not an oversight —
 it closes per profile, by an operator who has verified a digest. Pinning is not free:
@@ -357,10 +361,16 @@ Both may also be supplied per build via `variable_overrides['image_url']` and
 
 Migration `0028` adds the two `*_at_build` snapshots to both `PackerBuild` and
 `PackerTemplate`. On success, the build's resolved source and the template's
-last-successful source are committed atomically with the ready timestamp/status. Pin
-changes are therefore visible to staleness evaluation: changing or clearing a declared
-pin makes the old artifact stale, and a per-build pin that differs from the template
-also produces a stale template. Pin drift is checked even when `max_age_days` is unset.
+last-successful source are committed atomically with the timestamp. The transaction
+locks and reloads the template before comparing its current declared pin with the
+resolved source, so a mismatched override or a pin edit during the build writes `stale`
+instead of `ready`. Readiness requires both ready status and no computed staleness. Pin
+changes are therefore visible immediately: changing or clearing a declared pin makes
+the old artifact stale, and a per-build pin that differs from the template also produces
+a stale template. Pin drift is checked even when `max_age_days` is unset; automatic
+remediation sets the template to `building` and dispatches the queued build after any
+configured branch merge. A queued row left by the former create-only path is recovered
+rather than blocking remediation forever.
 An unpinned build records its derived URL with an empty digest and does not become stale
 merely because historical unpinned snapshots are empty.
 

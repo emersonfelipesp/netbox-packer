@@ -21,6 +21,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        from netbox_packer.jobs import dispatch_build
         from netbox_packer.models import PackerBuild, PackerTemplate
 
         dry_run = options["dry_run"]
@@ -29,9 +30,9 @@ class Command(BaseCommand):
 
         checked = 0
         stale = 0
-        queued = 0
+        dispatched = 0
 
-        for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+        for template in PackerTemplate.objects.exclude(build_status__in=("building",)):
             checked += 1
             if not template.is_stale:
                 self.stdout.write(f"  OK       {template.name}")
@@ -49,17 +50,36 @@ class Command(BaseCommand):
             if not template.auto_rebuild:
                 continue
 
-            active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
-            if active:
-                self.stdout.write("           → skipping auto-rebuild (already active build)")
+            if PackerBuild.objects.filter(template=template, status="running").exists():
+                self.stdout.write("           → skipping auto-rebuild (already running build)")
                 continue
 
-            build = PackerBuild.objects.create(
-                template=template,
-                triggered_by="check_packer_staleness management command",
-                status="queued",
+            build = (
+                PackerBuild.objects.filter(template=template, status="queued")
+                .order_by("queued_at")
+                .first()
             )
-            queued += 1
-            self.stdout.write(self.style.SUCCESS(f"           → queued rebuild as PackerBuild #{build.pk}"))
+            if build is None:
+                build = PackerBuild.objects.create(
+                    template=template,
+                    triggered_by="check_packer_staleness management command",
+                    status="queued",
+                )
+                action = "queued"
+            else:
+                action = "recovered queued"
 
-        self.stdout.write(self.style.SUCCESS(f"\nDone: {checked} checked, {stale} stale, {queued} rebuilds queued."))
+            PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
+            dispatch_build(build)
+            dispatched += 1
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"           → {action} and dispatched PackerBuild #{build.pk}"
+                )
+            )
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"\nDone: {checked} checked, {stale} stale, {dispatched} rebuilds dispatched."
+            )
+        )
