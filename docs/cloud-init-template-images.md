@@ -135,13 +135,27 @@ placeholder node. Each build request must provide a positive proxbox-api
 netbox-packer suppresses all legacy `ssh_host` values so proxbox-api derives
 transport from the same selected endpoint it authorizes.
 
+> **Hardened by migration `0026`.** Both profiles below (and the legacy `9011` row)
+> originally shared the Debian 13 profile's three defects: a keyring trust boundary that
+> admitted any extra key bundled with the genuine one, a version match that accepted `~`
+> prereleases as the pinned release, and unbounded downloads and readiness probes that
+> could hang first boot indefinitely. `0026` applies the same fixes made in `0025`, and
+> only to rows whose content still matches the exact `0020` baseline — an
+> operator-modified profile is left untouched and needs the fixes applied by hand.
+> Rewritten rows are marked `pending` for a rebake.
+
 The cloud-init profiles:
 
-- verify InfluxData key fingerprint
-  `24C975CBA61A024EE1B631787C3D57159FC2F927`;
-- select only APT package versions matching `2.9.1` or `3.11.0`, verify the
-  installed version, and apply `apt-mark hold`;
-- enable the correct fixed systemd service and wait for `/health` or `/ready`;
+- trust **exactly one** repository key: the downloaded key is imported into an isolated
+  `GNUPGHOME` and only fingerprint
+  `24C975CBA61A024EE1B631787C3D57159FC2F927` is exported, with the exported keyring then
+  asserted to hold a single `pub` record;
+- select only **final** APT package versions matching `2.9.1` or `3.11.0` — any `~`
+  prerelease is refused in both candidate selection and post-install verification —
+  then verify the installed version and apply `apt-mark hold`;
+- enable the correct fixed systemd service and wait for `/health` or `/ready` with
+  per-probe connect/total timeouts and an overall deadline, so a socket that accepts a
+  connection but never answers cannot hang first boot;
 - contain no user, password, token, organization, bucket/database, setup API
   request, private key, or endpoint-specific Proxmox data.
 

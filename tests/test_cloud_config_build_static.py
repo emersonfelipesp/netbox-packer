@@ -1701,6 +1701,94 @@ def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
     assert config.get("ssh_pwauth") is True
 
 
+def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
+    """The 0020 profiles must carry the same three fixes as the Debian 13 profile.
+
+    They share its shell shape, so they shared its defects: a keyring trust boundary
+    that admitted extra keys, a version match that accepted prereleases, and
+    unbounded downloads. Asserted against the tracked seed files and the migration
+    constants that must equal them.
+    """
+
+    rel = "netbox_packer/migrations/0026_harden_influxdb_0020_profiles.py"
+    source = _read(rel)
+    constants = _literal_assignments(rel)
+
+    seeds = {
+        "HARDENED_OSS2_CLOUD_CONFIG": (
+            "netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml",
+            "influxdb2",
+            "2.9.1",
+            "http://127.0.0.1:8086/health",
+        ),
+        "HARDENED_CORE3_CLOUD_CONFIG": (
+            "netbox_packer/seeds/influxdb-core-3.11.0-ubuntu-2404.cloud-config.yaml",
+            "influxdb3-core",
+            "3.11.0",
+            "http://127.0.0.1:8181/ready",
+        ),
+    }
+
+    for constant, (seed_rel, package, version, health_url) in seeds.items():
+        seed = _read(seed_rel)
+        assert constants[constant] == seed, constant
+
+        cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+        files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+        installer = next(iter(files.values()))
+        subprocess.run(["bash", "-n"], input=installer, text=True, check=True)
+
+        # 1. exactly one signing key is trusted
+        assert "gpg --dearmor" not in installer, constant
+        assert "--export --export-options export-minimal" in installer, constant
+        assert "GNUPGHOME=" in installer, constant
+        assert "grep -c '^pub:'" in installer, constant
+        assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in installer, constant
+
+        # 2. final releases only — a tilde version sorts before the release it
+        #    qualifies, so accepting one silently installs an unreviewed build
+        assert f"Refusing prerelease {package}" in installer, constant
+        assert f"{version}|{version}-*)" in installer, constant
+        assert f"{version}[-+~]*" not in installer, constant
+        assert "([+~-]|$)" not in installer, constant
+
+        # 3. every download bounded, and the readiness loop actually bounded
+        invocations = [
+            line for line in _logical_shell_lines(installer) if not line.lstrip().startswith("#") and "curl " in line
+        ]
+        assert len(invocations) >= 2, (constant, invocations)
+        for invocation in invocations:
+            for flag in ("--connect-timeout", "--max-time"):
+                assert flag in invocation, (constant, flag, invocation[:110])
+        key_download = next(i for i in invocations if "influxdata-archive.key" in i)
+        assert "--retry-max-time" in key_download, constant
+        assert "--max-filesize" in key_download, constant
+        assert "readiness_deadline=$((SECONDS + 180))" in installer, constant
+        assert "seq 1 60" not in installer, constant
+        assert health_url in installer, constant
+
+    # The migration only rewrites a row that still matches the exact 0020 baseline,
+    # so an operator-modified profile is never clobbered.
+    assert "LEGACY_OSS2_CLOUD_CONFIG" in constants
+    assert "LEGACY_CORE3_CLOUD_CONFIG" in constants
+    assert "if config.content != legacy:" in source
+    assert "if config.content == hardened:" in source
+    # The legacy constants must be the genuine 0020 content, or the equality guard
+    # silently never matches and the migration becomes a no-op.
+    legacy_020 = _literal_assignments("netbox_packer/migrations/0020_seed_influxdb_profiles.py")
+    assert constants["LEGACY_OSS2_CLOUD_CONFIG"] == legacy_020["INFLUXDB_OSS2_CLOUD_CONFIG"]
+    assert constants["LEGACY_CORE3_CLOUD_CONFIG"] == legacy_020["INFLUXDB_CORE3_CLOUD_CONFIG"]
+    # ...and they must be the *vulnerable* shape, so the guard targets what it claims.
+    assert "gpg --dearmor" in constants["LEGACY_OSS2_CLOUD_CONFIG"]
+    assert "seq 1 60" in constants["LEGACY_CORE3_CLOUD_CONFIG"]
+
+    # Linked templates are marked for a rebake, and nothing is deleted.
+    assert 'build_status="pending"' in source
+    assert 'installer_config_checksum_at_build=""' in source
+    assert ".delete()" not in source
+    assert 'dependencies = [\n        ("netbox_packer", "0025_seed_influxdb3_core_debian13_cloud_init"),' in source
+
+
 def test_influxdb3_core_debian13_contract_is_documented() -> None:
     required = (
         "influxdb-core-3.11.0-debian-13",

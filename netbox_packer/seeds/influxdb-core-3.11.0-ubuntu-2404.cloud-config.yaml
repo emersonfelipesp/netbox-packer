@@ -1,0 +1,105 @@
+#cloud-config
+# InfluxDB 3 Core 3.11.0 for general-purpose SQL/InfluxQL workloads.
+# The first operator token is intentionally created and vaulted by typed NMS RPC.
+package_update: false
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+write_files:
+  - path: /opt/nms-influxdb3-install.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      readonly PRODUCT_VERSION='3.11.0'
+      install -d -m 0755 \
+        /etc/apt/keyrings \
+        /etc/influxdb3/nms-managed \
+        /var/lib/influxdb3/plugins
+      # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
+      # fingerprint and then dearmoring the whole file would also trust any extra
+      # key bundled alongside it: a substituted file carrying the genuine key plus
+      # an attacker key passes a `grep`, and that attacker key could then sign
+      # repository metadata and gain root during install. Import into an isolated
+      # keyring, export only the expected primary fingerprint, and prove the
+      # exported keyring holds that one key and nothing else.
+      #
+      # The download is bounded on every axis: --retry alone does not help against
+      # a server that completes TLS and then stops sending data, and an unbounded
+      # response could fill /tmp before the key is ever filtered.
+      readonly EXPECTED_KEY_FINGERPRINT='24C975CBA61A024EE1B631787C3D57159FC2F927'
+      keyring_workdir="$(mktemp -d)"
+      chmod 0700 "${keyring_workdir}"
+      cleanup_keyring_workdir() {
+        rm -rf "${keyring_workdir}"
+      }
+      trap cleanup_keyring_workdir EXIT
+      curl --fail --silent --show-error --location \
+        --proto '=https' --tlsv1.2 \
+        --retry 3 --retry-delay 2 --retry-max-time 60 \
+        --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
+        --output "${keyring_workdir}/influxdata-archive.key" \
+        https://repos.influxdata.com/influxdata-archive.key
+      GNUPGHOME="${keyring_workdir}" gpg --batch --quiet \
+        --import "${keyring_workdir}/influxdata-archive.key"
+      GNUPGHOME="${keyring_workdir}" gpg --batch --yes \
+        --export --export-options export-minimal \
+        "${EXPECTED_KEY_FINGERPRINT}" > "${keyring_workdir}/influxdata-archive.gpg"
+      test -s "${keyring_workdir}/influxdata-archive.gpg"
+      exported_primaries="$(gpg --show-keys --with-colons \
+        "${keyring_workdir}/influxdata-archive.gpg" | grep -c '^pub:' || true)"
+      test "${exported_primaries}" = '1'
+      gpg --show-keys --with-colons "${keyring_workdir}/influxdata-archive.gpg" \
+        | grep -q "^fpr:::::::::${EXPECTED_KEY_FINGERPRINT}:$"
+      install -o root -g root -m 0644 \
+        "${keyring_workdir}/influxdata-archive.gpg" \
+        /etc/apt/keyrings/influxdata-archive.gpg
+      cleanup_keyring_workdir
+      trap - EXIT
+      echo 'deb [signed-by=/etc/apt/keyrings/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main' \
+        > /etc/apt/sources.list.d/influxdata.list
+      apt-get update
+      package_version="$(apt-cache madison influxdb3-core | awk '
+        {
+          candidate=$3
+          normalized=candidate
+          sub(/^[0-9]+:/, "", normalized)
+          if (normalized ~ /^3[.]11[.]0(-[0-9A-Za-z.+]+)?$/) { print candidate; exit }
+        }')"
+      test -n "${package_version}"
+      apt-get install -y --no-install-recommends "influxdb3-core=${package_version}"
+      installed="$(dpkg-query -W -f='${Version}' influxdb3-core)"
+      normalized="${installed#*:}"
+      case "${normalized}" in
+        *'~'*)
+          echo "Refusing prerelease influxdb3-core version: ${installed}" >&2
+          exit 1
+          ;;
+      esac
+      case "${normalized}" in
+        3.11.0|3.11.0-*) ;;
+        *) echo "Unexpected influxdb3-core version: ${installed}" >&2; exit 1 ;;
+      esac
+      apt-mark hold influxdb3-core
+      systemctl enable --now influxdb3-core.service
+      # Bounded per probe AND overall: without --connect-timeout/--max-time a
+      # service that accepts the connection but never answers blocks the first
+      # curl forever, so the nominal attempt count is never reached and
+      # once-per-instance cloud-init hangs after a partial install.
+      readiness_deadline=$((SECONDS + 180))
+      while [ "${SECONDS}" -lt "${readiness_deadline}" ]; do
+        if curl --fail --silent --connect-timeout 2 --max-time 5 \
+          http://127.0.0.1:8181/ready >/dev/null; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo 'InfluxDB 3 Core readiness endpoint did not become ready' >&2
+      exit 1
+runcmd:
+  - [bash, /opt/nms-influxdb3-install.sh]
+  - [rm, -f, /opt/nms-influxdb3-install.sh]

@@ -35,6 +35,33 @@ endpoint (`10.0.30.139`) and must never be retargeted to production. Additive
 migration `0020` replaces the database row's credential-generating content and
 marks it pending without deleting any existing artifact.
 
+Migration `0026` brings both `0020` profiles (and the legacy `9011` row, which `0020`
+rewrote with the OSS 2 content) to parity with the `0025` hardening. All three shared
+its shell shape and therefore its three defects:
+
+- **the keyring trust boundary admitted extra keys** — proving the downloaded file
+  *contained* the fingerprint and then dearmoring all of it also trusts an attacker key
+  bundled alongside the genuine one, which can sign repository metadata and gain root
+  during `apt-get install`. Now: isolated `GNUPGHOME`, export only the expected primary
+  fingerprint, assert the exported keyring holds exactly one `pub` record;
+- **prereleases were accepted as the pinned release** — a `~` version sorts *before* the
+  release it qualifies, so the script could install and hold an unreviewed build while
+  reporting success. Now: final versions only, `~` refused explicitly;
+- **downloads and the readiness loop were unbounded** — `--retry` does not help against a
+  server that completes TLS and then goes silent, so first boot could hang forever. Now:
+  connection, per-attempt, and overall retry deadlines plus a size cap, and a bounded
+  readiness loop.
+
+The hardened sources are tracked verbatim at
+`netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml` and
+`netbox_packer/seeds/influxdb-core-3.11.0-ubuntu-2404.cloud-config.yaml`; the `0026`
+constants must stay byte-identical to them. **`0026` replaces a row only when its
+content still matches the exact `0020` baseline**, so an operator-modified profile is
+left untouched — such a row still needs these three fixes applied by hand. Rewritten
+rows have their templates marked `pending` for a rebake; nothing is deleted, and the
+reverse is a deliberate no-op because rolling back must not restore a keyring that
+accepts attacker-supplied keys.
+
 Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
 **Debian 13** Core 3 profile. Its verbatim cloud-config is
 `netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml` and the
