@@ -2,6 +2,7 @@
 
 import json
 import logging
+import posixpath
 import re
 import subprocess
 import threading
@@ -10,7 +11,11 @@ from django.conf import settings
 from django.utils import timezone
 from netbox.jobs import JobRunner
 
-from .base_image import pin_differs_from_built_source
+from .base_image import (
+    pin_differs_from_built_source,
+    redact_base_image_url,
+    validate_base_image_url,
+)
 from .package_index import (
     redact_fileserver_package_token,
     render_fileserver_package_index,
@@ -83,12 +88,17 @@ def _resolve_cloud_image_source(template, overrides):
 
     pinned_url = override_url or template_url
     sha256 = override_sha or template_sha
+    if pinned_url:
+        source = "variable_overrides['image_url']" if override_url else "the template's base_image_url"
+        try:
+            pinned_url = validate_base_image_url(pinned_url, source=source)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
     if sha256 and not _SHA256_RE.fullmatch(sha256):
         raise RuntimeError(
             f"Base image sha256 must be a lowercase 64-character hexadecimal digest; got {sha256[:16]!r}."
         )
     if pinned_url and not sha256:
-        source = "variable_overrides['image_url']" if override_url else "the template's base_image_url"
         raise RuntimeError(
             f"{source} pins an exact base image but no sha256 digest was supplied. "
             "Set base_image_sha256 on the template (or variable_overrides"
@@ -97,7 +107,11 @@ def _resolve_cloud_image_source(template, overrides):
         )
     if pinned_url:
         return pinned_url, sha256
-    return _derive_release_image_url(template), sha256
+    derived_url = _derive_release_image_url(template)
+    try:
+        return validate_base_image_url(derived_url, source="the derived base image URL"), sha256
+    except ValueError as exc:  # pragma: no cover - derived URLs are code-owned constants
+        raise RuntimeError(str(exc)) from exc
 
 
 def _derive_release_image_url(template):
@@ -569,6 +583,182 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
     return header + "\n" + serialized
 
 
+_EXPLORER_SERVICE_MARKER = "influxdb3-explorer"
+_EXPLORER_CONFIG_PATH = "/etc/influxdb3-explorer/config.json"
+
+# The exact set of files the Explorer golden image is allowed to write. This is an
+# ALLOWLIST on purpose: installer content is operator-editable, and a denylist over
+# editable input only refuses the shapes it happens to enumerate. Refusing an
+# unexpected path instead means a newly invented one fails closed rather than being
+# baked into the template and inherited by every clone.
+_EXPLORER_ALLOWED_WRITE_PATHS = frozenset(
+    {
+        "/etc/default/influxdb3-explorer",
+        "/usr/local/sbin/run-influxdb3-explorer",
+        "/usr/local/sbin/install-influxdb3-explorer",
+        "/etc/systemd/system/influxdb3-explorer.service",
+        "/usr/share/doc/netbox-packer/influxdb3-explorer-provisioning.txt",
+    }
+)
+# Keys a write_files entry may carry. An unknown key is refused rather than ignored,
+# so a future cloud-init feature cannot smuggle content past the content scan.
+_EXPLORER_ALLOWED_WRITE_KEYS = frozenset({"path", "content", "owner", "permissions"})
+_EXPLORER_PLACEHOLDER_SECRET_REF = "nms-secret:<opaque-id>"
+_EXPLORER_ALLOWED_URLS = frozenset({"http://127.0.0.1:8080/"})
+_EXPLORER_CREDENTIAL_KEY_PARTS = (
+    "password",
+    "passphrase",
+    "secret",
+    "token",
+    "authorization",
+    "api_key",
+    "access_key",
+    "private_key",
+    "credential",
+)
+_EXPLORER_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?:^\s*|[,{]\s*|-\s+)[\"']?[A-Za-z0-9_.-]*"
+    r"(?:token|password|passphrase|secret|authorization|api[-_]?key|"
+    r"access[-_]?key|private[-_]?key|credential)"
+    r"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*[^\s]+",
+    re.IGNORECASE | re.MULTILINE,
+)
+_EXPLORER_CORE_SETTING_RE = re.compile(
+    r"(?:^\s*|[,{]\s*|-\s+)(?:export\s+)?[\"']?[A-Za-z0-9_.-]*"
+    r"(?:(?:influxdb|core)[A-Za-z0-9_.-]*(?:url|host|endpoint)|"
+    r"(?:url|host|endpoint)[A-Za-z0-9_.-]*(?:influxdb|core))"
+    r"[A-Za-z0-9_.-]*[\"']?\s*[:=]",
+    re.IGNORECASE | re.MULTILINE,
+)
+_EXPLORER_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", re.IGNORECASE)
+_EXPLORER_AUTHORIZATION_RE = re.compile(r"\b(?:authorization|bearer)\s*[:=]\s*\S+", re.IGNORECASE)
+_EXPLORER_USERINFO_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@", re.IGNORECASE)
+_EXPLORER_SECRET_REF_RE = re.compile(r"nms-secret:[^\s\"']+", re.IGNORECASE)
+_EXPLORER_HTTP_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def _explorer_payload_error(reason: str) -> RuntimeError:
+    return RuntimeError(
+        "Refusing InfluxDB 3 Explorer bake: the fully injected cloud-config "
+        f"violates the credential-free boundary ({reason}). Remove Core connection "
+        "and credential material; provision config.json only after cloning."
+    )
+
+
+def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
+    """Fail closed if the final Explorer cloud-config contains connection secrets."""
+
+    import yaml
+
+    try:
+        config = yaml.safe_load(user_data_yaml)
+    except yaml.YAMLError as exc:
+        raise _explorer_payload_error("the final payload is not valid YAML") from exc
+    if not isinstance(config, dict):
+        raise _explorer_payload_error("the final payload is not a YAML mapping")
+
+    write_files = config.get("write_files", [])
+    if not isinstance(write_files, list):
+        raise _explorer_payload_error("write_files is not a list")
+    for entry in write_files:
+        if not isinstance(entry, dict):
+            raise _explorer_payload_error("write_files contains a non-mapping entry")
+
+        if entry.get("encoding"):
+            raise _explorer_payload_error("encoded write_files content cannot be inspected safely")
+
+        unknown_keys = sorted(set(map(str, entry)) - _EXPLORER_ALLOWED_WRITE_KEYS)
+        if unknown_keys:
+            # Refusing any unknown key, rather than only the `encoding` name above, means a
+            # future cloud-init key cannot reopen the same hole without being noticed.
+            raise _explorer_payload_error(
+                f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}"
+            )
+
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise _explorer_payload_error("write_files entry has no string path")
+
+        # `content: !!binary` loads as `bytes`, which the credential scan skips as a
+        # non-string scalar — so unscanned base64 could carry a Core URL or token straight
+        # into the baked image. Require plain text so everything is actually scanned.
+        if not isinstance(entry.get("content"), str):
+            raise _explorer_payload_error(
+                f"write_files entry {raw_path!r} has non-text content, which cannot be "
+                "inspected for credentials"
+            )
+
+        if entry.get("path") == _EXPLORER_CONFIG_PATH:
+            raise _explorer_payload_error("the golden image writes Explorer config.json")
+
+    pending = [config]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                normalized_key = str(key).lower().replace("-", "_")
+                if any(part in normalized_key for part in _EXPLORER_CREDENTIAL_KEY_PARTS):
+                    raise _explorer_payload_error("a credential-bearing YAML key is present")
+                pending.append(nested)
+            continue
+        if isinstance(item, list):
+            pending.extend(item)
+            continue
+        if isinstance(item, (bytes, bytearray)):
+            # PyYAML loads `!!binary` as bytes and the safe-load/safe-dump injection cycle
+            # preserves it. Skipping it here is what let unscanned base64 through, so fail
+            # closed: the payload has no legitimate reason to carry binary.
+            raise _explorer_payload_error(
+                "the payload contains binary content, which cannot be inspected for credentials"
+            )
+        if not isinstance(item, (str, int, float, bool)) and item is not None:
+            raise _explorer_payload_error(
+                f"the payload contains an uninspectable {type(item).__name__} value"
+            )
+        if not isinstance(item, str):
+            continue
+
+        for match in _EXPLORER_SECRET_REF_RE.finditer(item):
+            secret_ref = match.group(0).rstrip(".,;)]}")
+            if secret_ref != _EXPLORER_PLACEHOLDER_SECRET_REF:
+                raise _explorer_payload_error("a non-placeholder nms-secret reference is present")
+        credential_scan_value = item.replace(_EXPLORER_PLACEHOLDER_SECRET_REF, "")
+        if _EXPLORER_PRIVATE_KEY_RE.search(item):
+            raise _explorer_payload_error("private key material is present")
+        if _EXPLORER_CREDENTIAL_ASSIGNMENT_RE.search(
+            credential_scan_value
+        ) or _EXPLORER_AUTHORIZATION_RE.search(credential_scan_value):
+            raise _explorer_payload_error("a credential-bearing value is present")
+        if _EXPLORER_USERINFO_URL_RE.search(item):
+            raise _explorer_payload_error("URL userinfo is present")
+        if "8181" in item or _EXPLORER_CORE_SETTING_RE.search(item):
+            raise _explorer_payload_error("an InfluxDB Core endpoint setting is present")
+        for match in _EXPLORER_HTTP_URL_RE.finditer(item):
+            url = match.group(0).rstrip(".,;)]}")
+            if url not in _EXPLORER_ALLOWED_URLS:
+                raise _explorer_payload_error("an unapproved connection URL is present")
+
+    # Final catch-all, deliberately last so the specific diagnostics above win when they
+    # apply. Everything before this is a denylist, and a denylist over operator-editable
+    # content only refuses the shapes it happens to enumerate — the encoded-scalar and
+    # path-alias bypasses found in review were both of that kind. This allowlist instead
+    # refuses any file the image is not supposed to write at all, so a newly invented
+    # carrier fails closed rather than waiting to be enumerated.
+    for entry in write_files:
+        raw_path = entry.get("path")
+        # Canonicalise before comparing: `/etc/influxdb3-explorer/./config.json` and
+        # `/x/../etc/…` name the same file, so an exact string comparison is bypassable by
+        # spelling the path differently.
+        canonical_path = posixpath.normpath(raw_path)
+        if not posixpath.isabs(canonical_path):
+            raise _explorer_payload_error(f"write_files path {raw_path!r} is not absolute")
+        if canonical_path not in _EXPLORER_ALLOWED_WRITE_PATHS:
+            raise _explorer_payload_error(
+                f"write_files writes unexpected path {canonical_path!r}; the Explorer image "
+                "may only write its own unit, launcher, installer, defaults, and docs"
+            )
+
+
 class PackerBuildJob(JobRunner):
     """
     Execute a Packer build asynchronously.
@@ -649,15 +839,18 @@ class PackerBuildJob(JobRunner):
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
         target_node = _resolve_target_node(template, node, build.variable_overrides)
         image_url, image_sha256 = _resolve_cloud_image_source(template, build.variable_overrides)
+        safe_image_url = redact_base_image_url(image_url)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
         endpoint_id = _resolve_endpoint_id(build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
+        installer_name = str(getattr(installer, "name", "") or "unnamed")
+        installer_version = str(getattr(installer, "version", "") or "unknown")
 
         log_lines = [
             f"[INFO] Cloud-init template image build for '{template.name}'",
             f"[INFO] Delegating real Proxmox bake to proxbox-api: {api_url or 'UNSET'}",
-            f"[INFO] Installer config: {installer} ({installer.installer_type})",
-            f"[INFO] Base image: {image_url}",
+            f"[INFO] Installer config: {installer_name} v{installer_version} ({installer.installer_type})",
+            f"[INFO] Base image: {safe_image_url}",
             f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
             f"[INFO] Destination template VMID: {template_vmid}",
             "[INFO] proxbox-api endpoint_id: "
@@ -698,6 +891,15 @@ class PackerBuildJob(JobRunner):
             "[INFO] proxbox-api signed handshake: plan -> preflight -> execute",
         ]
 
+        if getattr(template, "provisions_service", "") == _EXPLORER_SERVICE_MARKER:
+            try:
+                _validate_influxdb3_explorer_payload(user_data_yaml)
+            except RuntimeError as exc:
+                log_lines.append(f"[ERROR] {exc}")
+                build.log = "\n".join(log_lines)
+                build.save(update_fields=["log"])
+                raise
+
         try:
             response = call_proxbox_build(
                 proxbox_api_url=api_url,
@@ -718,6 +920,7 @@ class PackerBuildJob(JobRunner):
             )
         except ProxboxApiError as exc:
             safe_error = redact_fileserver_package_token(str(exc), fileserver_package_read_token)
+            safe_error = safe_error.replace(image_url, safe_image_url)
             log_lines.append(f"[ERROR] {safe_error}")
             build.log = "\n".join(log_lines)
             build.save(update_fields=["log"])
@@ -730,13 +933,14 @@ class PackerBuildJob(JobRunner):
             value = response.get(key)
             if value:
                 safe_value = redact_fileserver_package_token(str(value), fileserver_package_read_token)
+                safe_value = safe_value.replace(image_url, safe_image_url)
                 log_lines.append(f"[{key.upper()}]\n{safe_value}")
 
         build.finished_at = timezone.now()
         if status in {"created", "completed", "already_exists"}:
             build.status = "success"
             build.exit_code = 0
-            build.base_image_url_at_build = image_url
+            build.base_image_url_at_build = safe_image_url
             build.base_image_sha256_at_build = image_sha256
             if result_vmid:
                 build.result_template_id = int(result_vmid)
@@ -756,13 +960,13 @@ class PackerBuildJob(JobRunner):
                 source_drifted = pin_differs_from_built_source(
                     desired_url=current_template.base_image_url,
                     desired_sha256=current_template.base_image_sha256,
-                    built_url=image_url,
+                    built_url=safe_image_url,
                     built_sha256=image_sha256,
                 )
                 update = {
                     "build_status": "stale" if source_drifted else "ready",
                     "built_at": build.finished_at,
-                    "base_image_url_at_build": image_url,
+                    "base_image_url_at_build": safe_image_url,
                     "base_image_sha256_at_build": image_sha256,
                 }
                 if installer:

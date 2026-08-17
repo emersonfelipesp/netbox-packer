@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 
+from ..base_image import validate_base_image_url
 from ..models import (
     PackerBuild,
     PackerBuildTarget,
@@ -50,6 +51,11 @@ def _contains_secret_material(value):
                 normalized = str(key).lower().replace("-", "_")
                 if any(part in normalized for part in _SECRET_KEY_PARTS):
                     return True
+                if normalized in {"image_url", "base_image_url"} and nested not in (None, ""):
+                    try:
+                        validate_base_image_url(nested, source=str(key))
+                    except ValueError:
+                        return True
                 pending.append(nested)
         elif isinstance(item, list):
             pending.extend(item)
@@ -147,6 +153,16 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             raise serializers.ValidationError("Enter an HTTPS URL for the NMS agent backend.")
         return value
 
+    def validate_base_image_url(self, value):
+        """Keep inline credentials out of persisted template image pins."""
+
+        if not value:
+            return value
+        try:
+            return validate_base_image_url(value, source="base_image_url")
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     class Meta:
         model = PackerTemplate
         fields = (
@@ -204,6 +220,17 @@ class PackerBuildSerializer(NetBoxModelSerializer):
         view_name="plugins-api:netbox_packer-api:packerbuild-detail",
     )
     template = PackerTemplateSerializer(nested=True)
+
+    def validate_variable_overrides(self, value):
+        """Apply the secret boundary to generic build create/edit requests too."""
+
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("variable_overrides must be an object.")
+        if _contains_secret_material(value):
+            raise serializers.ValidationError(
+                "Secret-shaped override keys or values are forbidden; use opaque secret references."
+            )
+        return value
 
     class Meta:
         model = PackerBuild

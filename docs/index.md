@@ -38,11 +38,12 @@ self-registration; the agent stays opt-in for every other template. The console
 binds only to `127.0.0.1:8081` and requires an SSH tunnel or a separately
 provisioned authenticating reverse proxy.
 
-InfluxDB is available as three endpoint-agnostic profiles: OSS `2.9.1` for
+InfluxDB is available as four endpoint-agnostic profiles: OSS `2.9.1` for
 Proxmox metrics/Flux (VMID `9050`), Core `3.11.0` for general-purpose
 SQL/InfluxQL workloads on Ubuntu 24.04 (VMID `9051`), and
 `influxdb-core-3.11.0-debian-13` for Core `3.11.0` on **Debian 13** (VMID
-`9052`). The Debian 13 profile additionally bakes the production posture —
+`9052`), plus the independent `influxdb3-explorer-1.9.0-debian-13` UI template
+(VMID `9053`). The Debian 13 Core profile additionally bakes the production posture —
 managed configuration bound to `127.0.0.1:8181` with token authentication
 enabled, telemetry upload off, Processing Engine off, an `influxdb3-core.service`
 drop-in, a held package, and a `node-id` derived from the per-VM SMBIOS UUID
@@ -55,6 +56,14 @@ product setup call; typed NMS RPC owns onboarding and netbox-nms owns encrypted
 secret material exposed only as `nms-secret:` references. The legacy VMID
 `9011` profile remains development-only and is
 hardened/marked pending by migration `0020`.
+
+Explorer uses Debian's `docker.io` package and the immutable image reference
+`influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`.
+`influxdb3-explorer.service` publishes port `8080` on loopback by default. Its
+golden image has no Core URL or credential: `service.influxdb.1.token_create`
+returns an `nms-secret:<opaque-id>` reference, which provision-time automation
+resolves only when writing the cloned guest's root-owned `root:1500` Explorer
+connection configuration.
 
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)

@@ -7,8 +7,10 @@ Static (text/AST) assertions plus an isolated functional test of
 from __future__ import annotations
 
 import ast
+import copy
 import importlib.util
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -1978,6 +1980,551 @@ def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
     assert config.get("ssh_pwauth") is True
 
 
+def test_influxdb3_explorer_debian13_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0030_seed_influxdb3_explorer_debian13_cloud_init.py"
+    seed_rel = "netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml"
+    source = _read(rel)
+    constants = _literal_assignments(rel)
+    seed = _read(seed_rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+    # The migration executes the embedded constant; the tracked YAML is the
+    # reviewable source of truth, so any byte of drift is a defect.
+    assert constants["INFLUXDB3_EXPLORER_DEBIAN13_CLOUD_CONFIG"] == seed
+    assert constants["CONFIG_NAME"] == "influxdb3-explorer-1.9.0-debian-13-cloud-config"
+    assert constants["CONFIG_VERSION"] == "1.9.0"
+    assert constants["TEMPLATE_NAME"] == "influxdb3-explorer-1.9.0-debian-13"
+    assert constants["TEMPLATE_VMID"] == 9053
+    assert constants["PROXMOX_ENDPOINT"] == ""
+    assert constants["PROXMOX_NODE"] == "select-at-build"
+    assert name == constants["TEMPLATE_NAME"]
+    assert 'dependencies = [\n        ("netbox_packer", "0029_pin_influxdb3_debian13_base_image"),' in source
+
+    # Collision-guarded seed: existing operator rows are compared and reported,
+    # never silently overwritten. Machine-written build state is not identity.
+    assert "update_or_create(" not in source
+    assert source.count("objects.get_or_create(") == 2
+    assert "InfluxDB 3 Explorer Debian 13 seed naming collision" in source
+    assert 'template_expected_values["installer_config_id"] = config.pk' in source
+    mutable = _frozenset_members(rel, "_MUTABLE_BUILD_STATE_FIELDS")
+    assert mutable == {"installer_config", "build_status", "packer_template_ref"}
+    assert "field not in _MUTABLE_BUILD_STATE_FIELDS" in source
+
+    assert defaults["os_family"] == "debian"
+    assert defaults["os_version"] == "13"
+    assert defaults["proxmox_template_id"] == 9053
+    assert defaults["proxmox_endpoint"] == ""
+    assert defaults["proxmox_node"] == "select-at-build"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+    assert defaults["install_qemu_guest_agent"] is True
+    assert defaults["install_zabbix_agent2"] is False
+    assert defaults["install_nms_agent"] is False
+    assert defaults["provisions_service"] == "influxdb3-explorer"
+
+    seeded_vmids = _all_seeded_vmids()
+    assert 9053 in seeded_vmids
+    duplicates = sorted({vmid for vmid in seeded_vmids if seeded_vmids.count(vmid) > 1})
+    assert not duplicates, duplicates
+
+    assert seed.startswith("#cloud-config\n")
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    assert cloud_config["package_update"] is False
+    assert cloud_config["package_upgrade"] is False
+    files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+    installer_path = "/usr/local/sbin/install-influxdb3-explorer"
+    runner_path = "/usr/local/sbin/run-influxdb3-explorer"
+    installer = files[installer_path]
+    runner = files[runner_path]
+    service = files["/etc/systemd/system/influxdb3-explorer.service"]
+    environment = files["/etc/default/influxdb3-explorer"]
+    provisioning = files["/usr/share/doc/netbox-packer/influxdb3-explorer-provisioning.txt"]
+    assert cloud_config["runcmd"] == [["bash", installer_path]]
+    subprocess.run(["bash", "-n"], input=installer, text=True, check=True)
+    subprocess.run(["bash", "-n"], input=runner, text=True, check=True)
+
+    # Correct upstream repository, immutable final release, and no fallback tag.
+    assert seed.count("readonly EXPLORER_IMAGE_REPOSITORY='influxdata/influxdb3-ui'") == 2
+    assert seed.count(
+        "readonly EXPLORER_IMAGE_DIGEST="
+        "'sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc'"
+    ) == 2
+    assert seed.count('readonly EXPLORER_IMAGE="${EXPLORER_IMAGE_REPOSITORY}@${EXPLORER_IMAGE_DIGEST}"') == 2
+    assert "influxdata/influxdb3-explorer" not in seed
+    assert "influxdata/explorer" not in seed
+    assert "influxdata/influxdb-explorer" not in seed
+    assert "latest" not in seed.lower()
+    assert "latest" not in source.lower()
+    assert '--pull=never' in runner
+    assert '/usr/bin/docker pull "${EXPLORER_IMAGE}"' in installer
+    assert '/usr/bin/docker image inspect "${EXPLORER_IMAGE}"' in installer
+
+    # Debian 13 and the two architectures covered by the supplied manifest only.
+    assert "ID=${ID:-unknown}" in installer
+    assert "13|13.*)" in installer
+    assert "amd64|arm64)" in installer
+    assert "/run/systemd/system" in installer
+    # Docker is installed solely from Debian's signed repositories.
+    assert "docker.io" in installer
+    assert "download.docker.com" not in seed
+    assert "get.docker.com" not in seed
+    assert not re.search(r"curl[^\n|]*\|\s*(?:ba)?sh", installer)
+    # Explorer 1.9.0 runs as non-root uid/gid 1500. The writable database must
+    # belong to it, while provisioned config remains root-owned and readable by
+    # only the Explorer group through the read-only container mount.
+    assert "EXPLORER_UID='1500'" in installer
+    assert "EXPLORER_GID='1500'" in installer
+    assert '-o root -g "${EXPLORER_GID}" -m 0750 /etc/influxdb3-explorer' in installer
+    assert '-o "${EXPLORER_UID}" -g "${EXPLORER_GID}" -m 0700' in installer
+
+    # Silent apt or registry stalls cannot hold first boot forever. apt has
+    # connection/retry bounds, every long-running fetch has an overall timeout,
+    # and an unexpectedly large pulled image is rejected before service startup.
+    for apt_bound in (
+        "Acquire::Retries=3",
+        "Acquire::http::Timeout=30",
+        "Acquire::https::Timeout=30",
+    ):
+        assert apt_bound in installer
+    assert installer.count("timeout --signal=TERM --kill-after=30s 600s") == 3
+    assert "MAX_IMAGE_SIZE_BYTES='2147483648'" in installer
+    assert '"${pulled_size}" -gt "${MAX_IMAGE_SIZE_BYTES}"' in installer
+    curl_invocations = [
+        line
+        for line in _logical_shell_lines(installer)
+        if not line.lstrip().startswith("#") and re.search(r"(?:^|\bif\s+)curl\s", line)
+    ]
+    assert len(curl_invocations) == 1, curl_invocations
+    for flag in ("--connect-timeout", "--max-time"):
+        assert flag in curl_invocations[0]
+    assert "readiness_deadline=$((SECONDS + 180))" in installer
+
+    # A failed final installer remains visible even if cloud-init's wrapper ever
+    # gains later commands. It is an EXIT trap (explicit exits bypass ERR), with
+    # signal conversion and a durable marker; the script itself is retained.
+    assert "set -Eeuo pipefail" in installer
+    assert "trap on_install_exit EXIT" in installer
+    assert not re.search(r"^\s*trap\s+\S+\s+ERR\b", installer, re.MULTILINE)
+    exit_traps = [line for line in installer.splitlines() if re.match(r"\s*trap\s+\S+\s+EXIT\b", line)]
+    assert exit_traps == ["trap on_install_exit EXIT"]
+    for signal, code in (("TERM", 143), ("INT", 130), ("HUP", 129)):
+        assert f"trap 'exit {code}' {signal}" in installer
+    assert "/var/lib/nms/influxdb-install-failed" in installer
+    assert not any("rm" in str(entry) for entry in cloud_config["runcmd"])
+
+    # systemd is the sole lifecycle owner. The published host address is
+    # configurable but loopback by default; only documented container port 8080
+    # is exposed. Persistent and provisioned state have separate mounts.
+    assert "Requires=docker.service" in service
+    assert "ExecStart=/usr/local/sbin/run-influxdb3-explorer" in service
+    assert "ExecStop=-/usr/bin/docker stop --time 30 influxdb3-explorer" in service
+    assert "Restart=on-failure" in service
+    assert "EXPLORER_HOST_BIND=127.0.0.1" in environment
+    assert "0.0.0.0" not in seed
+    assert 'publish_address="${host_bind}:8080:${CONTAINER_PORT}/tcp"' in runner
+    assert "CONTAINER_PORT='8080'" in runner
+    assert "8443" not in runner
+    assert "--volume /var/lib/influxdb3-explorer:/db:rw" in runner
+    assert "--volume /etc/influxdb3-explorer:/app-root/config:ro" in runner
+
+    # The exact existing secret-reference boundary: the RPC returns only an
+    # nms-secret:<opaque-id> reference, which is resolved after cloning. Neither
+    # that per-instance reference nor a resolved credential is a write_files item.
+    assert "service.influxdb.1.token_create" in seed
+    assert "nms-secret:<opaque-id>" in seed
+    assert "/etc/influxdb3-explorer/config.json" in provisioning
+    assert "/etc/influxdb3-explorer/config.json" not in files
+    executable = "\n".join((installer, runner, service, environment))
+    for pattern in (
+        r"DEFAULT_API_TOKEN",
+        r"INFLUXDB\w*_TOKEN",
+        r"SESSION_SECRET_KEY",
+        r"Authorization:\s*Bearer",
+        r"--token(?:=|\s)",
+        r"password\s*=",
+        r"private[-_ ]key",
+        r"BEGIN [A-Z ]*PRIVATE KEY",
+        r"https?://[^\s/@]+:[^\s/@]+@",
+        r"nms-secret:(?!<opaque-id>)\S+",
+    ):
+        assert re.search(pattern, executable, re.IGNORECASE) is None, pattern
+    assert "8181" not in executable, "a Core URL must arrive only at provision time"
+
+
+def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
+    monkeypatch,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    _name, defaults = _packer_template_seed_defaults(
+        "netbox_packer/migrations/0030_seed_influxdb3_explorer_debian13_cloud_init.py"
+    )
+    template = SimpleNamespace(
+        os_family=defaults["os_family"],
+        os_version=defaults["os_version"],
+        install_qemu_guest_agent=defaults["install_qemu_guest_agent"],
+        install_zabbix_agent2=defaults["install_zabbix_agent2"],
+        install_nms_agent=defaults["install_nms_agent"],
+        zabbix_server="zabbix.nmulti.cloud",
+        nms_agent_backend_url="",
+        provisions_service=defaults["provisions_service"],
+    )
+
+    injected = jobs._inject_monitoring_agents(seed, template)
+    config = yaml.safe_load(injected.split("\n", 1)[1])
+
+    assert "zabbix-agent2" not in injected
+    assert "ubuntu${VERSION_ID}" not in injected
+    assert "nms-agent" not in injected
+    assert "go.dev/dl" not in injected
+    runcmds = [str(entry) for entry in config["runcmd"]]
+    assert any("qemu-guest-agent" in entry for entry in runcmds)
+    assert "install-influxdb3-explorer" in runcmds[-1], runcmds
+    assert config.get("ssh_pwauth") is True
+
+    # The final-payload boundary accepts the pristine, fully injected profile.
+    jobs._validate_influxdb3_explorer_payload(injected)
+
+
+@pytest.mark.parametrize(
+    ("payload_change", "expected_reason"),
+    (
+        ({"api_token": "plaintext-token"}, "credential-bearing YAML key"),
+        (
+            {
+                "path": "/tmp/explorer-token.env",
+                "content": "DEFAULT_API_TOKEN=plaintext-token\n",
+            },
+            "credential-bearing value",
+        ),
+        (
+            {
+                "path": "/tmp/core.env",
+                "content": "INFLUXDB_CORE_HOST=core.internal\n",
+            },
+            "Core endpoint setting",
+        ),
+        (
+            {
+                "path": "/tmp/private-key.pem",
+                "content": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
+            },
+            "private key material",
+        ),
+        (
+            {
+                "path": "/tmp/secret-ref",
+                "content": "nms-secret:environment-specific-id\n",
+            },
+            "non-placeholder nms-secret",
+        ),
+        (
+            {
+                "path": "/tmp/encoded",
+                "encoding": "b64",
+                "content": "cGxhaW50ZXh0LXRva2Vu",
+            },
+            "encoded write_files content",
+        ),
+        (
+            {
+                "path": "/etc/influxdb3-explorer/config.json",
+                "content": "{}\n",
+            },
+            "writes Explorer config.json",
+        ),
+        (
+            {
+                "path": "/tmp/connection.env",
+                "content": "EXPLORER_CONNECTION=https://core.internal\n",
+            },
+            "unapproved connection URL",
+        ),
+    ),
+)
+def test_influxdb3_explorer_final_payload_guard_rejects_credentials(
+    monkeypatch,
+    payload_change,
+    expected_reason,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    config = yaml.safe_load(seed.split("\n", 1)[1])
+    if "path" in payload_change:
+        config["write_files"].append(payload_change)
+    else:
+        config.update(payload_change)
+    tainted = "#cloud-config\n" + yaml.safe_dump(config, sort_keys=False)
+
+    with pytest.raises(RuntimeError, match=expected_reason):
+        jobs._validate_influxdb3_explorer_payload(tainted)
+
+
+def test_influxdb3_explorer_payload_guard_resists_encoding_and_path_aliases(
+    monkeypatch,
+) -> None:
+    """The two bypasses round 2 found must stay closed.
+
+    Both defeated a denylist rather than a missing rule, which is why the guard now ends
+    with a write-path allowlist:
+
+    * ``content: !!binary`` loads as ``bytes`` and survives the safe-load/safe-dump
+      injection cycle, so a scan that skipped non-string scalars never inspected it.
+    * ``/etc/influxdb3-explorer/./config.json`` names the same file as the plain path, so
+      an exact string comparison did not recognise it.
+    """
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    base = yaml.safe_load(seed.split("\n", 1)[1])
+    assert len(base["write_files"]) == 5, "mutation target: pristine Explorer write_files changed"
+    allowed = {entry["path"] for entry in base["write_files"]}
+
+    # A base64-encoded Core URL + token, carried as a YAML binary scalar so no `encoding`
+    # key is present and the value is bytes rather than str.
+    secret = json.dumps({"url": "http://core.internal:8181", "token": "apiv3-plaintext"}).encode()
+    binary_payload = copy.deepcopy(base)
+    binary_payload["write_files"].append(
+        {
+            "path": "/usr/local/sbin/run-influxdb3-explorer",  # an ALLOWED path, so only
+            "permissions": "0755",  # the content rule can catch this
+            "owner": "root:root",
+            "content": secret,
+        }
+    )
+    rendered = "#cloud-config\n" + yaml.safe_dump(binary_payload, sort_keys=False)
+    assert "!!binary" in rendered, "mutation target: payload no longer round-trips as binary"
+    with pytest.raises(RuntimeError, match="non-text content"):
+        jobs._validate_influxdb3_explorer_payload(rendered)
+
+    # A path alias for the forbidden config.json, plus an entirely unexpected path. Both
+    # must be refused, the alias by canonicalisation and the other by the allowlist.
+    for alias in ("/etc/influxdb3-explorer/./config.json", "/etc/../etc/influxdb3-explorer/config.json"):
+        assert alias not in allowed
+        assert posixpath.normpath(alias) not in allowed
+        aliased = copy.deepcopy(base)
+        aliased["write_files"].append(
+            {"path": alias, "permissions": "0640", "owner": "root:root", "content": "{}\n"}
+        )
+        with pytest.raises(RuntimeError):
+            jobs._validate_influxdb3_explorer_payload(
+                "#cloud-config\n" + yaml.safe_dump(aliased, sort_keys=False)
+            )
+
+    # The pristine seed must still pass, or the allowlist is simply refusing everything.
+    jobs._validate_influxdb3_explorer_payload(seed)
+
+
+def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
+    monkeypatch,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    config = yaml.safe_load(seed.split("\n", 1)[1])
+    assert len(config["write_files"]) == 5, "mutation target: pristine Explorer write_files changed"
+    plaintext_token = "round1-plaintext-token"
+    config["write_files"].append(
+        {
+            "path": "/etc/influxdb3-explorer/config.json",
+            "permissions": "0640",
+            "owner": "root:1500",
+            "content": json.dumps(
+                {
+                    "url": "http://core.internal:8181",
+                    "token": plaintext_token,
+                }
+            ),
+        }
+    )
+    tainted = "#cloud-config\n" + yaml.safe_dump(config, sort_keys=False)
+
+    settings_row = SimpleNamespace(
+        proxbox_api_url="https://proxbox.example",
+        get_fileserver_package_read_token=lambda: "",
+        get_proxbox_api_key=lambda: "api-key",
+    )
+    models_module = ModuleType("netbox_packer.models")
+    models_module.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    models_module.PackerTemplate = type("PackerTemplate", (), {})
+    monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
+
+    call_proxbox_build = Mock(return_value={"status": "completed", "vmid": 9053})
+    client_module = ModuleType("netbox_packer.proxbox_client")
+    client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
+    client_module.call_proxbox_build = call_proxbox_build
+    monkeypatch.setitem(sys.modules, "netbox_packer.proxbox_client", client_module)
+
+    installer = SimpleNamespace(
+        content=tainted,
+        installer_type="cloud_config",
+        checksum="e" * 64,
+    )
+    template = SimpleNamespace(
+        pk=53,
+        name="influxdb3-explorer-1.9.0-debian-13",
+        installer_config=installer,
+        storage_pool="local",
+        proxmox_node="node1",
+        proxmox_endpoint="",
+        proxmox_template_id=9053,
+        os_family="debian",
+        os_version="13",
+        base_image_url="",
+        base_image_sha256="",
+        is_fileserver_golden_template=False,
+        install_qemu_guest_agent=True,
+        install_zabbix_agent2=False,
+        zabbix_server="",
+        install_nms_agent=False,
+        provisions_service="influxdb3-explorer",
+    )
+    build = SimpleNamespace(
+        variable_overrides={"endpoint_id": 17, "target_node": "node1"},
+        log="",
+        save=Mock(),
+    )
+
+    with pytest.raises(RuntimeError, match="credential-free boundary"):
+        jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
+
+    call_proxbox_build.assert_not_called()
+    build.save.assert_called_once_with(update_fields=["log"])
+    assert "Refusing InfluxDB 3 Explorer bake" in build.log
+    assert "config.json only after cloning" in build.log
+    assert plaintext_token not in build.log
+
+
+@pytest.mark.parametrize(
+    ("host_bind", "expected_publish"),
+    (
+        (None, "127.0.0.1:8080:8080/tcp"),
+        ("10.20.30.40", "10.20.30.40:8080:8080/tcp"),
+        ("::1", "[::1]:8080:8080/tcp"),
+    ),
+)
+def test_influxdb3_explorer_runner_applies_configured_bind(
+    tmp_path: Path,
+    host_bind: str | None,
+    expected_publish: str,
+) -> None:
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+    runner = files["/usr/local/sbin/run-influxdb3-explorer"]
+    seeded_environment = files["/etc/default/influxdb3-explorer"]
+
+    # Exercise the shell behavior with a recording Docker stub. Assert the
+    # mutation target exists first so this cannot become a false-positive test.
+    assert runner.count("/usr/bin/docker") == 1
+    docker_stub = tmp_path / "docker"
+    docker_stub.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    docker_stub.chmod(0o755)
+    instrumented = runner.replace("/usr/bin/docker", str(docker_stub), 1)
+    environment = {"PATH": "/usr/bin:/bin"}
+    if host_bind is None:
+        seeded_bind = re.search(r"^EXPLORER_HOST_BIND=(\S+)$", seeded_environment, re.MULTILINE)
+        assert seeded_bind, "seeded bind setting disappeared"
+        environment["EXPLORER_HOST_BIND"] = seeded_bind.group(1)
+    else:
+        environment["EXPLORER_HOST_BIND"] = host_bind
+
+    result = subprocess.run(
+        ["bash"],
+        input=instrumented,
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.splitlines()
+    assert arguments[0] == "run"
+    assert expected_publish in arguments
+    expected_image = (
+        "influxdata/influxdb3-ui@"
+        "sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc"
+    )
+    assert expected_image in arguments
+
+
+def test_influxdb3_explorer_runner_rejects_shell_metacharacters() -> None:
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    runner = next(
+        item["content"]
+        for item in cloud_config["write_files"]
+        if item["path"] == "/usr/local/sbin/run-influxdb3-explorer"
+    )
+
+    result = subprocess.run(
+        ["bash"],
+        input=runner,
+        text=True,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", "EXPLORER_HOST_BIND": "127.0.0.1;id"},
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Invalid EXPLORER_HOST_BIND" in result.stderr
+    assert "uid=" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("failure_command", "expected_code"),
+    (
+        ("exit 41", 41),
+        ('kill -s TERM "$$"', 143),
+        ('kill -s INT "$$"', 130),
+        ('kill -s HUP "$$"', 129),
+    ),
+)
+def test_influxdb3_explorer_installer_failure_trap_records_every_exit(
+    tmp_path: Path,
+    failure_command: str,
+    expected_code: int,
+) -> None:
+    seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    installer = next(
+        item["content"]
+        for item in cloud_config["write_files"]
+        if item["path"] == "/usr/local/sbin/install-influxdb3-explorer"
+    )
+    prefix, trap_line, _remainder = installer.partition("trap on_install_exit EXIT")
+    assert trap_line, "EXIT-trap mutation target disappeared"
+    assert "install -d -m 0755 /var/lib/nms || true" in prefix
+    marker = tmp_path / "influxdb-install-failed"
+    harness = (prefix + trap_line).replace(
+        "readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'",
+        f"readonly NMS_FAILURE_MARKER='{marker}'",
+        1,
+    ).replace(
+        "install -d -m 0755 /var/lib/nms || true",
+        'install -d -m 0755 "${NMS_FAILURE_MARKER%/*}" || true',
+        1,
+    )
+
+    result = subprocess.run(
+        ["bash"],
+        input=f"{harness}\n{failure_command}\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_code, result.stderr
+    marker_content = marker.read_text(encoding="utf-8")
+    assert f"exit_code: {expected_code}\n" in marker_content
+    assert "installer: bash\n" in marker_content
+    assert re.search(r"failed_at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", marker_content)
+
+
 def test_injected_zabbix_download_is_bounded() -> None:
     """The injected Zabbix bootstrap runs on nearly every template.
 
@@ -2195,6 +2742,77 @@ def test_pinned_base_image_requires_a_verified_digest(monkeypatch) -> None:
     assert sha == ""
 
 
+@pytest.mark.parametrize(
+    ("source", "image_url"),
+    (
+        ("override", "https://images.example/base.qcow2?token=do-not-persist"),
+        (
+            "template",
+            (
+                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
+                "&X-Amz-Signature=do-not-persist"
+            ),
+        ),
+    ),
+)
+def test_credentialed_base_image_urls_fail_at_the_job_boundary(
+    monkeypatch,
+    source,
+    image_url,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    digest = "b" * 64
+    template = _template(
+        base_image_url=image_url if source == "template" else "",
+        base_image_sha256=digest if source == "template" else "",
+    )
+    overrides = (
+        {"image_url": image_url, "image_sha256": digest}
+        if source == "override"
+        else {}
+    )
+
+    with pytest.raises(RuntimeError, match="must not contain") as exc_info:
+        jobs._resolve_cloud_image_source(template, overrides)
+    assert "do-not-persist" not in str(exc_info.value)
+
+
+def test_base_image_url_redaction_removes_all_credential_components() -> None:
+    base_image = _load_base_image_module()
+    tainted = (
+        "https://operator:do-not-persist@images.example:8443/base.qcow2"
+        "?token=do-not-persist#credential"
+    )
+
+    redacted = base_image.redact_base_image_url(tainted)
+
+    assert redacted == "https://images.example:8443/base.qcow2"
+    assert "operator" not in redacted
+    assert "do-not-persist" not in redacted
+    assert "token" not in redacted
+    assert "credential" not in redacted
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        "https://operator:do-not-persist@images.example/base.qcow2",
+        "https://images.example/base.qcow2?token=do-not-persist",
+        "https://images.example/base.qcow2#credential",
+        "https://images.example/base.qcow2?",
+        "https://images.example/base.qcow2#",
+    ),
+)
+def test_base_image_url_validator_rejects_userinfo_query_and_fragment(image_url) -> None:
+    base_image = _load_base_image_module()
+
+    with pytest.raises(ValueError, match="must not contain"):
+        base_image.validate_base_image_url(image_url)
+
+    safe_url = "https://images.example/base.qcow2"
+    assert base_image.validate_base_image_url(safe_url) == safe_url
+
+
 def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None:
     """Plan and execute must carry the same digest; unpinned bodies omit it."""
 
@@ -2236,7 +2854,14 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
 
 
 @pytest.mark.parametrize(
-    ("template_pin", "build_pin", "current_pin", "expected_sha256", "expected_status"),
+    (
+        "template_pin",
+        "build_pin",
+        "current_pin",
+        "expected_sha256",
+        "expected_status",
+        "bypass_url_validation",
+    ),
     [
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
@@ -2244,14 +2869,16 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
             {},
             "d" * 64,
             "ready",
+            False,
         ),
-        ({}, {}, {}, "", "ready"),
+        ({}, {}, {}, "", "ready", False),
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
             {"image_url": "https://vendor.example/override.qcow2", "image_sha256": "c" * 64},
             {},
             "c" * 64,
             "stale",
+            False,
         ),
         (
             {"base_image_url": "https://vendor.example/pinned.qcow2", "base_image_sha256": "d" * 64},
@@ -2259,6 +2886,21 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
             {"base_image_url": "https://vendor.example/edited.qcow2", "base_image_sha256": "c" * 64},
             "d" * 64,
             "stale",
+            False,
+        ),
+        (
+            {},
+            {
+                "image_url": (
+                    "https://operator:do-not-persist@vendor.example/override.qcow2"
+                    "?token=do-not-persist#credential"
+                ),
+                "image_sha256": "c" * 64,
+            },
+            {},
+            "c" * 64,
+            "stale",
+            True,
         ),
     ],
 )
@@ -2269,10 +2911,18 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     current_pin,
     expected_sha256,
     expected_status,
+    bypass_url_validation,
 ) -> None:
     """Protect the job-to-client seam and the atomic provenance snapshots."""
 
     jobs = _load_jobs_isolated(monkeypatch)
+    if bypass_url_validation:
+        # Simulate the structural rejection guard being bypassed so this test
+        # independently proves the persistence/logging redaction backstop.
+        def allow_tainted_url(value, **_kwargs):
+            return value
+
+        jobs.validate_base_image_url = allow_tainted_url
     finished_at = object()
     jobs.timezone.now = lambda: finished_at
     jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
@@ -2316,7 +2966,10 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     models_module.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
     monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
 
-    call_proxbox_build = Mock(return_value={"status": "completed", "vmid": 9052})
+    proxbox_response = {"status": "completed", "vmid": 9052}
+    if bypass_url_validation:
+        proxbox_response["stdout"] = f"downloaded {build_pin['image_url']}"
+    call_proxbox_build = Mock(return_value=proxbox_response)
     client_module = ModuleType("netbox_packer.proxbox_client")
     client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
     client_module.call_proxbox_build = call_proxbox_build
@@ -2387,15 +3040,16 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
         "base_image_url",
         "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
     )
+    safe_expected_url = jobs.redact_base_image_url(expected_url)
     assert client_kwargs["image_url"] == expected_url
     assert client_kwargs["image_sha256"] == expected_sha256
-    assert build.base_image_url_at_build == expected_url
+    assert build.base_image_url_at_build == safe_expected_url
     assert build.base_image_sha256_at_build == expected_sha256
     assert template_updates == [
         {
             "build_status": expected_status,
             "built_at": finished_at,
-            "base_image_url_at_build": expected_url,
+            "base_image_url_at_build": safe_expected_url,
             "base_image_sha256_at_build": expected_sha256,
             "installer_config_checksum_at_build": "e" * 64,
         }
@@ -2404,6 +3058,9 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     assert "base_image_sha256_at_build" in saved_update_fields[0]
     template_manager.select_for_update.assert_called_once_with()
     template_manager.get.assert_called_once_with(pk=template.pk)
+    if bypass_url_validation:
+        assert "do-not-persist" not in build.log
+        assert safe_expected_url in build.log
     assert not atomic_state["active"]
 
 
@@ -2536,7 +3193,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0029_pin_influxdb3_debian13_base_image"}
+    assert names - internal_dependencies == {"0030_seed_influxdb3_explorer_debian13_cloud_init"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
@@ -2591,6 +3248,28 @@ def test_influxdb3_core_debian13_contract_is_documented() -> None:
         "Debian 13",
         "influxdb3-core.service",
         "service.influxdb.1.bootstrap",
+    )
+    for rel in (
+        "README.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "docs/cloud-init-template-images.md",
+        "docs/index.md",
+    ):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+
+def test_influxdb3_explorer_debian13_contract_is_documented() -> None:
+    required = (
+        "influxdb3-explorer-1.9.0-debian-13",
+        "9053",
+        "influxdata/influxdb3-ui",
+        "sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc",
+        "influxdb3-explorer.service",
+        "service.influxdb.1.token_create",
+        "nms-secret:<opaque-id>",
     )
     for rel in (
         "README.md",

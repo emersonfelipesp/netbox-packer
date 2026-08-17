@@ -176,6 +176,56 @@ apply the same posture over audited SSH; the onboarding sequence is
 must not import, depend on, or reference `netbox-rpc`** — that dependency is
 one-way, and these procedures are named here as documentation only.
 
+## InfluxDB 3 Explorer Guardrail
+
+Migration `0030` seeds `influxdb3-explorer-1.9.0-debian-13` at VMID `9053` as
+an endpoint-agnostic Debian 13 cloud-init profile. Its verbatim source is
+`netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml`, and
+the migration constant must remain byte-identical. Migration `0030` depends on
+`0029` and must remain the sole migration leaf unless a later linear migration
+supersedes it. Collision handling follows `0025`: compare existing rows, report
+all mismatched fields, never overwrite them, exclude mutable build state, and
+leave reverse as a no-op because VMID `9053` may already be baked.
+
+The only valid container repository is `influxdata/influxdb3-ui`, and release
+`1.9.0` is pinned everywhere by multi-architecture manifest digest
+`sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`.
+Docker must come from Debian's signed repository (`docker.io`), never a remote
+shell installer. `influxdb3-explorer.service` is the sole lifecycle owner. It
+publishes container port `8080` using the configurable `EXPLORER_HOST_BIND`,
+which defaults to `127.0.0.1`, and mounts persistent `/db` separately from the
+read-only provisioned configuration directory. Keep image pulls bounded and
+size-checked, local readiness bounded, and the installer's `set -Eeuo pipefail`
+plus one `EXIT` trap and signal conversion intact.
+
+Explorer 1.9.0 runs as non-root uid/gid `1500`. The writable host data directory
+must remain `1500:1500` mode `0700`; the configuration directory remains
+`root:1500` mode `0750`, with provisioned `config.json` mode `0640`, so only
+root and the Explorer group can read it through the container's read-only mount.
+
+This golden image must contain no Core URL, token, password, TLS private key,
+session secret, or environment-specific secret reference. After cloning,
+`service.influxdb.1.token_create` mints and vaults the Core token and returns
+only `nms-secret:<opaque-id>`. Provision-time automation resolves that reference
+in memory, writes `root:1500` mode-`0640`
+`/etc/influxdb3-explorer/config.json`, and restarts the Explorer unit. Anyone
+who can reach Explorer inherits that token's permissions, so do not change the
+default bind without an explicit access-control design.
+
+Enforce that guarantee on the fully injected YAML immediately before
+`call_proxbox_build()`, keyed by the immutable
+`provisions_service="influxdb3-explorer"` marker. A Core endpoint/config file,
+credential-bearing key or value, private key, encoded `write_files` content that
+cannot be inspected, or non-placeholder `nms-secret:` reference must fail the
+build with an actionable log entry, and proxbox-api must not receive the payload.
+The static pristine-seed checks remain defense in depth; they do not replace this
+runtime boundary.
+
+`install_zabbix_agent2` and `install_nms_agent` stay false because the shared
+injectors remain Ubuntu- and amd64-only. QEMU guest-agent injection may remain
+enabled. The Explorer installer must be the last entry in the fully injected
+`runcmd` list so cloud-init's `set -e`-less wrapper cannot mask it.
+
 ## Signed Preflight Build Guardrail
 
 Every executable cloud-config build uses the proxbox-api signed handshake in
@@ -210,6 +260,12 @@ Readiness consumers require both ready status and `not is_stale`. The staleness 
 management command must evaluate pin drift even when `max_age_days` is unset, recover a
 previously orphaned queued auto-rebuild, set the template to `building`, and call
 `dispatch_build()` after changes commit (and after a branch merges).
+
+Base-image URLs must contain no userinfo, query string, or fragment. Parse and
+reject those components at serializer/model boundaries and again in the job;
+defensively redact them before logging, proxbox output, or provenance snapshots.
+Authenticated downloads, if ever supported, require an opaque secret reference
+rather than an inline URL credential.
 
 - **A pinned URL without a digest fails the build, by design.** Never "fix" that by
   making the digest optional for pinned URLs — an unverified pin looks like provenance

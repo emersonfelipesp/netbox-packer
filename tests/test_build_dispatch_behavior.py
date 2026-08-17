@@ -116,6 +116,83 @@ def _import_api_serializers_module():
     return importlib.import_module("netbox_packer.api.serializers")
 
 
+def _import_models_module():
+    _install_package()
+
+    class ValidationError(Exception):
+        pass
+
+    class Validator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class NetBoxModel:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+        def clean(self):
+            pass
+
+        def save(self, *args, **kwargs):
+            pass
+
+    fields = types.ModuleType("django.db.models")
+
+    def field(*_args, **_kwargs):
+        return None
+
+    for name in (
+        "BooleanField",
+        "CharField",
+        "DateTimeField",
+        "ForeignKey",
+        "IntegerField",
+        "JSONField",
+        "PositiveIntegerField",
+        "TextField",
+        "URLField",
+        "UniqueConstraint",
+    ):
+        setattr(fields, name, field)
+    fields.CASCADE = object()
+    fields.SET_NULL = object()
+
+    django_db = types.ModuleType("django.db")
+    django_db.models = fields
+    django_exceptions = types.ModuleType("django.core.exceptions")
+    django_exceptions.ValidationError = ValidationError
+    django_validators = types.ModuleType("django.core.validators")
+    django_validators.RegexValidator = Validator
+    django_validators.URLValidator = Validator
+    netbox_models = types.ModuleType("netbox.models")
+    netbox_models.NetBoxModel = NetBoxModel
+
+    class BuildStatusChoices:
+        CHOICE_PENDING = "pending"
+        CHOICE_BUILDING = "building"
+        CHOICE_READY = "ready"
+        CHOICE_FAILED = "failed"
+        CHOICE_DEPRECATED = "deprecated"
+        CHOICE_STALE = "stale"
+
+    choices = types.ModuleType("netbox_packer.choices")
+    choices.BuildStatusChoices = BuildStatusChoices
+    for name in ("OSFamilyChoices", "StorageFormatChoices", "StoragePoolTypeChoices"):
+        setattr(choices, name, type(name, (), {}))
+
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.core"] = types.ModuleType("django.core")
+    sys.modules["django.core.exceptions"] = django_exceptions
+    sys.modules["django.core.validators"] = django_validators
+    sys.modules["django.db"] = django_db
+    sys.modules["django.db.models"] = fields
+    sys.modules["netbox"] = types.ModuleType("netbox")
+    sys.modules["netbox.models"] = netbox_models
+    sys.modules["netbox_packer.choices"] = choices
+    return importlib.import_module("netbox_packer.models")
+
+
 def test_dispatch_build_enqueues_with_build_id_keyword(isolated_imports) -> None:
     jobs = _import_jobs_module()
     enqueue = Mock()
@@ -231,6 +308,13 @@ def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -
         {"content": "https://operator:do-not-persist@example.invalid/config"},
         {"content": "-----BEGIN OPENSSH PRIVATE KEY-----"},
         {"content": "safe\x00unsafe"},
+        {"image_url": "https://images.example/base.qcow2?token=do-not-persist"},
+        {
+            "image_url": (
+                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
+                "&X-Amz-Signature=do-not-persist"
+            )
+        },
     ),
 )
 def test_build_overrides_reject_nested_or_embedded_secrets(
@@ -255,6 +339,57 @@ def test_build_overrides_allow_typed_non_secret_selectors(isolated_imports) -> N
         )
         is False
     )
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        "https://images.example/base.qcow2?token=do-not-persist",
+        (
+            "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
+            "&X-Amz-Signature=do-not-persist"
+        ),
+    ),
+)
+def test_generic_api_serializers_reject_credentialed_base_image_urls(
+    isolated_imports,
+    image_url,
+) -> None:
+    serializers = _import_api_serializers_module()
+
+    with pytest.raises(ValueError, match="forbidden"):
+        serializers.PackerBuildSerializer().validate_variable_overrides({"image_url": image_url})
+    with pytest.raises(ValueError, match="must not contain"):
+        serializers.PackerTemplateSerializer().validate_base_image_url(image_url)
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        "https://images.example/base.qcow2?token=do-not-persist",
+        (
+            "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
+            "&X-Amz-Signature=do-not-persist"
+        ),
+    ),
+)
+def test_models_reject_credentialed_base_image_urls(
+    isolated_imports,
+    image_url,
+) -> None:
+    models = _import_models_module()
+
+    template = models.PackerTemplate(
+        base_image_url=image_url,
+        base_image_sha256="a" * 64,
+        installer_config=SimpleNamespace(installer_type="cloud_config"),
+    )
+    with pytest.raises(models.ValidationError, match="must not contain"):
+        template.clean()
+
+    build = models.PackerBuild(variable_overrides={"image_url": image_url})
+    with pytest.raises(models.ValidationError, match="must not contain"):
+        build.clean()
 
 
 def test_template_serializer_rejects_plaintext_nms_agent_backend(isolated_imports) -> None:
@@ -928,3 +1063,135 @@ def test_migration_0029_rejects_a_zero_row_compare_and_set(isolated_imports) -> 
 
     assert row.base_image_url == ""
     assert row.base_image_sha256 == ""
+
+
+def _load_migration_0030():
+    django_db = types.ModuleType("django.db")
+
+    class Migration:
+        pass
+
+    class RunPython:
+        def __init__(self, forwards, backwards):
+            self.forwards = forwards
+            self.backwards = backwards
+
+    django_db.migrations = SimpleNamespace(Migration=Migration, RunPython=RunPython)
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.db"] = django_db
+
+    path = PKG / "migrations" / "0030_seed_influxdb3_explorer_debian13_cloud_init.py"
+    spec = importlib.util.spec_from_file_location("migration_0030_behavior", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SeedRowManager:
+    def __init__(self, rows, first_pk):
+        self.rows = rows
+        self.first_pk = first_pk
+
+    def get_or_create(self, defaults, **identity):
+        for row in self.rows:
+            if all(getattr(row, field) == expected for field, expected in identity.items()):
+                return row, False
+
+        row_values = {**identity, **defaults}
+        row = SimpleNamespace(pk=self.first_pk + len(self.rows), **row_values)
+        if "installer_config" in defaults:
+            row.installer_config_id = defaults["installer_config"].pk
+        self.rows.append(row)
+        return row, True
+
+
+def _migration_0030_apps(config_manager, template_manager):
+    models = {
+        "PackerInstallerConfig": type(
+            "PackerInstallerConfig",
+            (),
+            {"objects": config_manager},
+        ),
+        "PackerTemplate": type(
+            "PackerTemplate",
+            (),
+            {"objects": template_manager},
+        ),
+    }
+    return SimpleNamespace(
+        get_model=Mock(side_effect=lambda _app, model_name: models[model_name])
+    )
+
+
+def test_migration_0030_seeds_and_reapplies_after_build_state_changes(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert len(configs) == 1
+    assert configs[0].name == migration.CONFIG_NAME
+    assert configs[0].version == migration.CONFIG_VERSION
+    assert configs[0].content == migration.INFLUXDB3_EXPLORER_DEBIAN13_CLOUD_CONFIG
+    assert len(templates) == 1
+    assert templates[0].name == migration.TEMPLATE_NAME
+    assert templates[0].proxmox_template_id == 9053
+    assert templates[0].installer_config_id == configs[0].pk
+
+    # These fields are written by a successful build and must not turn a safe
+    # rollback/reapply into a false collision.
+    templates[0].build_status = "ready"
+    templates[0].packer_template_ref = "artifact/explorer/9053"
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    assert templates[0].build_status == "ready"
+    assert templates[0].packer_template_ref == "artifact/explorer/9053"
+
+
+def test_migration_0030_refuses_installer_config_collision_without_overwrite(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    configs[0].description = "operator-owned description"
+
+    with pytest.raises(RuntimeError, match="installer config.*description"):
+        migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert configs[0].description == "operator-owned description"
+    assert len(configs) == 1
+    assert len(templates) == 1
+
+
+def test_migration_0030_refuses_template_collision_without_overwrite(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0030()
+    configs = []
+    templates = []
+    apps = _migration_0030_apps(
+        SeedRowManager(configs, first_pk=10),
+        SeedRowManager(templates, first_pk=20),
+    )
+    migration.seed_influxdb3_explorer_debian13(apps, None)
+    templates[0].storage_pool = "operator-storage"
+
+    with pytest.raises(RuntimeError, match="template.*storage_pool"):
+        migration.seed_influxdb3_explorer_debian13(apps, None)
+
+    assert templates[0].storage_pool == "operator-storage"
+    assert len(configs) == 1
+    assert len(templates) == 1

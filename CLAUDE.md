@@ -282,6 +282,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0027` | *(schema only — base image pin)* | — | — | — | Adds optional `base_image_url` + `base_image_sha256` to `PackerTemplate`. A pinned URL without a digest fails the build closed; the digest is forwarded to proxbox-api as `sha256`. Defaults empty, so existing templates are unchanged |
 | `0028` | *(schema only — base image build snapshots)* | — | — | — | Records the resolved URL + digest on each successful cloud-image build and on the template as its last successful source. Desired-vs-built pin drift is stale even without an age policy; snapshot fields are machine-managed |
 | `0029` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | Pins the one Debian 13 profile to the **dated** snapshot `trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2` and its verified sha256. Debian publishes only SHA512SUMS, so the digest was produced by downloading the artifact, matching its SHA-512 to the published value, then hashing for SHA-256. No GPG signature exists in that directory, so trust is TLS + published checksum. Compare-and-set against the unpinned state; refuses to overwrite an operator's own pin; reverse is a no-op |
+| `0030` | `influxdb3-explorer-1.9.0-debian-13` | 9053 | Debian 13 | Selected per build | Credential-free Explorer UI in `influxdata/influxdb3-ui`, pinned to the reviewed 1.9.0 multi-architecture manifest digest. Debian `docker.io`, loopback-default `:8080`, lifecycle owned by `influxdb3-explorer.service`; Core token supplied only after clone through the `nms-secret:` provision-time boundary |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -386,6 +387,13 @@ empty by default so every existing template keeps its behaviour and payload.
 override → template field → derived release default (URL only), and forwards the digest
 to proxbox-api as `sha256` (a field its `CloudImageTemplateBuildRequest` already
 accepts), omitting it entirely when empty.
+
+Base-image URLs must be ordinary artifact URLs with no userinfo, query string,
+or fragment. This is parsed structurally at API/model boundaries and rechecked by
+the build job so signed-download query credentials cannot enter persisted build
+state. Logs, proxbox output, and successful-build provenance use a defensively
+redacted URL. If authenticated image downloads are added later, use an opaque
+secret reference rather than inline URL credentials.
 
 **A pinned URL must carry a digest** — supplied by either source — or the build fails
 closed. An unverified pin looks like provenance while guaranteeing nothing about the
@@ -506,6 +514,67 @@ For hosts that already exist, `netbox-rpc` seeds
 apply the same posture over audited SSH and accept the operator installer's
 parameters. `netbox-packer` must not import or depend on `netbox-rpc`; those
 procedure names appear here as documentation only.
+
+#### Migration 0030 — InfluxDB 3 Explorer on Debian 13
+
+Seeds `influxdb3-explorer-1.9.0-debian-13` (VMID `9053`) with installer config
+`influxdb3-explorer-1.9.0-debian-13-cloud-config` v`1.9.0`,
+`os_family="debian"`, and `os_version="13"`. It is endpoint-agnostic
+(`proxmox_endpoint=""`, `proxmox_node="select-at-build"`), so build dispatch
+supplies `endpoint_id` and `target_node`. The tracked cloud-config is
+`netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml` and
+must remain byte-identical to the migration constant.
+
+Docker comes only from Debian's signed repository (`docker.io`). Both pull and
+runtime use exactly
+`influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`.
+The single lifecycle owner is `influxdb3-explorer.service`; it mounts persistent
+state from `/var/lib/influxdb3-explorer` at `/db` and provisioned configuration
+from `/etc/influxdb3-explorer` read-only at `/app-root/config`. Container port
+`8080` is published on the configurable `EXPLORER_HOST_BIND`, whose default is
+`127.0.0.1`. Anyone who can reach Explorer inherits its configured Core token's
+permissions, so any non-loopback bind requires an explicit access-control design.
+Explorer 1.9.0 runs as non-root uid/gid `1500`, so `/db` must stay
+`1500:1500` mode `0700`; the config directory stays `root:1500` mode `0750` and
+provisioned `config.json` is mode `0640`.
+
+The seed is entirely credential-free. It contains no Core URL, token, password,
+TLS private key, session secret, or environment-specific secret reference. After
+clone, `service.influxdb.1.token_create` mints and vaults the Core token and
+returns `nms-secret:<opaque-id>`; provision-time automation resolves the reference
+only in memory, writes `root:1500` mode-`0640`
+`/etc/influxdb3-explorer/config.json`, and restarts the unit. Never move that
+per-instance step into cloud-init.
+
+The credential-free contract is enforced on the **fully injected** YAML, not
+only on the tracked seed. Immediately before `call_proxbox_build()`, any template
+whose immutable `provisions_service` marker is `influxdb3-explorer` is rejected
+if the final payload contains a Core endpoint/config file, credential-bearing
+key or value, private key, encoded `write_files` content that cannot be inspected,
+or a non-placeholder `nms-secret:` reference.
+
+Those content rules are a denylist, and a denylist over operator-editable content only
+refuses the shapes it enumerates — review found two bypasses of exactly that kind, a
+`content: !!binary` scalar (loaded as `bytes` and skipped by a string-only scan) and
+`/etc/influxdb3-explorer/./config.json` (an alias an exact path comparison did not
+recognise). The guard therefore **ends with a write-path allowlist**: every `write_files`
+path is canonicalised with `posixpath.normpath` and must be one of the five files the
+image legitimately writes, unknown entry keys and non-text content are refused outright,
+and binary anywhere in the payload fails closed. The specific content diagnostics run
+first so they still produce the actionable message when they apply; the allowlist is the
+catch-all that makes a newly invented carrier fail closed instead of waiting to be
+enumerated. Rejection is logged and proxbox-api
+is never called with the tainted payload. Keep this runtime boundary alongside
+the static seed assertions whenever injection or rendering changes.
+
+First boot refuses non-Debian-13 and unsupported architectures, bounds apt and
+the digest-addressed image pull, applies a maximum accepted image size, and uses
+a bounded local readiness loop. The installer runs under `set -Eeuo pipefail`
+with exactly one `EXIT` trap, converts `TERM`/`INT`/`HUP` to non-zero exits, and
+writes `/var/lib/nms/influxdb-install-failed` on failure. Zabbix and NMS agent
+injection are off for the same Debian/arm64 constraints as VMID 9052; the fully
+injected config must keep this installer last in `runcmd`. Seeding uses the 0025
+collision guard, excludes mutable build state, and reverses as a no-op.
 
 #### Migration 0009 — Kubernetes 1.31 base node
 
