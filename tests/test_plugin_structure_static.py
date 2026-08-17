@@ -67,8 +67,18 @@ def test_plugin_config_fields() -> None:
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
-    assert 'min_version = "4.5.8"' in src
-    assert 'max_version = "4.6.99"' in src
+    # Bounds are sourced from the shared compat module rather than re-typed
+    # here, so assert the wiring in the source AND the values in compat.py --
+    # a source substring alone would pass for any constant name.
+    assert "min_version = PLUGIN_MIN_VERSION" in src
+    assert "max_version = PLUGIN_MAX_VERSION" in src
+    compat_src = _read("netbox_packer/compat.py")
+    assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
+    assert 'STABLE_MAX_NETBOX_VERSION = "4.6.99"' in compat_src
+    assert 'EXPERIMENTAL_MIN_NETBOX_VERSION = "4.7.0"' in compat_src
+    assert 'EXPERIMENTAL_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src
+    assert "PLUGIN_MAX_VERSION = EXPERIMENTAL_MAX_NETBOX_VERSION" in compat_src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 

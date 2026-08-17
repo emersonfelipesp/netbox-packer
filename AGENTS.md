@@ -297,3 +297,39 @@ the existing secure-prefix bootstrap flow; never bake a token, signing key, or
 new trust mechanism. Its local service allowlist contains exactly
 `akvorado.service`, while the existing Zabbix injection remains responsible for
 Zabbix Agent 2.
+
+## NetBox compatibility: two tiers, one shared module
+
+`netbox_packer/compat.py` is the single declaration of which NetBox releases this plugin
+supports, and `PluginConfig.min_version`/`max_version` are sourced from it rather
+than re-typed as literals:
+
+- **stable** `4.5.8` – `4.6.99` — certified, CI-gated, silent;
+- **experimental** `4.7.0` – `4.7.99` — loads and runs with no configuration
+  change, and emits system check `netbox_packer.W001` (a **Warning**, never an Error)
+  plus one `ready()` log line. A version that cannot be classified reports
+  `netbox_packer.W002` rather than passing silently. Operators silence the notice with
+  Django's stock `SILENCED_SYSTEM_CHECKS`; the plugin adds no setting of its own.
+
+**`compat.py` is vendored byte-identically across `netbox-proxbox`,
+`netbox-ceph`, `netbox-packer`, `netbox-pbs`, and `netbox-pdm`.** Change it in
+one repo and you must change it in all five, bumping `CONTRACT_VERSION` when the
+contract itself moves. Verify with
+`sha256sum */compat.py` across the five checkouts — the
+`proxbox-stack-code-review` skill runs that drift check.
+
+Two hard rules:
+
+1. **No Django import at module scope in `compat.py`.** NetBox imports it while
+   `netbox/settings.py` is still executing, so every Django touch lives inside a
+   function.
+2. **Upgrading to NetBox 4.7 upgrades the whole plugin family at once.**
+   `PluginConfig.validate()` raises while settings are still being built, so one
+   companion plugin left at the `4.6.99` ceiling stops NetBox from starting at
+   all — a failed boot, not a disabled plugin.
+
+Beta release strings are why the ceiling is `4.7.99` and not something
+pre-release-shaped: `release.yaml` at tag `v4.7.0-beta1` reads `version: "4.7.0"`
+with `designation: "beta1"`, and the plugin gate compares against
+`RELEASE.version` — the bare `"4.7.0"`. `RELEASE.full_version`
+(`"4.7.0-beta1"`) is display only.

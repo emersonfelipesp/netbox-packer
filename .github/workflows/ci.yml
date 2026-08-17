@@ -52,6 +52,137 @@ jobs:
       - name: Run static tests
         run: pytest tests/ -v
 
+  # ── NetBox compatibility matrix ────────────────────────────────────────────
+  # Proves the plugin actually loads, migrates, and reports its support tier on
+  # each declared NetBox release, using a **source checkout of the tag** rather
+  # than a Docker image: upstream has published no 4.7 image
+  # (netboxcommunity/netbox:v4.7.0-beta1 -> 404 on Docker Hub), so the
+  # image-based e2e matrix cannot cover the experimental tier at all.
+  #
+  # netbox-packer is the only plugin in the Proxbox family with no
+  # `required_plugins`, so it can be exercised standalone. The companions need a
+  # 4.7-capable netbox-proxbox installed alongside them before they can even
+  # start, which is why their legs are tracked separately.
+  #
+  # Refs are pinned to the tags' commit SHAs, not to the tag names, so the
+  # matrix cannot move under us.
+  netbox-compatibility:
+    name: NetBox ${{ matrix.netbox-version }} (${{ matrix.tier }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - netbox-version: "v4.5.8"
+            netbox-ref: 75e1b86613792458b4d4c8d0cbbfc94df16cfaaf
+            tier: stable
+          - netbox-version: "v4.6.4"
+            netbox-ref: 3d73b2a1669ad03c9f0ccb1332fe201d60cbce9e
+            tier: stable
+          - netbox-version: "v4.7.0-beta1"
+            netbox-ref: 9c163ba2ddfdeafa4bca5c5ca493e70e96ab53f4
+            tier: experimental
+    services:
+      postgres:
+        # NetBox 4.7 requires PostgreSQL 15+ and installs the ltree extension
+        # during migrate; POSTGRES_USER creates a superuser that can do so.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+          POSTGRES_DB: netbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netbox"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        # NetBox 4.7 requires Redis 6.0+.
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout netbox-packer
+        uses: actions/checkout@v4
+        with:
+          path: netbox-packer
+          persist-credentials: false
+
+      - name: Checkout NetBox ${{ matrix.netbox-version }}
+        uses: actions/checkout@v4
+        with:
+          repository: netbox-community/netbox
+          ref: ${{ matrix.netbox-ref }}
+          path: netbox
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install NetBox and the plugin
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r netbox/requirements.txt
+          python -m pip install -e "./netbox-packer[test]"
+
+      - name: Migrate, check, and assert the reported support tier
+        working-directory: netbox-packer
+        env:
+          DJANGO_SETTINGS_MODULE: netbox.settings
+          NETBOX_CONFIGURATION: tests.netbox_test_configuration
+          NETBOX_TEST_DB_HOST: 127.0.0.1
+          NETBOX_TEST_DB_PORT: 5432
+          NETBOX_TEST_REDIS_HOST: 127.0.0.1
+          NETBOX_TEST_REDIS_PORT: 6379
+          EXPECTED_TIER: ${{ matrix.tier }}
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer
+        run: |
+          set -euo pipefail
+          python ../netbox/netbox/manage.py migrate --no-input
+          python ../netbox/netbox/manage.py makemigrations netbox_packer --check --dry-run
+          # `check` must succeed on every tier. On the experimental tier it also
+          # has to emit exactly one netbox_packer.W001 and no errors; on a stable
+          # tier it must emit none at all.
+          python - <<'PY'
+          import os, django
+          django.setup()
+          from django.core.checks import run_checks
+          from django.conf import settings
+          from netbox_packer.compat import current_netbox_support_level
+
+          expected = os.environ["EXPECTED_TIER"]
+          level = current_netbox_support_level().value
+          assert level == expected, f"expected tier {expected!r}, got {level!r} on NetBox {settings.RELEASE.full_version}"
+
+          messages = [m for m in run_checks() if str(getattr(m, "id", "")).startswith("netbox_packer.")]
+          errors = [m for m in messages if m.level >= 40]
+          assert not errors, f"plugin system checks reported errors: {errors}"
+
+          warnings = [m for m in messages if m.id == "netbox_packer.W001"]
+          if expected == "experimental":
+              assert len(warnings) == 1, f"expected exactly one W001, got {warnings}"
+              assert "experimental" in warnings[0].msg
+          else:
+              assert not messages, f"stable tier must emit no compatibility notice: {messages}"
+          print(f"OK: NetBox {settings.RELEASE.full_version} -> tier {level}, messages {[m.id for m in messages]}")
+          PY
+
+      - name: Run the compatibility test module
+        working-directory: netbox-packer
+        env:
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer
+        run: python -m pytest tests/test_netbox_compat.py -q
+
   package:
     name: Package metadata
     runs-on: ubuntu-latest
