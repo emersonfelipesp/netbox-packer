@@ -259,6 +259,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 | `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
 | `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
+| `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, per-clone `node-id`. Credential-free; refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
 
@@ -313,6 +314,54 @@ that lineage to `provisions_service="akvorado"`; do not replace this with
 hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
+
+#### Migration 0025 — InfluxDB 3 Core on Debian 13
+
+Seeds `influxdb-core-3.11.0-debian-13` (VMID `9052`) with installer config
+`influxdb-core-3.11.0-debian-13-cloud-config` v`3.11.0`, `os_family="debian"`,
+`os_version="13"`. Endpoint-agnostic like the `0020` profiles
+(`proxmox_endpoint=""`, `proxmox_node="select-at-build"`), so build dispatch
+supplies `endpoint_id` and `target_node`. The verbatim cloud-config lives at
+`netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml`, and the
+migration constant must stay byte-identical to it (asserted by
+`tests/test_cloud_config_build_static.py::test_influxdb3_core_debian13_seed_contract`).
+
+The difference from the Ubuntu Core 3 profile (`9051`) is that this one bakes a
+**production posture** instead of package defaults:
+
+- managed `/etc/influxdb3/influxdb3-core.conf` (`root:influxdb3`, `0640`) with
+  `object-store = "file"`, explicit `data-dir`, `http-bind = "127.0.0.1:8181"`,
+  `log-filter`, `wal-flush-interval`, and `disable-telemetry-upload = true`;
+- **`plugin-dir` deliberately omitted** — the Python Processing Engine stays off;
+- `influxdb3-core.service` drop-in `20-production.conf` with
+  `Restart=on-failure`, `RestartSec=5s`, `TimeoutStopSec=120s`;
+- `node-id` derived from each clone's own hostname (never a fixed value baked
+  into the template, which would give every clone the same node identity);
+- Debian-13-only gate on `/etc/os-release` plus `amd64`/`arm64` and systemd
+  checks, exiting non-zero rather than half-configuring another platform;
+- fingerprint-verified InfluxData key, `apt-cache madison` pin to `3.11.0`,
+  post-install version re-verification, `apt-mark hold`, and a bounded wait on
+  the unauthenticated `http://127.0.0.1:8181/ready` endpoint.
+
+Seeding uses `0024`'s collision guard: `get_or_create` plus a `RuntimeError`
+listing mismatched fields, so a pre-existing row is reported and left untouched
+rather than overwritten. The reverse function is intentionally a no-op because an
+operator may already have baked the VMID.
+
+**Credential-free, deliberately.** No admin token, TLS material, or per-bake
+state is written. The first administrative token is created and vaulted only by
+`service.influxdb.1.bootstrap` (`family="core3"`) through typed NMS RPC, which
+returns an `nms-secret:` reference. Do not add token generation here. Token
+authentication remains enabled in the guest, which is why the bind stays on
+loopback — a remote listener would expose bearer tokens over plaintext HTTP; put
+a TLS reverse proxy in front, or use the audited RPC installer with TLS material.
+
+For hosts that already exist, `netbox-rpc` seeds
+`os.linux.debian.13.preflight_influxdb3_core` (read, no approval) and
+`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
+apply the same posture over audited SSH and accept the operator installer's
+parameters. `netbox-packer` must not import or depend on `netbox-rpc`; those
+procedure names appear here as documentation only.
 
 #### Migration 0009 — Kubernetes 1.31 base node
 

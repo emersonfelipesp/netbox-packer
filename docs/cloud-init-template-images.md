@@ -125,6 +125,7 @@ artifact.
 | --- | --- | --- | --- | --- |
 | `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | OSS `2.9.1` | `9050` | `8086` | Proxmox external metrics and Flux |
 | `influxdb-core-3.11.0-ubuntu-2404` | Core `3.11.0` | `9051` | `8181` | SQL, InfluxQL, and processing-engine workloads |
+| `influxdb-core-3.11.0-debian-13` | Core `3.11.0` | `9052` | `8181` | SQL and InfluxQL on Debian 13, with the production posture baked in |
 
 Both rows store an empty `proxmox_endpoint` and `select-at-build` as the model
 placeholder node. Each build request must provide a positive proxbox-api
@@ -156,6 +157,72 @@ The immutable historical `influxdb-2-ubuntu-2404-proxmox-collector` / VMID
 `0020` replaces the database row's former credential-generating installer
 content with the safe OSS profile and marks it pending. Existing artifacts are
 never deleted automatically.
+
+### InfluxDB 3 Core on Debian 13 (`0025`)
+
+`0025_seed_influxdb3_core_debian13_cloud_init.py` adds
+`influxdb-core-3.11.0-debian-13` at VMID `9052`. It shares the endpoint-agnostic
+and credential-free contract above and adds the production posture of the
+operator installer rather than leaving the server at package defaults.
+
+| Field | Value |
+| --- | --- |
+| Template name | `influxdb-core-3.11.0-debian-13` |
+| Installer config | `influxdb-core-3.11.0-debian-13-cloud-config` version `3.11.0` |
+| OS | Debian `13` (Trixie) |
+| Template VMID | `9052` |
+| Proxmox endpoint / node | selected at build (`endpoint_id` + `target_node`) |
+| Storage | `local` |
+| Listener | `127.0.0.1:8181` (loopback only) |
+| Managed config | `/etc/influxdb3/influxdb3-core.conf` (`root:influxdb3`, `0640`) |
+| Data directory | `/var/lib/influxdb3/data` (`influxdb3:influxdb3`, `0750`) |
+| Systemd unit | `influxdb3-core.service` + drop-in `20-production.conf` |
+| Service marker | `provisions_service = "influxdb3-core"` |
+
+The verbatim cloud-config source of truth is
+`netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml`; the
+migration constant must stay byte-identical to it, which
+`tests/test_cloud_config_build_static.py` asserts.
+
+Beyond the shared behaviours listed above, first boot:
+
+- **refuses any release other than Debian 13** — it reads `/etc/os-release` and
+  exits non-zero unless `ID=debian` and `VERSION_ID` is `13`, and it also
+  requires an `amd64`/`arm64` architecture and systemd as PID 1, rather than
+  half-configuring an unverified platform;
+- writes the managed configuration with `object-store = "file"`, an explicit
+  `data-dir`, `http-bind = "127.0.0.1:8181"`, `log-filter`,
+  `wal-flush-interval`, and `disable-telemetry-upload = true`, deliberately
+  **omitting `plugin-dir`** so the Python Processing Engine stays disabled;
+- installs a `influxdb3-core.service` drop-in with `Restart=on-failure`,
+  `RestartSec=5s`, and `TimeoutStopSec=120s`;
+- derives `node-id` from the clone's **own** hostname, so cloning the template
+  can never produce two nodes claiming the same identity;
+- holds the package with `apt-mark hold` and waits on the unauthenticated
+  `http://127.0.0.1:8181/ready` endpoint, dumping unit status and journal tail
+  before failing the boot script if readiness never arrives.
+
+Token authentication stays enabled for every data and admin route: the readiness
+probe is the only unauthenticated call the image makes. Because a remote listener
+would then expose bearer tokens over plaintext HTTP, the baked posture is
+loopback-only — put a TLS reverse proxy in front of it, or use the audited RPC
+installer (below) with explicit TLS material.
+
+For hosts that **already exist**, do not re-bake: `netbox-rpc` seeds
+`os.linux.debian.13.preflight_influxdb3_core` (read) and
+`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
+apply the same posture over audited SSH and accept the installer's parameters
+(`node_id`, `data_dir`, `http_bind`, `tls_cert`/`tls_key`, `enable_plugins`,
+`disable_telemetry`, `wal_flush_interval`, `log_filter`, `package_version`,
+`hold_package`, `upgrade_package`, `force_reconfigure`,
+`allow_plaintext_remote`). Those procedures also create no credential; the
+sanctioned onboarding sequence remains `preflight` -> `install` ->
+`service.influxdb.1.bootstrap`.
+
+Per the estate destructive-operation guardrail this migration seeds catalog rows
+only and builds nothing. Confirm VMID `9052` is free on the destination cluster
+before baking, and supersede a bad artifact by baking a new VMID rather than
+deleting the previous one.
 
 ## PowerDNS Authoritative + Recursor Template
 

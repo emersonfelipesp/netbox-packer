@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import traceback
@@ -1339,6 +1340,145 @@ def test_akvorado_contract_is_documented() -> None:
         "ClickHouse `26.3`",
         "akvorado.service",
         "https://backend.nms.nmulti.cloud",
+    )
+    for rel in (
+        "README.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "docs/cloud-init-template-images.md",
+        "docs/index.md",
+    ):
+        doc = _read(rel)
+        for text in required:
+            assert text in doc, f"{rel} must document {text}"
+
+
+def test_influxdb3_core_debian13_seed_contract() -> None:
+    rel = "netbox_packer/migrations/0025_seed_influxdb3_core_debian13_cloud_init.py"
+    seed_rel = "netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml"
+    source = _read(rel)
+    constants = _literal_assignments(rel)
+    seed = _read(seed_rel)
+    name, defaults = _packer_template_seed_defaults(rel)
+
+    # The migration constant is the thing that actually runs; the tracked YAML is
+    # the reviewable source of truth. They must not drift.
+    assert constants["INFLUXDB3_CORE_DEBIAN13_CLOUD_CONFIG"] == seed
+    assert constants["CONFIG_NAME"] == "influxdb-core-3.11.0-debian-13-cloud-config"
+    assert constants["CONFIG_VERSION"] == "3.11.0"
+    assert constants["TEMPLATE_NAME"] == "influxdb-core-3.11.0-debian-13"
+    assert constants["TEMPLATE_VMID"] == 9052
+    assert constants["PROXMOX_ENDPOINT"] == ""
+    assert constants["PROXMOX_NODE"] == "select-at-build"
+    assert name == constants["TEMPLATE_NAME"]
+    assert 'dependencies = [\n        ("netbox_packer", "0024_seed_akvorado_cloud_init"),' in source
+
+    # Collision-guarded seeding, 0024 style — never a silent overwrite.
+    assert "update_or_create(" not in source
+    assert source.count("objects.get_or_create(") == 2
+    assert "InfluxDB 3 Core Debian 13 seed naming collision" in source
+    assert 'template_expected_values["installer_config_id"] = config.pk' in source
+
+    assert defaults["os_family"] == "debian"
+    assert defaults["os_version"] == "13"
+    assert defaults["proxmox_template_id"] == 9052
+    assert defaults["proxmox_endpoint"] == ""
+    assert defaults["proxmox_node"] == "select-at-build"
+    assert defaults["storage_pool"] == "local"
+    assert defaults["cloud_init_ready"] is True
+    assert defaults["build_status"] == "pending"
+    assert defaults["install_qemu_guest_agent"] is True
+    assert defaults["install_zabbix_agent2"] is True
+    assert defaults["install_nms_agent"] is True
+    assert defaults["nms_agent_backend_url"] == "https://backend.nms.nmulti.cloud"
+    assert defaults["provisions_service"] == "influxdb3-core"
+
+    # The seeded os_family/os_version pair must be one the form actually offers,
+    # otherwise the template cannot be edited in the UI without being "corrected".
+    choices_source = _read("netbox_packer/choices.py")
+    assert 'CHOICE_DEBIAN = "debian"' in choices_source
+    assert '("13", "Debian 13 (Trixie)")' in choices_source
+
+    # No VMID may be claimed twice across the whole seeded catalog.
+    seeded_vmids: list[int] = []
+    for migration in sorted((PKG / "migrations").glob("0*.py")):
+        for key, value in _literal_assignments(f"netbox_packer/migrations/{migration.name}").items():
+            if "VMID" in key and isinstance(value, int):
+                seeded_vmids.append(value)
+    assert seeded_vmids.count(9052) == 1, seeded_vmids
+    assert sorted(seeded_vmids) == sorted(set(seeded_vmids)), seeded_vmids
+
+    cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
+    assert seed.startswith("#cloud-config\n")
+    assert cloud_config["package_update"] is False
+    assert cloud_config["package_upgrade"] is False
+    files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
+    install_script = files["/usr/local/sbin/install-influxdb3-core"]
+    assert cloud_config["runcmd"] == [["bash", "/usr/local/sbin/install-influxdb3-core"]]
+    subprocess.run(["bash", "-n"], input=install_script, text=True, check=True)
+
+    # Debian 13 gate: this image must refuse any other release rather than
+    # half-configuring it.
+    assert "ID=${ID:-unknown}" in install_script
+    assert "13|13.*)" in install_script
+    assert "VERSION_ID=${VERSION_ID:-unknown}" in install_script
+    assert "amd64|arm64)" in install_script
+    assert "/run/systemd/system" in install_script
+
+    # Repository trust, version pin, and hold.
+    assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in install_script
+    assert "apt-cache madison" in install_script
+    assert "3[.]11[.]0([+~-]|$)" in install_script
+    assert "3.11.0|3.11.0[-+~]*" in install_script
+    assert 'apt-get install -y --no-install-recommends "${PACKAGE_NAME}=${package_version}"' in install_script
+    assert 'apt-mark hold "${PACKAGE_NAME}"' in install_script
+    assert "latest" not in install_script
+    # The key must be trusted before the source list is written and used.
+    assert (
+        install_script.index("influxdata-archive.key")
+        < install_script.index('> "${SOURCE_FILE}"')
+        < install_script.index("apt-get update")
+    )
+
+    # Production posture, not package defaults.
+    assert "HTTP_BIND='127.0.0.1:8181'" in install_script
+    assert 'http-bind = "${HTTP_BIND}"' in install_script
+    assert "disable-telemetry-upload = true" in install_script
+    assert "plugin-dir intentionally omitted" in install_script
+    assert "plugin-dir =" not in install_script
+    assert "20-production.conf" in install_script
+    assert "Restart=on-failure" in install_script
+    assert 'systemctl enable --now "${SERVICE_NAME}"' in install_script
+    assert '"http://${HTTP_BIND}/ready"' in install_script
+    # node-id is per-clone, so a cloned template cannot produce duplicate nodes.
+    assert "hostname -s" in install_script
+    assert 'node-id = "${node_id}-node"' in install_script
+
+    # Credential-free: assert against executable lines only, since the prose
+    # comments legitimately explain that token authentication stays enabled.
+    code = "\n".join(line for line in install_script.splitlines() if not line.lstrip().startswith("#"))
+    for pattern in (
+        r"create\s+token",
+        r"--token",
+        r"admin-token",
+        r"TOKEN=",
+        r"openssl\s+rand",
+        r"password",
+        r"passphrase",
+        r"tls-cert",
+        r"tls-key",
+        r"api/v2/setup",
+    ):
+        assert re.search(pattern, code, re.IGNORECASE) is None, pattern
+
+
+def test_influxdb3_core_debian13_contract_is_documented() -> None:
+    required = (
+        "influxdb-core-3.11.0-debian-13",
+        "9052",
+        "Debian 13",
+        "influxdb3-core.service",
+        "service.influxdb.1.bootstrap",
     )
     for rel in (
         "README.md",

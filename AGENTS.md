@@ -35,6 +35,38 @@ endpoint (`10.0.30.139`) and must never be retargeted to production. Additive
 migration `0020` replaces the database row's credential-generating content and
 marks it pending without deleting any existing artifact.
 
+Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
+**Debian 13** Core 3 profile. Its verbatim cloud-config is
+`netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml` and the
+migration constant must stay byte-identical to it. It inherits every rule above
+— endpoint-agnostic, credential-free, fingerprint-verified key, pinned-and-held
+package — and adds a baked production posture that must not be relaxed:
+
+- the managed `/etc/influxdb3/influxdb3-core.conf` binds only to
+  `127.0.0.1:8181` with token authentication left enabled, sets
+  `disable-telemetry-upload = true`, and **omits `plugin-dir`** so the Python
+  Processing Engine stays disabled;
+- an `influxdb3-core.service` drop-in supplies `Restart=on-failure`;
+- first boot **refuses any release other than Debian 13** (plus non-`amd64`/
+  `arm64` architectures and a missing systemd), rather than half-configuring an
+  unverified platform;
+- `node-id` is derived from each clone's own hostname, so cloning cannot produce
+  two nodes with the same identity.
+
+Do not add a remote bind to this image: with token auth enabled, a non-loopback
+listener would carry bearer tokens over plaintext HTTP. Put a TLS reverse proxy
+in front of it, or use the audited RPC installer with explicit TLS material.
+
+Do not add token creation to this seed. The first administrative token is
+created and vaulted only by `service.influxdb.1.bootstrap` (`family="core3"`).
+For hosts that already exist, `netbox-rpc` seeds
+`os.linux.debian.13.preflight_influxdb3_core` (read) and
+`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
+apply the same posture over audited SSH; the onboarding sequence is
+`preflight` -> `install` -> `service.influxdb.1.bootstrap`. **`netbox-packer`
+must not import, depend on, or reference `netbox-rpc`** — that dependency is
+one-way, and these procedures are named here as documentation only.
+
 ## Build Dispatch Guardrail
 
 Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the
