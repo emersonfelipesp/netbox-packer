@@ -2444,10 +2444,28 @@ def test_staleness_evaluates_pin_drift_without_an_age_policy() -> None:
     models_src = _read("netbox_packer/models.py")
     jobs_src = _read("netbox_packer/jobs.py")
 
-    assert "base_image_stale = pin_differs_from_built_source(" in models_src
+    assert "pin_differs_from_built_source(" in models_src
     assert "return age_stale or config_stale or base_image_stale" in models_src
     staleness_job = jobs_src.split("class PackerStalenessCheckJob", 1)[1].split("def dispatch_build", 1)[0]
     assert '.exclude(max_age_days=None)' not in staleness_job
+
+    # A pin only counts as drift where the builder actually enforces it. The local Packer
+    # path records no at-build snapshot, so honouring a pin there would report the
+    # template stale forever (desired set, built permanently empty) and `auto_rebuild`
+    # would turn that into an endless rebuild loop. The decision lives in the Django-free
+    # helper so it can be exercised behaviourally rather than matched as source text.
+    from netbox_packer.base_image import base_image_pin_applies
+
+    assert base_image_pin_applies("cloud_config") is True
+    for installer_type in ("autoinstall", "kickstart", "preseed", "", None):
+        assert base_image_pin_applies(installer_type) is False, installer_type
+
+    # `is_stale` must actually consult it, and `clean()` must refuse to create the state.
+    assert "self.supports_base_image_pin and pin_differs_from_built_source(" in models_src
+    assert "base_image_pin_applies(installer.installer_type)" in models_src
+    template_clean = models_src.split("    def clean(self):", 1)[1].split("\n    @property", 1)[0]
+    assert "supports_base_image_pin" in template_clean
+    assert "ValidationError" in template_clean
 
 
 def test_base_image_pin_fields_are_exposed_and_migrated() -> None:

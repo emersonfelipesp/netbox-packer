@@ -338,6 +338,14 @@ hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
 
+**Pins are cloud-config-only.** `PackerTemplate.clean()` rejects `base_image_url` /
+`base_image_sha256` unless the installer config is `cloud_config`, and `is_stale` ignores a
+pin on any other type. Only the cloud-config builder resolves a base image, forwards the
+digest for verification, and records the at-build snapshot; the local Packer path does
+none of those, so a pin there would be silently unenforced and would also make the
+template permanently stale — an endless rebuild loop under `auto_rebuild`. The predicate is
+`base_image.base_image_pin_applies()`.
+
 #### Migration 0029 — the one pinned profile
 
 `0027` added the pin fields and `0028` their at-build snapshots, but no profile used

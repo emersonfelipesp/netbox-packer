@@ -1,11 +1,12 @@
 import base64
 import hashlib
 
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
-from .base_image import pin_differs_from_built_source
+from .base_image import base_image_pin_applies, pin_differs_from_built_source
 from .choices import (
     BuildStatusChoices,
     OSFamilyChoices,
@@ -280,6 +281,28 @@ class PackerTemplate(NetBoxModel):
         return (timezone.now() - self.built_at).days
 
     @property
+    def supports_base_image_pin(self):
+        """Only the cloud_config builder resolves, verifies, and snapshots a base image."""
+        installer = self.installer_config
+        return installer is not None and base_image_pin_applies(installer.installer_type)
+
+    def clean(self):
+        super().clean()
+        # Reject a pin the builder would silently ignore. Accepting one is worse than
+        # useless: it looks like the base image is verified while nothing enforces it, and
+        # because the local path records no at-build snapshot the template also becomes
+        # permanently stale, which `auto_rebuild` turns into an endless rebuild loop.
+        if (self.base_image_url or self.base_image_sha256) and not self.supports_base_image_pin:
+            message = (
+                "Base image pinning applies only to templates whose installer config is "
+                "of type 'cloud_config'. The local Packer builder never resolves a base "
+                "image URL, so a pin here would not be enforced and would leave this "
+                "template permanently stale."
+            )
+            field = "base_image_url" if self.base_image_url else "base_image_sha256"
+            raise ValidationError({field: message})
+
+    @property
     def is_stale(self):
         if self.built_at is None:
             return False
@@ -288,7 +311,14 @@ class PackerTemplate(NetBoxModel):
             and self.installer_config_checksum_at_build
             and self.installer_config.checksum != self.installer_config_checksum_at_build
         )
-        base_image_stale = pin_differs_from_built_source(
+        # Base image pins are only meaningful on the cloud_config path: that is the only
+        # builder which resolves a vendor image, forwards the digest, and records the
+        # at-build snapshot. The local Packer path builds from HCL inputs and writes no
+        # snapshot, so a pin there would leave `built_*` permanently empty while
+        # `desired_*` is set — reporting the template stale forever and, with
+        # `auto_rebuild`, rebuilding it in an endless loop. `clean()` refuses to create
+        # that state; this guard also neutralises any row that already carries it.
+        base_image_stale = self.supports_base_image_pin and pin_differs_from_built_source(
             desired_url=self.base_image_url,
             desired_sha256=self.base_image_sha256,
             built_url=self.base_image_url_at_build,

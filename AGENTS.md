@@ -234,6 +234,13 @@ previously orphaned queued auto-rebuild, set the template to `building`, and cal
   a listing — that proves only that the listing and the field agree.
 - The Debian snapshot directory has **no GPG signature**, so this trust chain is TLS plus
   a published checksum. Do not describe a pinned image as signature-verified.
+- **Base image pins apply only to `cloud_config` installer configs.** `PackerTemplate.clean()`
+  refuses a pin on any other installer type, and `is_stale` ignores one. The local Packer
+  builder never resolves a base image URL and writes no at-build snapshot, so a pin there
+  would be unenforced *and* would leave the template permanently stale — which
+  `auto_rebuild` turns into an endless rebuild loop. The decision lives in
+  `base_image.base_image_pin_applies()`; keep `PIN_CAPABLE_INSTALLER_TYPES` in step with
+  `PackerInstallerConfig.INSTALLER_TYPE_CHOICES`.
 
 ## Build Dispatch Guardrail
 
