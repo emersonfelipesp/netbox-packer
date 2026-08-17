@@ -112,10 +112,14 @@ nms UI /virtualization/packer (Create dialog -> Build)
   -> PackerTemplateViewSet.build(): create PackerBuild -> dispatch_build(build)
   -> PackerBuildJob (RQ), cloud_config branch -> _run_proxbox_cloud_build()
        -> proxbox_client.call_proxbox_build()
-       -> POST {PackerPluginSettings.proxbox_api_url}/cloud/templates/images
-            header X-Proxbox-API-Key
-            body { name, vmid, target_node, image_url, image_storage, vm_storage,
-                   user_data_yaml = installer_config.content, execute: true, ssh_host }
+       -> PLAN: POST /cloud/templates/images with execute=false
+            <- server-authored recipe_digest
+       -> PREFLIGHT: POST /cloud/templates/images/preflight (contract 1.0)
+            body { endpoint_id, target_node, vmid, provider, storage fields,
+                   recipe_digest, snippets_required }
+            <- ready, findings, signed plan_token, expires_at
+       -> EXECUTE: POST /cloud/templates/images with the same build fields,
+            execute=true, preflight_plan_token=<returned token>
   -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
        on <vm_storage>:snippets -> qm template -> returns vmid
   -> PackerBuild.result_template_id=vmid, build_status=success;
@@ -149,15 +153,24 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   arrival.
 - `target_node` MUST collapse an unset value to `None`, never `""` — proxbox-api
   rejects an empty `target_node` with HTTP 422 (`min_length=1`).
+- Executable cloud-config builds MUST use plan → signed preflight → execute.
+  `recipe_digest` comes only from the server-rendered non-executing plan, and
+  every build field remains identical when the returned, unexpired plan token
+  is submitted for execution. Preflight failures/findings, missing or expired
+  tokens, plan rejection, and responses without confirmed execution plus final
+  artifact verification fail the build and remain visible in its log.
 - These contracts are locked by `tests/test_cloud_config_build_static.py` and
   `tests/test_build_dispatch_behavior.py`.
 
 ### Prerequisites (proxbox-api side)
 
-- `proxbox-api >= 0.0.18` with `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` and
-  `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`
-  (`0.0.18.post1`). The target `ProxmoxEndpoint` needs `allow_writes=True`, and
-  the chosen storage must allow `snippets,import,images` content types.
+- `proxbox-api >= 0.0.19.post5` with the signed-preflight contract,
+  `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, and `PROXBOX_SSH_KEY_DIR`; the
+  runtime image bakes in `openssh-client` (`0.0.18.post1`). The target
+  `ProxmoxEndpoint` needs `allow_writes=True`, and the chosen storage must allow
+  `snippets,import,images` content types. A 404 from the preflight endpoint is
+  deliberately incompatible and fails closed; never fall back to the legacy
+  one-step execute call.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 
