@@ -272,7 +272,8 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 | `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
 | `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
-| `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Replaces a row only if its content still matches the exact `0020` baseline; marks rewritten rows' templates `pending` for rebake; reverse is a no-op |
+| `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Locked compare-and-set write, so a concurrent operator edit is never overwritten; a row that no longer matches the exact `0020` baseline **fails the migration by name** rather than being skipped; rebake invalidation follows `installer_config_id`; refuses to run while a build is queued/running; reverse is a no-op |
+| `0027` | *(schema only — base image pin)* | — | — | — | Adds optional `base_image_url` + `base_image_sha256` to `PackerTemplate`. A pinned URL without a digest fails the build closed; the digest is forwarded to proxbox-api as `sha256`. Defaults empty, so existing templates are unchanged |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -328,6 +329,27 @@ that lineage to `provisions_service="akvorado"`; do not replace this with
 hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
+
+#### Migration 0027 — base image pin
+
+Adds `base_image_url` and `base_image_sha256` to `PackerTemplate`, both optional and
+empty by default so every existing template keeps its behaviour and payload.
+`jobs._resolve_cloud_image_source()` resolves URL and digest with precedence
+override → template field → derived release default (URL only), and forwards the digest
+to proxbox-api as `sha256` (a field its `CloudImageTemplateBuildRequest` already
+accepts), omitting it entirely when empty.
+
+**A pinned URL must carry a digest** — supplied by either source — or the build fails
+closed. An unverified pin looks like provenance while guaranteeing nothing about the
+bytes. A malformed digest is refused rather than forwarded; an uppercase one is
+normalised, since hex is case-insensitive. An **unpinned** release build still works
+without a digest, because requiring one everywhere would break every existing template
+at once; that gap closes per profile, by pinning it.
+
+**No profile is pinned by this migration.** Choosing a dated vendor image and obtaining
+a *verified* digest are operator judgements — see
+`docs/cloud-init-template-images.md` → "Base Image Pinning" for the procedure, including
+the requirement to record where each digest came from and how it was verified.
 
 #### Migration 0025 — InfluxDB 3 Core on Debian 13
 

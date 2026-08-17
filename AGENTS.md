@@ -193,6 +193,25 @@ confirmed execution and artifact verification fail the build with an actionable
 log entry. A 404 from the preflight endpoint means the proxbox-api service is
 incompatible; do not fall back to legacy one-step execution.
 
+## Base Image Pin Guardrail
+
+`PackerTemplate.base_image_url` / `base_image_sha256` (migration `0027`) pin a template
+to an exact vendor artifact and its reviewed digest, which
+`jobs._resolve_cloud_image_source()` forwards to proxbox-api as `sha256`.
+`variable_overrides['image_url']` / `['image_sha256']` override them per build.
+
+- **A pinned URL without a digest fails the build, by design.** Never "fix" that by
+  making the digest optional for pinned URLs — an unverified pin looks like provenance
+  while proving nothing.
+- **Never invent, guess, or copy an unverified digest**, and never take one from this
+  repository's history. Obtain it from the vendor's published checksum file for the
+  exact artifact, verify it by downloading and hashing, and record where it came from.
+- An **unpinned** release build still resolves the vendor's mutable `latest` directory
+  with no digest. That is a known, accepted gap — closing it is per-profile pinning, not
+  a blanket requirement, which would break every existing template at once.
+- A malformed digest is refused rather than forwarded; an uppercase digest is
+  normalised. Keep both behaviours.
+
 ## Build Dispatch Guardrail
 
 Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the

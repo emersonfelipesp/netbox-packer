@@ -181,6 +181,8 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "zabbix_server",
             "install_nms_agent",
             "nms_agent_backend_url",
+            "base_image_url",
+            "base_image_sha256",
             "provisions_service",
             "tags",
             "custom_fields",

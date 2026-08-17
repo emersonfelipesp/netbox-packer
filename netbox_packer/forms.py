@@ -117,6 +117,8 @@ class PackerTemplateForm(NetBoxModelForm):
             "zabbix_server",
             "install_nms_agent",
             "nms_agent_backend_url",
+            "base_image_url",
+            "base_image_sha256",
             "tags",
         )
         fieldsets = (
@@ -149,6 +151,11 @@ class PackerTemplateForm(NetBoxModelForm):
                 "install_nms_agent",
                 "nms_agent_backend_url",
                 name="Monitoring Agents",
+            ),
+            FieldSet(
+                "base_image_url",
+                "base_image_sha256",
+                name="Base Image Pin",
             ),
             FieldSet(
                 "hcp_bucket_name",

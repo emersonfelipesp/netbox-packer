@@ -283,6 +283,57 @@ only and builds nothing. Confirm VMID `9052` is free on the destination cluster
 before baking, and supersede a bad artifact by baking a new VMID rather than
 deleting the previous one.
 
+## Base Image Pinning (reproducible, verifiable OS bases)
+
+A cloud-init bake downloads a vendor base image that becomes the guest's **entire
+operating system**. By default `netbox-packer` derives that URL from the template's
+`os_family`/`os_version` and points at the vendor's **mutable `latest`** directory,
+sending no content digest — so rebuilding the same profile can silently produce a
+different root filesystem, and the artifact is accepted with no integrity check.
+
+`PackerTemplate` therefore carries two optional fields:
+
+| Field | Purpose |
+|---|---|
+| `base_image_url` | An exact (normally dated) vendor artifact, replacing the derived release default. |
+| `base_image_sha256` | The reviewed digest, forwarded to proxbox-api as `sha256` and verified after download. |
+
+Both may also be supplied per build via `variable_overrides['image_url']` and
+`variable_overrides['image_sha256']`, which take precedence over the template fields.
+
+**The rule that matters: a pinned URL must carry a digest.** If an explicit URL comes
+from either source and no digest resolves, `jobs._resolve_cloud_image_source()` raises
+and the build fails closed. A pin without verification is the worst of both worlds — it
+looks like provenance while guaranteeing nothing about the bytes, and it does not even
+survive the vendor replacing the artifact at that URL. A malformed digest is refused
+rather than forwarded; an uppercase digest is normalised, since hex is case-insensitive.
+
+An **unpinned** release build still runs without a digest. Requiring one everywhere
+would break every existing template at once, so that gap is closed per profile, by
+pinning it.
+
+### What this does NOT do
+
+**No profile is pinned by this change.** Pinning requires two judgements that must not
+be guessed: which dated vendor image a profile should target, and a digest that has
+actually been *verified*. An invented or unverified digest is worse than none.
+
+To pin a profile:
+
+1. Choose a dated vendor directory instead of `latest` (for example a dated Debian
+   cloud-image build, or an Ubuntu release-dated image).
+2. Obtain the digest from the vendor's own published checksum file for that exact
+   artifact — not from a mirror, a search result, or this repository's history.
+3. Verify it: download the image, compute `sha256sum`, and confirm it matches the
+   vendor's published value.
+4. Set `base_image_url` and `base_image_sha256` on the template, and record in the
+   template description (or the pinning PR) **where the digest came from and how it was
+   verified**.
+5. Rebake the profile so the recorded artifact is the one in use.
+
+Pinning trades automatic upstream fixes for reproducibility, so a pinned profile needs a
+periodic refresh to pick up base-image security updates.
+
 ## PowerDNS Authoritative + Recursor Template
 
 Migration `0013_seed_powerdns_auth_recursor_cloud_init.py` seeds a co-hosted

@@ -174,6 +174,7 @@ def call_proxbox_build(
     target_node: str | None,
     image_url: str,
     user_data_yaml: str,
+    image_sha256: str = "",
     endpoint_id: int | None = None,
     image_storage: str = "local",
     vm_storage: str = "local",
@@ -212,6 +213,11 @@ def call_proxbox_build(
         "bridge": bridge,
         "provider": "release_image",
     }
+    if image_sha256:
+        # proxbox-api's CloudImageTemplateBuildRequest verifies the downloaded image
+        # against this digest. Omitted entirely when empty, so an unpinned build keeps
+        # a byte-for-byte identical payload.
+        payload["sha256"] = image_sha256
     if endpoint_id is not None:
         payload["endpoint_id"] = endpoint_id
     if ssh_host:

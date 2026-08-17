@@ -46,6 +46,8 @@ def _get_plugin_setting(key, default=None):
 # Debian publishes cloud images under the release codename, so a numeric
 # os_version cannot be interpolated into the URL directly. Keep this in step with
 # choices.OS_VERSIONS_BY_FAMILY[debian].
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
 _DEBIAN_CODENAMES = {
     "11": "bullseye",
     "12": "bookworm",
@@ -53,15 +55,52 @@ _DEBIAN_CODENAMES = {
 }
 
 
-def _resolve_cloud_image_url(template, overrides):
-    """Resolve the base cloud image URL for a cloud_config build.
+def _resolve_cloud_image_source(template, overrides):
+    """Resolve the base image URL and its digest, refusing an unverified pin.
 
-    Honors ``variable_overrides['image_url']`` first, then derives a sensible
-    default from ``os_family`` / ``os_version``.
+    Returns ``(image_url, sha256)`` where ``sha256`` may be empty. A digest is
+    lowercased before validation, since hex is case-insensitive and an operator
+    pasting a vendor checksum verbatim should not fail the build.
+
+    Precedence for each is override -> template field -> derived default (URL only).
+    A **pinned** URL — one supplied explicitly by an override or by
+    ``template.base_image_url``, rather than derived from the release — must carry a
+    digest, and the build fails closed without one. A pin that is not verified only
+    looks like provenance: it neither guarantees the bytes nor survives the vendor
+    replacing the artifact.
+
+    A derived release URL is still allowed without a digest, because those point at
+    the vendor's mutable ``latest`` directory and requiring a digest there would break
+    every existing template at once. That remains a known gap; pinning a profile is
+    how it gets closed, one profile at a time.
     """
-    override = (overrides or {}).get("image_url")
-    if override:
-        return str(override)
+    overrides = overrides or {}
+    override_url = str(overrides.get("image_url") or "").strip()
+    override_sha = str(overrides.get("image_sha256") or "").strip().lower()
+    template_url = str(getattr(template, "base_image_url", "") or "").strip()
+    template_sha = str(getattr(template, "base_image_sha256", "") or "").strip().lower()
+
+    pinned_url = override_url or template_url
+    sha256 = override_sha or template_sha
+    if sha256 and not _SHA256_RE.fullmatch(sha256):
+        raise RuntimeError(
+            f"Base image sha256 must be a lowercase 64-character hexadecimal digest; got {sha256[:16]!r}."
+        )
+    if pinned_url and not sha256:
+        source = "variable_overrides['image_url']" if override_url else "the template's base_image_url"
+        raise RuntimeError(
+            f"{source} pins an exact base image but no sha256 digest was supplied. "
+            "Set base_image_sha256 on the template (or variable_overrides"
+            "['image_sha256']) to a digest you have verified, or clear the pinned URL "
+            "to use the release default."
+        )
+    if pinned_url:
+        return pinned_url, sha256
+    return _derive_release_image_url(template), sha256
+
+
+def _derive_release_image_url(template):
+    """Derive the vendor release image URL from ``os_family`` / ``os_version``."""
     fam = (template.os_family or "").lower()
     ver = (template.os_version or "").strip()
     if fam == "ubuntu" and ver:
@@ -608,7 +647,7 @@ class PackerBuildJob(JobRunner):
         storage = _resolve_storage(template, build.variable_overrides)
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
         target_node = _resolve_target_node(template, node, build.variable_overrides)
-        image_url = _resolve_cloud_image_url(template, build.variable_overrides)
+        image_url, image_sha256 = _resolve_cloud_image_source(template, build.variable_overrides)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
         endpoint_id = _resolve_endpoint_id(build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
@@ -666,6 +705,7 @@ class PackerBuildJob(JobRunner):
                 vmid=template_vmid,
                 target_node=target_node,
                 image_url=image_url,
+                image_sha256=image_sha256,
                 user_data_yaml=user_data_yaml,
                 image_storage=storage,
                 vm_storage=storage,

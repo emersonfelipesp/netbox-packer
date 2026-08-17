@@ -207,6 +207,42 @@ class PackerTemplate(NetBoxModel):
     # changing the meaning of an established golden template.
     provisions_service = models.CharField(max_length=64, blank=True, default="", editable=False)
 
+    # Reproducible, verifiable OS base. Without these the bake resolves the vendor's
+    # mutable "latest" directory, so rebuilding the same profile can silently produce a
+    # different root filesystem, and the artifact that becomes the guest's entire
+    # operating system is accepted with no integrity check.
+    #
+    # base_image_url pins an exact (normally dated) vendor artifact instead of the
+    # derived default. base_image_sha256 is the digest proxbox-api verifies after
+    # download. Setting a pinned URL without a digest is refused at build time — see
+    # jobs._resolve_cloud_image_source() — because a pin that is not verified only looks
+    # like provenance.
+    base_image_url = models.URLField(
+        blank=True,
+        default="",
+        max_length=500,
+        help_text=(
+            "Optional exact base image URL, pinning this template to a specific vendor "
+            "artifact instead of the release default. Requires Base image sha256."
+        ),
+    )
+    base_image_sha256 = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        validators=[
+            RegexValidator(
+                regex=r"^[0-9a-f]{64}$",
+                message="Enter a lowercase 64-character hexadecimal sha256 digest.",
+            )
+        ],
+        help_text=(
+            "Reviewed sha256 of the base image, verified by proxbox-api after download. "
+            "Record where the digest was obtained and verified; an unverified digest "
+            "proves nothing."
+        ),
+    )
+
     class Meta:
         ordering = ["name"]
         verbose_name = "Packer Template"

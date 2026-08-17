@@ -101,6 +101,16 @@ RPC. For hosts that already exist, the audited procedures
 `os.linux.debian.13.preflight_influxdb3_core` and
 `os.linux.debian.13.install_influxdb3_core` apply the same posture over SSH.
 
+Templates can pin their **base image**: `base_image_url` selects an exact vendor
+artifact instead of the mutable `latest` release directory, and `base_image_sha256`
+carries the reviewed digest that proxbox-api verifies after download (both are also
+settable per build via `variable_overrides`). A pinned URL without a digest fails the
+build closed — an unverified pin looks like provenance while guaranteeing nothing. No
+seeded profile is pinned yet; see
+[`docs/cloud-init-template-images.md`](docs/cloud-init-template-images.md) for the
+procedure, which requires obtaining each digest from the vendor's published checksum
+file and verifying it.
+
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
 node `10.0.30.71`: a base node image `k8s-1.31-ubuntu-2404-node` (VMID `9012`)
 that installs containerd + kubelet/kubeadm/kubectl 1.31 and pre-pulls

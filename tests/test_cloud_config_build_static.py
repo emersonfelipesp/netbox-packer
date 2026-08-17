@@ -1896,21 +1896,24 @@ def test_influxdb3_core_debian13_build_resolves_a_debian_13_image(monkeypatch) -
     """
 
     jobs = _load_jobs_isolated(monkeypatch)
-    template = SimpleNamespace(os_family="debian", os_version="13")
+    template = _template(os_family="debian", os_version="13")
 
-    url = jobs._resolve_cloud_image_url(template, None)
+    url, sha = jobs._resolve_cloud_image_source(template, None)
 
     assert "trixie" in url
     assert "debian-13-genericcloud" in url
     assert "bookworm" not in url and "debian-12" not in url
+    assert sha == ""
     # Other releases keep working, and an unknown one fails loudly instead of
     # falling back to some arbitrary image.
-    assert "bookworm" in jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="12"), None)
-    assert "bullseye" in jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="11"), None)
+    assert "bookworm" in jobs._resolve_cloud_image_source(_template(os_family="debian", os_version="12"), None)[0]
+    assert "bullseye" in jobs._resolve_cloud_image_source(_template(os_family="debian", os_version="11"), None)[0]
     with pytest.raises(RuntimeError):
-        jobs._resolve_cloud_image_url(SimpleNamespace(os_family="debian", os_version="99"), None)
-    # An explicit override still wins.
-    assert jobs._resolve_cloud_image_url(template, {"image_url": "http://x/y.qcow2"}) == "http://x/y.qcow2"
+        jobs._resolve_cloud_image_source(_template(os_family="debian", os_version="99"), None)
+    # An explicit override still wins — but only with a digest (see the pin tests).
+    assert jobs._resolve_cloud_image_source(
+        template, {"image_url": "http://x/y.qcow2", "image_sha256": "a" * 64}
+    ) == ("http://x/y.qcow2", "a" * 64)
 
 
 def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
@@ -2111,6 +2114,132 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
     assert 'installer_config_checksum_at_build=""' in source
     assert ".delete()" not in source
     assert 'dependencies = [\n        ("netbox_packer", "0025_seed_influxdb3_core_debian13_cloud_init"),' in source
+def _template(**overrides):
+    """A PackerTemplate stand-in with the base-image pin fields defaulted to empty."""
+
+    fields = {
+        "os_family": "ubuntu",
+        "os_version": "24.04",
+        "base_image_url": "",
+        "base_image_sha256": "",
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def test_pinned_base_image_requires_a_verified_digest(monkeypatch) -> None:
+    """A pin without a digest must fail the build, not be trusted.
+
+    A pinned URL with no digest is the worst of both worlds: it looks like provenance
+    while guaranteeing nothing about the bytes, and it does not even survive the vendor
+    replacing the artifact at that URL.
+    """
+
+    jobs = _load_jobs_isolated(monkeypatch)
+    digest = "b" * 64
+
+    # Pinned on the template, no digest -> refused, and the message names the source.
+    with pytest.raises(RuntimeError) as exc_info:
+        jobs._resolve_cloud_image_source(_template(base_image_url="https://vendor.example/img.qcow2"), None)
+    assert "base_image_url" in str(exc_info.value)
+
+    # Pinned by override, no digest -> also refused.
+    with pytest.raises(RuntimeError) as exc_info:
+        jobs._resolve_cloud_image_source(_template(), {"image_url": "https://vendor.example/img.qcow2"})
+    assert "image_url" in str(exc_info.value)
+
+    # Template pin plus template digest resolves.
+    assert jobs._resolve_cloud_image_source(
+        _template(base_image_url="https://vendor.example/img.qcow2", base_image_sha256=digest),
+        None,
+    ) == ("https://vendor.example/img.qcow2", digest)
+
+    # An override digest satisfies a template pin, and an override URL wins over both.
+    assert jobs._resolve_cloud_image_source(
+        _template(base_image_url="https://vendor.example/old.qcow2"),
+        {"image_url": "https://vendor.example/new.qcow2", "image_sha256": digest},
+    ) == ("https://vendor.example/new.qcow2", digest)
+
+    # An uppercase digest is normalised rather than rejected: hex is case-insensitive,
+    # and an operator pasting a vendor checksum verbatim should not break the build.
+    assert jobs._resolve_cloud_image_source(
+        _template(base_image_url="https://vendor.example/img.qcow2", base_image_sha256="B" * 64),
+        None,
+    ) == ("https://vendor.example/img.qcow2", digest)
+
+    # A malformed digest is refused rather than forwarded to proxbox-api.
+    for malformed in ("deadbeef", "g" * 64, "a" * 63, "a" * 65, "a" * 63 + "!"):
+        with pytest.raises(RuntimeError):
+            jobs._resolve_cloud_image_source(
+                _template(base_image_url="https://vendor.example/img.qcow2", base_image_sha256=malformed),
+                None,
+            )
+
+    # An UNPINNED release build still works without a digest: requiring one there would
+    # break every existing template at once. That remaining gap is why pinning exists.
+    url, sha = jobs._resolve_cloud_image_source(_template(), None)
+    assert url.startswith("https://cloud-images.ubuntu.com/")
+    assert sha == ""
+
+
+def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None:
+    """The digest must reach proxbox-api, and an unpinned payload must not change."""
+
+    spec = importlib.util.spec_from_file_location(
+        "netbox_packer.proxbox_client_isolated", PKG / "proxbox_client.py"
+    )
+    assert spec and spec.loader
+    client = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+
+    captured = {}
+
+    def fake_post_json(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_post_json", fake_post_json)
+
+    common = {
+        "proxbox_api_url": "https://proxbox.example",
+        "proxbox_api_key": "k",
+        "name": "tpl",
+        "vmid": 9052,
+        "target_node": "node1",
+        "image_url": "https://vendor.example/img.qcow2",
+        "user_data_yaml": "#cloud-config\n",
+    }
+
+    client.call_proxbox_build(**common, image_sha256="c" * 64)
+    assert captured["payload"]["sha256"] == "c" * 64
+    assert captured["path"] == "/cloud/templates/images"
+
+    captured.clear()
+    client.call_proxbox_build(**common)
+    # Omitted entirely, so an unpinned build keeps a byte-for-byte identical payload.
+    assert "sha256" not in captured["payload"]
+
+
+def test_base_image_pin_fields_are_exposed_and_migrated() -> None:
+    """A field nobody can set is not a feature."""
+
+    models_src = _read("netbox_packer/models.py")
+    assert "base_image_url = models.URLField(" in models_src
+    assert "base_image_sha256 = models.CharField(" in models_src
+    assert r"^[0-9a-f]{64}$" in models_src
+
+    migration = _read("netbox_packer/migrations/0027_packertemplate_base_image_pin.py")
+    for field in ("base_image_url", "base_image_sha256"):
+        assert f'name="{field}"' in migration, field
+    # Depends on 0026, not 0025: both this branch and the 0020 hardening originally
+    # numbered themselves 0026, which would have left two migration leaves.
+    assert '("netbox_packer", "0026_harden_influxdb_0020_profiles")' in migration
+
+    forms_src = _read("netbox_packer/forms.py")
+    serializer_src = _read("netbox_packer/api/serializers.py")
+    for field in ("base_image_url", "base_image_sha256"):
+        assert f'"{field}"' in forms_src, ("forms", field)
+        assert f'"{field}"' in serializer_src, ("serializer", field)
 
 
 def test_influxdb3_core_debian13_contract_is_documented() -> None:
