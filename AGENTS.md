@@ -69,6 +69,29 @@ package — and adds a baked production posture that must not be relaxed:
   map in step with `choices.OS_VERSIONS_BY_FAMILY[debian]`, and remember a
   `cloud_config` bake never runs cloud-init, so a wrong base image is not caught
   at build time.
+- **Only the expected repository signing key may be trusted.** The script imports
+  the downloaded key into an isolated `GNUPGHOME` and exports **only** the expected
+  primary fingerprint (`--export-options export-minimal`), then asserts the exported
+  keyring holds exactly one `pub` key with that fingerprint. Do not go back to
+  `grep`-ing the downloaded file for the fingerprint and `gpg --dearmor`-ing the
+  whole thing: a substituted file carrying the genuine key **plus** an attacker key
+  passes that check, and the attacker key could then sign repository metadata and
+  obtain root during `apt-get install`.
+- **Only a final `3.11.0` package version is accepted.** A tilde sorts *before* the
+  release it qualifies, so `3.11.0~rc1` is a prerelease; the candidate regex and the
+  post-install `dpkg-query` check both refuse any `~` version, so the profile cannot
+  silently install and hold an unreviewed vendor build while reporting success.
+- **The collision guard must not compare mutable build state.** It excludes
+  `build_status` and `packer_template_ref` (`_MUTABLE_BUILD_STATE_FIELDS`), because a
+  successful bake flips `build_status` from `pending` to `ready` — comparing it would
+  make rolling `0025` back and reapplying it raise a bogus collision on the row the
+  migration created itself, blocking deployment recovery and migration replay.
+- **Known accepted risk: the base image is the mutable vendor `latest`, with no
+  digest.** This is pre-existing for every seeded profile, not specific to this one,
+  and is tracked in issue #96 (pin a dated image plus a reviewed `sha256`, forwarded
+  through `call_proxbox_build` to `proxbox-api`, failing closed when a pinned profile
+  has none). Do not add a digest without recording how it was obtained and verified —
+  an unverified digest looks like provenance while proving nothing.
 
 Do not add a remote bind to this image: with token auth enabled, a non-loopback
 listener would carry bearer tokens over plaintext HTTP. Put a TLS reverse proxy

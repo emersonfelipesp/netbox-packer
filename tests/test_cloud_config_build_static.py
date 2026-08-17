@@ -45,6 +45,25 @@ def _resolve_static_value(node: ast.AST, constants: dict[str, object]) -> object
     return ast.literal_eval(node)
 
 
+def _frozenset_members(rel: str, name: str) -> set[str]:
+    """Return the string members of a module-level ``name = frozenset({...})``.
+
+    ``_literal_assignments`` cannot evaluate this, because ``frozenset(...)`` is a
+    call rather than a literal. Raises if the assignment is missing, so the guard
+    cannot silently degrade into asserting nothing.
+    """
+
+    for node in ast.parse(_read(rel)).body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        if getattr(node.targets[0], "id", None) != name:
+            continue
+        call = node.value
+        assert isinstance(call, ast.Call), f"{name} is not a frozenset(...) call"
+        return {member for member in ast.literal_eval(call.args[0]) if isinstance(member, str)}
+    raise AssertionError(f"{name} not found in {rel}")
+
+
 def _packer_template_seed_defaults(rel: str) -> tuple[str, dict[str, object]]:
     tree = ast.parse(_read(rel))
     constants = _literal_assignments(rel)
@@ -1379,6 +1398,18 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     assert source.count("objects.get_or_create(") == 2
     assert "InfluxDB 3 Core Debian 13 seed naming collision" in source
     assert 'template_expected_values["installer_config_id"] = config.pk' in source
+    # A successful bake flips build_status "pending" -> "ready", so comparing
+    # mutable build state would make rollback-then-reapply of this migration raise a
+    # bogus collision on the row it created itself.
+    assert "_MUTABLE_BUILD_STATE_FIELDS" in source
+    mutable = _frozenset_members(rel, "_MUTABLE_BUILD_STATE_FIELDS")
+    assert "build_status" in mutable
+    assert "packer_template_ref" in mutable
+    assert "installer_config" in mutable
+    assert "field not in _MUTABLE_BUILD_STATE_FIELDS" in source
+    # ...but seed identity and configuration are still compared.
+    for compared in ("os_family", "os_version", "proxmox_template_id", "storage_pool"):
+        assert compared not in mutable, compared
 
     assert defaults["os_family"] == "debian"
     assert defaults["os_version"] == "13"
@@ -1430,11 +1461,24 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     assert "amd64|arm64)" in install_script
     assert "/run/systemd/system" in install_script
 
-    # Repository trust, version pin, and hold.
+    # Repository trust: exactly ONE key, pinned to the expected fingerprint.
+    # Proving the downloaded file merely *contains* the fingerprint and then
+    # dearmoring all of it would also trust an attacker key bundled alongside the
+    # genuine one, which could sign repository metadata and gain root at install.
     assert "24C975CBA61A024EE1B631787C3D57159FC2F927" in install_script
+    assert "gpg --dearmor" not in install_script
+    assert "--export --export-options export-minimal" in install_script
+    assert "GNUPGHOME=" in install_script
+    assert "grep -c '^pub:'" in install_script
+    assert "test \"${exported_primaries}\" = '1'" in install_script
+
+    # Version pin: a FINAL release only. A tilde sorts before the release it
+    # qualifies, so "3.11.0~rc1" is a prerelease and must be refused.
     assert "apt-cache madison" in install_script
-    assert "3[.]11[.]0([+~-]|$)" in install_script
-    assert "3.11.0|3.11.0[-+~]*" in install_script
+    assert "3[.]11[.]0(-[0-9A-Za-z.+]+)?$" in install_script
+    assert "Refusing prerelease" in install_script
+    assert "3.11.0|3.11.0-*)" in install_script
+    assert "3.11.0[-+~]*" not in install_script
     assert 'apt-get install -y --no-install-recommends "${PACKAGE_NAME}=${package_version}"' in install_script
     assert 'apt-mark hold "${PACKAGE_NAME}"' in install_script
     assert "latest" not in install_script

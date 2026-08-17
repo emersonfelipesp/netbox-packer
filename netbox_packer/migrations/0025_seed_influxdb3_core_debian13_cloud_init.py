@@ -39,6 +39,8 @@ INFLUXDB3_CORE_DEBIAN13_CLOUD_CONFIG = r"""#cloud-config
 #   - Python Processing Engine disabled (no plugin-dir)
 #   - explicit managed configuration file plus a systemd drop-in
 #   - package held after install, for controlled upgrades
+#   - only the expected repository signing key is trusted, and only a final
+#     (non-prerelease) 3.11.0 package version is accepted
 #
 # Credential-free by design. No administrative token, TLS material, or per-bake
 # state is written into this image: the first admin token is created and vaulted
@@ -127,16 +129,40 @@ write_files:
 
       install -d -m 0755 /etc/apt/keyrings
 
-      # Verify the repository signing key by fingerprint before trusting it.
+      # Trust EXACTLY ONE key. Checking that the downloaded file *contains* the
+      # expected fingerprint and then dearmoring the whole file would also trust
+      # any extra key bundled alongside it — a substituted file carrying the
+      # genuine key plus an attacker key passes a `grep` check, and that attacker
+      # key could then sign repository metadata and get root during install. So
+      # import into an isolated keyring and export only the expected primary
+      # fingerprint, then prove the exported keyring holds that one key and
+      # nothing else.
+      keyring_workdir="$(mktemp -d)"
+      chmod 0700 "${keyring_workdir}"
+      cleanup_keyring_workdir() {
+        rm -rf "${keyring_workdir}"
+      }
+      trap cleanup_keyring_workdir EXIT
       curl --fail --silent --show-error --location \
         --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
-        --output /tmp/influxdata-archive.key \
+        --output "${keyring_workdir}/influxdata-archive.key" \
         https://repos.influxdata.com/influxdata-archive.key
-      gpg --show-keys --with-fingerprint --with-colons /tmp/influxdata-archive.key 2>&1 \
-        | grep -q "^fpr:\+${EXPECTED_KEY_FINGERPRINT}:$"
-      gpg --dearmor < /tmp/influxdata-archive.key > "${KEYRING_FILE}"
-      rm -f /tmp/influxdata-archive.key
-      chmod 0644 "${KEYRING_FILE}"
+      GNUPGHOME="${keyring_workdir}" gpg --batch --quiet \
+        --import "${keyring_workdir}/influxdata-archive.key"
+      GNUPGHOME="${keyring_workdir}" gpg --batch --yes \
+        --export --export-options export-minimal \
+        "${EXPECTED_KEY_FINGERPRINT}" > "${keyring_workdir}/influxdata-archive.gpg"
+      test -s "${keyring_workdir}/influxdata-archive.gpg"
+      # Exactly one primary key, and it is the expected fingerprint.
+      exported_primaries="$(gpg --show-keys --with-colons \
+        "${keyring_workdir}/influxdata-archive.gpg" | grep -c '^pub:' || true)"
+      test "${exported_primaries}" = '1'
+      gpg --show-keys --with-colons "${keyring_workdir}/influxdata-archive.gpg" \
+        | grep -q "^fpr:::::::::${EXPECTED_KEY_FINGERPRINT}:$"
+      install -o root -g root -m 0644 \
+        "${keyring_workdir}/influxdata-archive.gpg" "${KEYRING_FILE}"
+      cleanup_keyring_workdir
+      trap - EXIT
       echo "deb [signed-by=${KEYRING_FILE}] https://repos.influxdata.com/debian stable main" \
         > "${SOURCE_FILE}"
 
@@ -144,19 +170,29 @@ write_files:
 
       # Pin to the requested semantic patch version, then verify what apt
       # actually installed before holding it.
+      # Accept only a FINAL 3.11.0 release, optionally with a Debian revision.
+      # A tilde sorts before the release it qualifies, so "3.11.0~rc1" is a
+      # prerelease: matching it would silently install and hold an unreviewed
+      # vendor build while still reporting success for the 3.11.0 profile.
       package_version="$(apt-cache madison "${PACKAGE_NAME}" | awk '
         {
           candidate=$3
           normalized=candidate
           sub(/^[0-9]+:/, "", normalized)
-          if (normalized ~ /^3[.]11[.]0([+~-]|$)/) { print candidate; exit }
+          if (normalized ~ /^3[.]11[.]0(-[0-9A-Za-z.+]+)?$/) { print candidate; exit }
         }')"
       test -n "${package_version}"
       apt-get install -y --no-install-recommends "${PACKAGE_NAME}=${package_version}"
       installed="$(dpkg-query -W -f='${Version}' "${PACKAGE_NAME}")"
       normalized="${installed#*:}"
       case "${normalized}" in
-        3.11.0|3.11.0[-+~]*) ;;
+        *'~'*)
+          echo "Refusing prerelease ${PACKAGE_NAME} version: ${installed}" >&2
+          exit 1
+          ;;
+      esac
+      case "${normalized}" in
+        3.11.0|3.11.0-*) ;;
         *)
           echo "Unexpected ${PACKAGE_NAME} version: ${installed}" >&2
           exit 1
@@ -259,6 +295,15 @@ PROXMOX_NODE = "select-at-build"
 # 9051 Core 3 on Ubuntu). Confirm it is still unused on the destination cluster
 # before baking; supersede a bad artifact with a new VMID rather than deleting one.
 TEMPLATE_VMID = 9052
+# Written by the build pipeline, not by this seed. Excluded from the collision
+# comparison plus `installer_config`, which is compared as `installer_config_id`.
+_MUTABLE_BUILD_STATE_FIELDS = frozenset(
+    {
+        "installer_config",
+        "build_status",
+        "packer_template_ref",
+    }
+)
 
 
 def seed_influxdb3_core_debian13(apps, schema_editor):
@@ -336,8 +381,14 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
         defaults=template_defaults,
     )
     if not template_created:
+        # Compare only the seed's own identity and configuration. build_status and
+        # packer_template_ref are machine-written build state: a successful bake
+        # flips build_status from "pending" to "ready", so comparing them would make
+        # rollback-then-reapply of this very migration raise a bogus collision on
+        # the row it created itself, blocking deployment recovery and migration
+        # replay.
         template_expected_values = {
-            field: expected for field, expected in template_defaults.items() if field != "installer_config"
+            field: expected for field, expected in template_defaults.items() if field not in _MUTABLE_BUILD_STATE_FIELDS
         }
         template_expected_values["installer_config_id"] = config.pk
         mismatches = [

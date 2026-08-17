@@ -236,6 +236,14 @@ apply the same posture over audited SSH and accept the installer's parameters
 sanctioned onboarding sequence remains `preflight` -> `install` ->
 `service.influxdb.1.bootstrap`.
 
+**Known accepted risk (tracked in issue #96).** Like every other seeded profile,
+this one resolves the vendor's **mutable `latest`** image directory and passes no
+content digest to `proxbox-api`, so a rebuild is not guaranteed to reproduce the same
+root filesystem. Pinning a dated image plus a reviewed `sha256` — and failing closed
+when a pinned profile lacks one — is deliberately deferred to that issue rather than
+half-implemented, because an unverified digest would look like provenance while
+proving nothing.
+
 Per the estate destructive-operation guardrail this migration seeds catalog rows
 only and builds nothing. Confirm VMID `9052` is free on the destination cluster
 before baking, and supersede a bad artifact by baking a new VMID rather than

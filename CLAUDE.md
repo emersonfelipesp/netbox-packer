@@ -345,8 +345,16 @@ The difference from the Ubuntu Core 3 profile (`9051`) is that this one bakes a
   node identity;
 - Debian-13-only gate on `/etc/os-release` plus `amd64`/`arm64` and systemd
   checks, exiting non-zero rather than half-configuring another platform;
-- fingerprint-verified InfluxData key, `apt-cache madison` pin to `3.11.0`,
-  post-install version re-verification, `apt-mark hold`, and a genuinely bounded
+- a **single-key** trust boundary: the downloaded key is imported into an isolated
+  `GNUPGHOME` and only the expected primary fingerprint is exported
+  (`--export-options export-minimal`), with the exported keyring then asserted to
+  hold exactly one `pub` key with that fingerprint. Checking that the downloaded file
+  merely *contains* the fingerprint and dearmoring all of it would also trust an
+  attacker key bundled alongside the genuine one, which could sign repository
+  metadata and gain root during install;
+- an `apt-cache madison` pin to a **final** `3.11.0` (any `~` prerelease is refused
+  in both candidate selection and the post-install `dpkg-query` check),
+  `apt-mark hold`, and a genuinely bounded
   wait on the unauthenticated `http://127.0.0.1:8181/ready` endpoint — each probe
   carries `--connect-timeout`/`--max-time` and the loop enforces an overall
   deadline, so a socket that accepts but never answers cannot hang
