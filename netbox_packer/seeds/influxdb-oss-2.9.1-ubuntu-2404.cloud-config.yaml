@@ -13,8 +13,26 @@ write_files:
     owner: root:root
     content: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      set -Eeuo pipefail
       export DEBIAN_FRONTEND=noninteractive
+
+      # Cloud-init shellifies runcmd into a plain /bin/sh script with no `set -e`, and
+      # build-time injection appends the Zabbix bootstrap AFTER this installer, so a
+      # non-zero exit here is masked by a later command's success and cloud-init still
+      # reports success. Record a durable marker instead of relying on that exit
+      # status, and never delete this script, so a failed guest keeps its evidence.
+      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      record_install_failure() {
+        local exit_code=$?
+        install -d -m 0755 /var/lib/nms || true
+        {
+          printf 'installer: %s\n' "$0"
+          printf 'exit_code: %s\n' "${exit_code}"
+          printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "${NMS_FAILURE_MARKER}" || true
+        return "${exit_code}"
+      }
+      trap record_install_failure ERR
       readonly PRODUCT_VERSION='2.9.1'
       install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
       # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
@@ -99,4 +117,3 @@ write_files:
       exit 1
 runcmd:
   - [bash, /opt/nms-influxdb-install.sh]
-  - [rm, -f, /opt/nms-influxdb-install.sh]

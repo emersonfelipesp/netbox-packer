@@ -55,12 +55,34 @@ its shell shape and therefore its three defects:
 The hardened sources are tracked verbatim at
 `netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml` and
 `netbox_packer/seeds/influxdb-core-3.11.0-ubuntu-2404.cloud-config.yaml`; the `0026`
-constants must stay byte-identical to them. **`0026` replaces a row only when its
-content still matches the exact `0020` baseline**, so an operator-modified profile is
-left untouched — such a row still needs these three fixes applied by hand. Rewritten
-rows have their templates marked `pending` for a rebake; nothing is deleted, and the
-reverse is a deliberate no-op because rolling back must not restore a keyring that
-accepts attacker-supplied keys.
+constants must stay byte-identical to them.
+
+Four behaviours of `0026` are deliberate and must not be "simplified":
+
+- **A row that no longer matches the exact `0020` baseline fails the migration**, with
+  the offending rows named. It is not rewritten (that would discard an operator edit)
+  and not silently skipped (that would let an operator deploy believing the
+  root-compromise vector was removed everywhere while an untouched row keeps it).
+- **Rebake invalidation follows `installer_config_id`, not the template name.** Names
+  are editable and several templates can share one config, so a renamed or additional
+  consumer would otherwise keep `ready` state and its pre-hardening artifact. Any linked
+  template whose recorded build checksum differs from the hardened checksum is marked
+  `pending` — including when the content was already hardened by hand but the *artifact*
+  was baked from legacy content.
+- **The migration refuses to run while a build is queued or running against a linked
+  template.** That build read the old content and would finish by writing `ready` over
+  the rebake marker, leaving a vulnerable artifact recorded as current.
+- **The reverse is a no-op**, because rolling back must not restore a keyring that
+  accepts attacker-supplied keys, nor discard rebake state.
+
+**An installer failure must stay visible.** Cloud-init shellifies `runcmd` into a plain
+`/bin/sh` script with no `set -e`, and build-time injection appends the Zabbix bootstrap
+*after* each profile's own installer — so a non-zero exit from the installer is masked
+by a later command's success and cloud-init still reports success. Both profiles
+therefore run under `set -Eeuo pipefail` with an `ERR` trap that writes a durable marker
+to `/var/lib/nms/influxdb-install-failed`, and the `rm` that used to delete the installer
+was removed so a failed guest keeps its evidence. Do not reintroduce that `rm`, and do
+not rely on the runcmd exit status.
 
 Migration `0025` adds `influxdb-core-3.11.0-debian-13` (VMID `9052`), the
 **Debian 13** Core 3 profile. Its verbatim cloud-config is

@@ -1701,6 +1701,22 @@ def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
     assert config.get("ssh_pwauth") is True
 
 
+def test_injected_zabbix_download_is_bounded() -> None:
+    """The injected Zabbix bootstrap runs on nearly every template.
+
+    It is appended after each template's own installer, so an unbounded download there
+    can hang first boot for any image that opts into Zabbix — not just the InfluxDB
+    profiles this branch hardens.
+    """
+
+    jobs_src = _read("netbox_packer/jobs.py")
+    zabbix_download = next(
+        line for line in _logical_shell_lines(jobs_src) if "zabbix-release.deb" in line and "curl" in line
+    )
+    for flag in ("--connect-timeout", "--max-time", "--retry-max-time", "--max-filesize"):
+        assert flag in zabbix_download, (flag, zabbix_download[:120])
+
+
 def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
     """The 0020 profiles must carry the same three fixes as the Debian 13 profile.
 
@@ -1767,12 +1783,37 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
         assert "seq 1 60" not in installer, constant
         assert health_url in installer, constant
 
-    # The migration only rewrites a row that still matches the exact 0020 baseline,
-    # so an operator-modified profile is never clobbered.
+        # 4. an installer failure must leave durable evidence. Cloud-init's runcmd
+        #    wrapper has no `set -e` and build-time injection appends the Zabbix
+        #    bootstrap AFTER this script, so a non-zero exit here is masked by a later
+        #    command's success and cloud-init still reports success.
+        assert "set -Eeuo pipefail" in installer, constant
+        assert "trap record_install_failure ERR" in installer, constant
+        assert "/var/lib/nms/influxdb-install-failed" in installer, constant
+        # ...and the installer is not deleted, so a failed guest keeps its evidence.
+        assert cloud_config["runcmd"] == [["bash", next(iter(files))]], constant
+        assert not any("rm" in str(entry) for entry in cloud_config["runcmd"]), constant
+
+    # A row that no longer matches the 0020 baseline is neither rewritten (that would
+    # discard an operator edit) nor silently skipped (that would let an operator
+    # believe the vector was removed everywhere). It fails the migration by name.
     assert "LEGACY_OSS2_CLOUD_CONFIG" in constants
     assert "LEGACY_CORE3_CLOUD_CONFIG" in constants
     assert "if config.content != legacy:" in source
-    assert "if config.content == hardened:" in source
+    assert "unresolved.append(" in source
+    assert "if unresolved:" in source
+    assert "Refusing to leave a known-vulnerable InfluxDB profile in place" in source
+
+    # Rebake invalidation follows the real relationship, not the editable name: a
+    # renamed or additional consumer would otherwise keep `ready` and its old artifact.
+    assert "installer_config_id=config.pk" in source
+    assert "exclude(installer_config_checksum_at_build=hardened_checksum)" in source
+    assert "name__in=list(template_names)" not in source
+
+    # A build already in flight read the old content and would write `ready` over the
+    # rebake marker, so the migration refuses to race it.
+    assert 'status__in=("queued", "running")' in source
+    assert "are queued or running against its templates" in source
     # The legacy constants must be the genuine 0020 content, or the equality guard
     # silently never matches and the migration becomes a no-op.
     legacy_020 = _literal_assignments("netbox_packer/migrations/0020_seed_influxdb_profiles.py")

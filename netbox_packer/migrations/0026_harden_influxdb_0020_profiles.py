@@ -30,12 +30,24 @@ same three defects. This migration brings them to parity.
    per-attempt, and overall retry deadlines plus a response-size cap, and the
    readiness loop bounds each probe and enforces an overall deadline.
 
-**Only rows that still match the exact ``0020`` baseline are replaced.** If an
-operator has edited a profile's content, this migration leaves it untouched rather
-than clobbering the change — that row then needs the same three fixes applied by
-hand. Templates whose content is replaced are marked ``pending`` so the images are
-rebaked; per the estate guardrail, existing Proxmox artifacts are never deleted, so
-supersede a bad artifact by baking a new VMID.
+**A row that no longer matches the exact ``0020`` baseline is never silently
+skipped.** It is not rewritten either — that would discard an operator's edit — so
+the migration instead **fails with the offending rows named**, because a silent skip
+would let an operator deploy this believing the root-compromise vector was removed
+everywhere while the untouched row keeps it. Resolve such a row by hand (or delete it
+if obsolete) and rerun.
+
+Rebake invalidation follows ``installer_config_id``, not the canonical template name:
+names are editable and several templates can share one config, so a renamed or
+additional consumer would otherwise keep ``ready`` state and its pre-hardening
+artifact. Any linked template whose recorded build checksum differs from the hardened
+checksum is marked ``pending``, including when the content was already hardened by
+hand but the *artifact* was baked from the legacy content. The migration also refuses
+to run while a build is queued or running against a linked template, since that build
+read the old content and would finish by writing ``ready`` over the rebake marker.
+
+Per the estate guardrail, existing Proxmox artifacts are never deleted — supersede a
+bad artifact by baking a new VMID.
 
 The verbatim hardened sources are tracked at
 ``netbox_packer/seeds/influxdb-oss-2.9.1-ubuntu-2404.cloud-config.yaml`` and
@@ -184,8 +196,26 @@ write_files:
     owner: root:root
     content: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      set -Eeuo pipefail
       export DEBIAN_FRONTEND=noninteractive
+
+      # Cloud-init shellifies runcmd into a plain /bin/sh script with no `set -e`, and
+      # build-time injection appends the Zabbix bootstrap AFTER this installer, so a
+      # non-zero exit here is masked by a later command's success and cloud-init still
+      # reports success. Record a durable marker instead of relying on that exit
+      # status, and never delete this script, so a failed guest keeps its evidence.
+      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      record_install_failure() {
+        local exit_code=$?
+        install -d -m 0755 /var/lib/nms || true
+        {
+          printf 'installer: %s\n' "$0"
+          printf 'exit_code: %s\n' "${exit_code}"
+          printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "${NMS_FAILURE_MARKER}" || true
+        return "${exit_code}"
+      }
+      trap record_install_failure ERR
       readonly PRODUCT_VERSION='2.9.1'
       install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
       # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
@@ -270,7 +300,6 @@ write_files:
       exit 1
 runcmd:
   - [bash, /opt/nms-influxdb-install.sh]
-  - [rm, -f, /opt/nms-influxdb-install.sh]
 """
 
 HARDENED_CORE3_CLOUD_CONFIG = r"""#cloud-config
@@ -288,8 +317,26 @@ write_files:
     owner: root:root
     content: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      set -Eeuo pipefail
       export DEBIAN_FRONTEND=noninteractive
+
+      # Cloud-init shellifies runcmd into a plain /bin/sh script with no `set -e`, and
+      # build-time injection appends the Zabbix bootstrap AFTER this installer, so a
+      # non-zero exit here is masked by a later command's success and cloud-init still
+      # reports success. Record a durable marker instead of relying on that exit
+      # status, and never delete this script, so a failed guest keeps its evidence.
+      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      record_install_failure() {
+        local exit_code=$?
+        install -d -m 0755 /var/lib/nms || true
+        {
+          printf 'installer: %s\n' "$0"
+          printf 'exit_code: %s\n' "${exit_code}"
+          printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "${NMS_FAILURE_MARKER}" || true
+        return "${exit_code}"
+      }
+      trap record_install_failure ERR
       readonly PRODUCT_VERSION='3.11.0'
       install -d -m 0755 \
         /etc/apt/keyrings \
@@ -377,7 +424,6 @@ write_files:
       exit 1
 runcmd:
   - [bash, /opt/nms-influxdb3-install.sh]
-  - [rm, -f, /opt/nms-influxdb3-install.sh]
 """
 
 # (installer-config name, version, hardened content, legacy content, template names)
@@ -416,31 +462,74 @@ _HARDENED_DESCRIPTION_SUFFIX = (
 def harden_influxdb_0020_profiles(apps, schema_editor):
     PackerInstallerConfig = apps.get_model("netbox_packer", "PackerInstallerConfig")
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
+    PackerBuild = apps.get_model("netbox_packer", "PackerBuild")
 
-    for name, version, hardened, legacy, template_names in _PROFILES:
+    unresolved = []
+
+    for name, version, hardened, legacy, _template_names in _PROFILES:
         config = PackerInstallerConfig.objects.filter(name=name, version=version).first()
         if config is None:
             continue
-        if config.content == hardened:
-            continue
-        if config.content != legacy:
-            # Operator-modified content: leave it alone rather than discarding the
-            # change. The row still needs these fixes applied by hand.
-            continue
 
-        config.content = hardened
-        config.checksum = hashlib.sha256(hardened.encode()).hexdigest()
-        description = config.description or ""
-        if _HARDENED_DESCRIPTION_SUFFIX.strip() not in description:
-            config.description = (description + _HARDENED_DESCRIPTION_SUFFIX).strip()
-        config.save(update_fields=["content", "checksum", "description"])
+        hardened_checksum = hashlib.sha256(hardened.encode()).hexdigest()
+        linked = PackerTemplate.objects.filter(installer_config_id=config.pk)
 
-        # The baked image no longer matches its installer config, so mark it for a
-        # rebake. Existing Proxmox artifacts are never deleted here.
-        PackerTemplate.objects.filter(name__in=list(template_names)).update(
+        # A build in flight read the OLD installer content and will write `ready`
+        # when it finishes, overwriting the rebake marker set below and leaving a
+        # vulnerable artifact recorded as current. Refuse rather than race it.
+        active = list(
+            PackerBuild.objects.filter(
+                template_id__in=list(linked.values_list("pk", flat=True)),
+                status__in=("queued", "running"),
+            ).values_list("template_id", flat=True)
+        )
+        if active:
+            raise RuntimeError(
+                f"Cannot harden installer config {name!r} version {version!r}: "
+                f"{len(active)} build(s) are queued or running against its templates "
+                "and would finish by baking the pre-hardening content and marking it "
+                "ready. Wait for those builds to finish (or cancel them), then rerun "
+                "the migration."
+            )
+
+        if config.content != hardened:
+            if config.content != legacy:
+                # Operator-modified content. Do NOT silently skip: the row may still
+                # carry the keyring, prerelease, and unbounded-download defects, and a
+                # silent skip lets an operator believe the fix was applied everywhere.
+                unresolved.append(f"{name!r} version {version!r}")
+                continue
+
+            config.content = hardened
+            config.checksum = hardened_checksum
+            description = config.description or ""
+            if _HARDENED_DESCRIPTION_SUFFIX.strip() not in description:
+                config.description = (description + _HARDENED_DESCRIPTION_SUFFIX).strip()
+            config.save(update_fields=["content", "checksum", "description"])
+
+        # Invalidate by the real relationship, not by canonical name: template names
+        # are editable and several templates can share one installer config, so a
+        # renamed or additional consumer would otherwise keep `ready` state and its
+        # pre-hardening artifact. Runs even when the content was already hardened,
+        # because the *artifact* may still have been baked from the legacy content.
+        # Nothing is deleted; supersede a bad artifact by baking a new VMID.
+        linked.exclude(installer_config_checksum_at_build=hardened_checksum).update(
             build_status="pending",
             built_at=None,
             installer_config_checksum_at_build="",
+        )
+
+    if unresolved:
+        raise RuntimeError(
+            "Refusing to leave a known-vulnerable InfluxDB profile in place. These "
+            "installer configs no longer match the baseline this migration knows how "
+            "to replace, so they were not rewritten: "
+            + ", ".join(unresolved)
+            + ". Each may still contain the unrestricted keyring import, the "
+            "prerelease-accepting version match, and unbounded downloads. Apply those "
+            "three fixes to the row by hand (see "
+            "docs/cloud-init-template-images.md), or delete the row if it is "
+            "genuinely obsolete, then rerun this migration."
         )
 
 

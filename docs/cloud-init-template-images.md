@@ -139,10 +139,16 @@ transport from the same selected endpoint it authorizes.
 > originally shared the Debian 13 profile's three defects: a keyring trust boundary that
 > admitted any extra key bundled with the genuine one, a version match that accepted `~`
 > prereleases as the pinned release, and unbounded downloads and readiness probes that
-> could hang first boot indefinitely. `0026` applies the same fixes made in `0025`, and
-> only to rows whose content still matches the exact `0020` baseline — an
-> operator-modified profile is left untouched and needs the fixes applied by hand.
-> Rewritten rows are marked `pending` for a rebake.
+> could hang first boot indefinitely. `0026` applies the same fixes made in `0025`.
+> A row whose content no longer matches the exact `0020` baseline is **not** rewritten
+> (that would discard an operator's edit) and **not** silently skipped — the migration
+> fails with the offending rows named, so nobody deploys believing the vector was
+> removed everywhere. `0026` also refuses to run while a build is queued or running
+> against a linked template, and invalidates rebake state by installer-config
+> relationship rather than by the editable template name. Both profiles additionally
+> record a durable failure marker at `/var/lib/nms/influxdb-install-failed`, because
+> cloud-init's `runcmd` wrapper has no `set -e` and the injected Zabbix bootstrap runs
+> after the installer, so a failure would otherwise be masked and reported as success.
 
 The cloud-init profiles:
 
