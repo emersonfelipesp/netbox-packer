@@ -533,3 +533,398 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
     dispatch_build.assert_called_once_with(build)
     assert response.status_code == 202
     assert response.data == {"id": 88, "status": "queued"}
+
+
+def test_influxdb_profile_readiness_rejects_a_stale_ready_template(isolated_imports) -> None:
+    templates = [
+        SimpleNamespace(
+            pk=50,
+            name="influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics",
+            build_status="ready",
+            is_stale=True,
+        ),
+        SimpleNamespace(
+            pk=51,
+            name="influxdb-core-3.11.0-ubuntu-2404",
+            build_status="ready",
+            is_stale=False,
+        ),
+    ]
+    build_manager = ChainManager()
+    template_manager = ChainManager()
+    template_manager.filter.return_value = templates
+    _install_api_import_stubs(templates[0], build_manager, template_manager, Mock())
+    api_views = importlib.import_module("netbox_packer.api.views")
+
+    request = SimpleNamespace(user=SimpleNamespace(has_perm=Mock(return_value=True)))
+    response = api_views.InfluxDBProfileListView().get(request)
+    profiles = {profile["template_id"]: profile for profile in response.data["profiles"]}
+
+    assert profiles[50]["build_status"] == "ready"
+    assert profiles[50]["ready"] is False
+    assert profiles[51]["ready"] is True
+
+
+class StalenessTemplateManager:
+    def __init__(self, templates):
+        self.templates = templates
+        self.exclude = Mock(side_effect=lambda **_kwargs: self.templates)
+        self.update_calls = []
+
+    def filter(self, *, pk):
+        template = next(item for item in self.templates if item.pk == pk)
+        manager = self
+
+        class Query:
+            def update(self, **values):
+                manager.update_calls.append((pk, values))
+                for key, value in values.items():
+                    setattr(template, key, value)
+                return 1
+
+        return Query()
+
+
+class StalenessBuildManager:
+    def __init__(self, template, queued_build=None):
+        self.template = template
+        self.builds = {} if queued_build is None else {queued_build.pk: queued_build}
+        self.create = Mock(side_effect=self._create)
+
+    def _create(self, **values):
+        build = SimpleNamespace(
+            pk=70,
+            template_id=values["template"].pk,
+            **values,
+        )
+        self.builds[build.pk] = build
+        return build
+
+    def filter(self, *, template, status):
+        matches = [
+            build
+            for build in self.builds.values()
+            if build.template_id == template.pk and build.status == status
+        ]
+
+        class Query:
+            def exists(self):
+                return bool(matches)
+
+            def order_by(self, *_fields):
+                return self
+
+            def first(self):
+                return matches[0] if matches else None
+
+        return Query()
+
+    def select_related(self, *_fields):
+        return self
+
+    def get(self, *, pk):
+        return self.builds[pk]
+
+
+@pytest.mark.parametrize("recover_wedged_build", [False, True])
+@pytest.mark.parametrize("branching_enabled", [False, True])
+def test_staleness_job_dispatches_pin_only_drift_once(
+    isolated_imports,
+    recover_wedged_build,
+    branching_enabled,
+) -> None:
+    jobs = _import_jobs_module()
+    events = []
+    enqueue = Mock(side_effect=lambda **_kwargs: events.append("enqueue"))
+    jobs.PackerBuildJob.enqueue = enqueue
+
+    template = SimpleNamespace(
+        pk=60,
+        name="pin-drifted-template",
+        build_status="ready",
+        is_stale=True,
+        max_age_days=None,
+        auto_rebuild=True,
+    )
+    wedged_build = None
+    if recover_wedged_build:
+        wedged_build = SimpleNamespace(
+            pk=71,
+            template_id=template.pk,
+            template=template,
+            status="queued",
+        )
+    template_manager = StalenessTemplateManager([template])
+    build_manager = StalenessBuildManager(template, wedged_build)
+
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
+    models_mod.PackerBuild = type("PackerBuild", (), {"objects": build_manager})
+    sys.modules["netbox_packer.models"] = models_mod
+
+    branch_lifecycle = types.ModuleType("netbox_packer.services.branch_lifecycle")
+    branch = SimpleNamespace(name="test-branch")
+    branch_config = {"prefix": "stale", "on_conflict": "fail"} if branching_enabled else None
+    branch_lifecycle.branching_enabled_settings = Mock(return_value=branch_config)
+    branch_lifecycle.create_and_provision_branch = Mock(return_value=branch)
+
+    class BranchContext:
+        def __enter__(self):
+            events.append("branch-enter")
+
+        def __exit__(self, *_args):
+            events.append("branch-exit")
+
+    branch_lifecycle.activate_branch_context = Mock(return_value=BranchContext())
+
+    def merge_branch(**_kwargs):
+        events.append("merge")
+        return True, "merged"
+
+    branch_lifecycle.merge_branch = Mock(side_effect=merge_branch)
+    sys.modules["netbox_packer.services.branch_lifecycle"] = branch_lifecycle
+
+    jobs.PackerStalenessCheckJob().run()
+
+    expected_build_id = 71 if recover_wedged_build else 70
+    enqueue.assert_called_once_with(build_id=expected_build_id)
+    assert template.build_status == "building"
+    if branching_enabled:
+        assert events.index("branch-exit") < events.index("merge") < events.index("enqueue")
+    else:
+        branch_lifecycle.merge_branch.assert_not_called()
+    if recover_wedged_build:
+        build_manager.create.assert_not_called()
+    else:
+        build_manager.create.assert_called_once_with(
+            template=template,
+            triggered_by="PackerStalenessCheckJob",
+            status="queued",
+        )
+
+
+@pytest.mark.parametrize("recover_wedged_build", [False, True])
+def test_staleness_management_command_dispatches_pin_only_drift(
+    isolated_imports,
+    recover_wedged_build,
+) -> None:
+    _install_package()
+
+    class Output:
+        def __init__(self):
+            self.lines = []
+
+        def write(self, value):
+            self.lines.append(value)
+
+    class Style:
+        def __getattr__(self, _name):
+            return lambda value: value
+
+    class BaseCommand:
+        def __init__(self):
+            self.stdout = Output()
+            self.style = Style()
+
+    base_module = types.ModuleType("django.core.management.base")
+    base_module.BaseCommand = BaseCommand
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.core"] = types.ModuleType("django.core")
+    sys.modules["django.core.management"] = types.ModuleType("django.core.management")
+    sys.modules["django.core.management.base"] = base_module
+
+    template = SimpleNamespace(
+        pk=80,
+        name="pin-only-drift",
+        build_status="ready",
+        is_stale=True,
+        age_days=0,
+        max_age_days=None,
+        auto_rebuild=True,
+    )
+    template_manager = StalenessTemplateManager([template])
+    wedged_build = None
+    if recover_wedged_build:
+        wedged_build = SimpleNamespace(
+            pk=81,
+            template_id=template.pk,
+            template=template,
+            status="queued",
+        )
+    build_manager = StalenessBuildManager(template, wedged_build)
+    models_module = types.ModuleType("netbox_packer.models")
+    models_module.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
+    models_module.PackerBuild = type("PackerBuild", (), {"objects": build_manager})
+    sys.modules["netbox_packer.models"] = models_module
+
+    dispatch = Mock()
+    jobs_module = types.ModuleType("netbox_packer.jobs")
+    jobs_module.dispatch_build = dispatch
+    sys.modules["netbox_packer.jobs"] = jobs_module
+
+    command_module = importlib.import_module(
+        "netbox_packer.management.commands.check_packer_staleness"
+    )
+    command_module.Command().handle(dry_run=False)
+
+    template_manager.exclude.assert_called_once_with(build_status__in=("building",))
+    expected_build_id = 81 if recover_wedged_build else 70
+    dispatch.assert_called_once_with(build_manager.builds[expected_build_id])
+    assert template.build_status == "building"
+    if recover_wedged_build:
+        build_manager.create.assert_not_called()
+
+
+def _load_migration_0029():
+    django_db = types.ModuleType("django.db")
+
+    class Migration:
+        pass
+
+    class RunPython:
+        def __init__(self, forwards, backwards):
+            self.forwards = forwards
+            self.backwards = backwards
+
+    django_db.migrations = SimpleNamespace(Migration=Migration, RunPython=RunPython)
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.db"] = django_db
+
+    path = PKG / "migrations" / "0029_pin_influxdb3_debian13_base_image.py"
+    spec = importlib.util.spec_from_file_location("migration_0029_behavior", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class MigrationTemplateManager:
+    def __init__(self, rows, forced_update_count=None):
+        self.rows = rows
+        self.forced_update_count = forced_update_count
+
+    def select_for_update(self):
+        return MigrationTemplateQuery(self)
+
+    def filter(self, **criteria):
+        return MigrationTemplateQuery(self, criteria)
+
+
+class MigrationTemplateQuery:
+    def __init__(self, manager, criteria=None):
+        self.manager = manager
+        self.criteria = criteria or {}
+
+    def filter(self, **criteria):
+        return MigrationTemplateQuery(self.manager, {**self.criteria, **criteria})
+
+    def _matches(self):
+        return [
+            row
+            for row in self.manager.rows
+            if all(getattr(row, key) == value for key, value in self.criteria.items())
+        ]
+
+    def first(self):
+        matches = self._matches()
+        return matches[0] if matches else None
+
+    def update(self, **values):
+        if self.manager.forced_update_count is not None:
+            return self.manager.forced_update_count
+        matches = self._matches()
+        for row in matches:
+            for key, value in values.items():
+                setattr(row, key, value)
+        return len(matches)
+
+
+def _migration_apps(manager):
+    model = type("PackerTemplate", (), {"objects": manager})
+    return SimpleNamespace(get_model=Mock(return_value=model))
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_migration_0029_fails_closed_when_expected_template_is_missing(
+    isolated_imports,
+    renamed,
+) -> None:
+    migration = _load_migration_0029()
+    rows = []
+    if renamed:
+        rows.append(
+            SimpleNamespace(
+                pk=1,
+                name="operator-renamed-template",
+                base_image_url="",
+                base_image_sha256="",
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="zero profiles are pinned"):
+        migration.pin_influxdb3_debian13_base_image(
+            _migration_apps(MigrationTemplateManager(rows)),
+            None,
+        )
+
+    if rows:
+        assert rows[0].base_image_url == ""
+        assert rows[0].base_image_sha256 == ""
+
+
+def test_migration_0029_persists_one_pin_and_is_idempotent(isolated_imports) -> None:
+    migration = _load_migration_0029()
+    row = SimpleNamespace(
+        pk=1,
+        name=migration.TEMPLATE_NAME,
+        base_image_url="",
+        base_image_sha256="",
+    )
+    apps = _migration_apps(MigrationTemplateManager([row]))
+
+    migration.pin_influxdb3_debian13_base_image(apps, None)
+    assert row.base_image_url == migration.PINNED_IMAGE_URL
+    assert row.base_image_sha256 == migration.PINNED_IMAGE_SHA256
+
+    migration.pin_influxdb3_debian13_base_image(apps, None)
+    assert row.base_image_url == migration.PINNED_IMAGE_URL
+    assert row.base_image_sha256 == migration.PINNED_IMAGE_SHA256
+
+
+def test_migration_0029_refuses_a_different_operator_pin(isolated_imports) -> None:
+    migration = _load_migration_0029()
+    row = SimpleNamespace(
+        pk=1,
+        name=migration.TEMPLATE_NAME,
+        base_image_url="https://operator.example/base.qcow2",
+        base_image_sha256="operator-reviewed-digest",
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to overwrite"):
+        migration.pin_influxdb3_debian13_base_image(
+            _migration_apps(MigrationTemplateManager([row])),
+            None,
+        )
+
+    assert row.base_image_url == "https://operator.example/base.qcow2"
+    assert row.base_image_sha256 == "operator-reviewed-digest"
+
+
+def test_migration_0029_rejects_a_zero_row_compare_and_set(isolated_imports) -> None:
+    migration = _load_migration_0029()
+    row = SimpleNamespace(
+        pk=1,
+        name=migration.TEMPLATE_NAME,
+        base_image_url="",
+        base_image_sha256="",
+    )
+    manager = MigrationTemplateManager([row], forced_update_count=0)
+
+    with pytest.raises(RuntimeError, match="expected to update exactly one"):
+        migration.pin_influxdb3_debian13_base_image(
+            _migration_apps(manager),
+            None,
+        )
+
+    assert row.base_image_url == ""
+    assert row.base_image_sha256 == ""

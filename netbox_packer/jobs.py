@@ -10,6 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 from netbox.jobs import JobRunner
 
+from .base_image import pin_differs_from_built_source
 from .package_index import (
     redact_fileserver_package_token,
     render_fileserver_package_index,
@@ -46,6 +47,8 @@ def _get_plugin_setting(key, default=None):
 # Debian publishes cloud images under the release codename, so a numeric
 # os_version cannot be interpolated into the URL directly. Keep this in step with
 # choices.OS_VERSIONS_BY_FAMILY[debian].
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
 _DEBIAN_CODENAMES = {
     "11": "bullseye",
     "12": "bookworm",
@@ -53,15 +56,52 @@ _DEBIAN_CODENAMES = {
 }
 
 
-def _resolve_cloud_image_url(template, overrides):
-    """Resolve the base cloud image URL for a cloud_config build.
+def _resolve_cloud_image_source(template, overrides):
+    """Resolve the base image URL and its digest, refusing an unverified pin.
 
-    Honors ``variable_overrides['image_url']`` first, then derives a sensible
-    default from ``os_family`` / ``os_version``.
+    Returns ``(image_url, sha256)`` where ``sha256`` may be empty. A digest is
+    lowercased before validation, since hex is case-insensitive and an operator
+    pasting a vendor checksum verbatim should not fail the build.
+
+    Precedence for each is override -> template field -> derived default (URL only).
+    A **pinned** URL — one supplied explicitly by an override or by
+    ``template.base_image_url``, rather than derived from the release — must carry a
+    digest, and the build fails closed without one. A pin that is not verified only
+    looks like provenance: it neither guarantees the bytes nor survives the vendor
+    replacing the artifact.
+
+    A derived release URL is still allowed without a digest, because those point at
+    the vendor's mutable ``latest`` directory and requiring a digest there would break
+    every existing template at once. That remains a known gap; pinning a profile is
+    how it gets closed, one profile at a time.
     """
-    override = (overrides or {}).get("image_url")
-    if override:
-        return str(override)
+    overrides = overrides or {}
+    override_url = str(overrides.get("image_url") or "").strip()
+    override_sha = str(overrides.get("image_sha256") or "").strip().lower()
+    template_url = str(getattr(template, "base_image_url", "") or "").strip()
+    template_sha = str(getattr(template, "base_image_sha256", "") or "").strip().lower()
+
+    pinned_url = override_url or template_url
+    sha256 = override_sha or template_sha
+    if sha256 and not _SHA256_RE.fullmatch(sha256):
+        raise RuntimeError(
+            f"Base image sha256 must be a lowercase 64-character hexadecimal digest; got {sha256[:16]!r}."
+        )
+    if pinned_url and not sha256:
+        source = "variable_overrides['image_url']" if override_url else "the template's base_image_url"
+        raise RuntimeError(
+            f"{source} pins an exact base image but no sha256 digest was supplied. "
+            "Set base_image_sha256 on the template (or variable_overrides"
+            "['image_sha256']) to a digest you have verified, or clear the pinned URL "
+            "to use the release default."
+        )
+    if pinned_url:
+        return pinned_url, sha256
+    return _derive_release_image_url(template), sha256
+
+
+def _derive_release_image_url(template):
+    """Derive the vendor release image URL from ``os_family`` / ``os_version``."""
     fam = (template.os_family or "").lower()
     ver = (template.os_version or "").strip()
     if fam == "ubuntu" and ver:
@@ -608,7 +648,7 @@ class PackerBuildJob(JobRunner):
         storage = _resolve_storage(template, build.variable_overrides)
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
         target_node = _resolve_target_node(template, node, build.variable_overrides)
-        image_url = _resolve_cloud_image_url(template, build.variable_overrides)
+        image_url, image_sha256 = _resolve_cloud_image_source(template, build.variable_overrides)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
         endpoint_id = _resolve_endpoint_id(build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
@@ -666,6 +706,7 @@ class PackerBuildJob(JobRunner):
                 vmid=template_vmid,
                 target_node=target_node,
                 image_url=image_url,
+                image_sha256=image_sha256,
                 user_data_yaml=user_data_yaml,
                 image_storage=storage,
                 vm_storage=storage,
@@ -695,19 +736,41 @@ class PackerBuildJob(JobRunner):
         if status in {"created", "completed", "already_exists"}:
             build.status = "success"
             build.exit_code = 0
+            build.base_image_url_at_build = image_url
+            build.base_image_sha256_at_build = image_sha256
             if result_vmid:
                 build.result_template_id = int(result_vmid)
-            update = {"build_status": "ready", "built_at": timezone.now()}
-            if installer:
-                update["installer_config_checksum_at_build"] = installer.checksum
-            PackerTemplate.objects.filter(pk=template.pk).update(**update)
         else:
             build.status = "failed"
             build.exit_code = response.get("returncode") or 1
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
 
         build.log = "\n".join(log_lines)
-        build.save(update_fields=["status", "finished_at", "exit_code", "result_template_id", "log"])
+        build_update_fields = ["status", "finished_at", "exit_code", "result_template_id", "log"]
+        if build.status == "success":
+            from django.db import transaction
+
+            build_update_fields += ["base_image_url_at_build", "base_image_sha256_at_build"]
+            with transaction.atomic():
+                current_template = PackerTemplate.objects.select_for_update().get(pk=template.pk)
+                source_drifted = pin_differs_from_built_source(
+                    desired_url=current_template.base_image_url,
+                    desired_sha256=current_template.base_image_sha256,
+                    built_url=image_url,
+                    built_sha256=image_sha256,
+                )
+                update = {
+                    "build_status": "stale" if source_drifted else "ready",
+                    "built_at": build.finished_at,
+                    "base_image_url_at_build": image_url,
+                    "base_image_sha256_at_build": image_sha256,
+                }
+                if installer:
+                    update["installer_config_checksum_at_build"] = installer.checksum
+                PackerTemplate.objects.filter(pk=current_template.pk).update(**update)
+                build.save(update_fields=build_update_fields)
+        else:
+            build.save(update_fields=build_update_fields)
 
     def _run_packer(self, build, template, endpoint, node, timeout):
         """Run packer init + packer build, streaming output into build.log."""
@@ -869,9 +932,11 @@ class PackerStalenessCheckJob(JobRunner):
         def _run_staleness(PackerBuild, PackerTemplate):
             checked = 0
             stale = 0
-            queued = 0
+            rebuild_ids = []
 
-            for template in PackerTemplate.objects.exclude(build_status__in=("building",)).exclude(max_age_days=None):
+            # Age is only one source of staleness. Installer checksum and base-image
+            # pin drift must still be evaluated when max_age_days is unset.
+            for template in PackerTemplate.objects.exclude(build_status__in=("building",)):
                 checked += 1
                 if not template.is_stale:
                     continue
@@ -882,33 +947,41 @@ class PackerStalenessCheckJob(JobRunner):
                 if not template.auto_rebuild:
                     continue
 
-                # Only queue if no build is already active
-                active = PackerBuild.objects.filter(template=template, status__in=("queued", "running")).exists()
-                if active:
+                if PackerBuild.objects.filter(template=template, status="running").exists():
                     continue
 
-                build = PackerBuild.objects.create(
-                    template=template,
-                    triggered_by="PackerStalenessCheckJob",
-                    status="queued",
+                build = (
+                    PackerBuild.objects.filter(template=template, status="queued")
+                    .order_by("queued_at")
+                    .first()
                 )
-                logger.info(
-                    "Auto-queued rebuild for stale template '%s' (build #%s)",
-                    template.name,
-                    build.pk,
-                )
-                queued += 1
+                if build is None:
+                    build = PackerBuild.objects.create(
+                        template=template,
+                        triggered_by="PackerStalenessCheckJob",
+                        status="queued",
+                    )
+                    logger.info(
+                        "Auto-queued rebuild for stale template '%s' (build #%s)",
+                        template.name,
+                        build.pk,
+                    )
+                else:
+                    logger.warning(
+                        "Recovering queued rebuild #%s for stale template '%s'",
+                        build.pk,
+                        template.name,
+                    )
+                rebuild_ids.append(build.pk)
 
-            logger.info(
-                "Staleness check complete: %d templates checked, %d stale, %d rebuilds queued",
-                checked,
-                stale,
-                queued,
-            )
+            return checked, stale, rebuild_ids
 
+        checked = 0
+        stale = 0
+        rebuild_ids = []
         if branch is not None:
             with activate_branch_context(branch):
-                _run_staleness(PackerBuild, PackerTemplate)
+                checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
             merged, msg = merge_branch(
                 branch=branch,
                 user=None,
@@ -918,8 +991,27 @@ class PackerStalenessCheckJob(JobRunner):
                 logger.info("Staleness check branch merged: %s", msg)
             else:
                 logger.warning("Staleness check branch merge failed: %s", msg)
+                rebuild_ids = []
         else:
-            _run_staleness(PackerBuild, PackerTemplate)
+            checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
+
+        dispatched = 0
+        for build_id in rebuild_ids:
+            build = PackerBuild.objects.select_related("template").get(pk=build_id)
+            PackerTemplate.objects.filter(pk=build.template_id).update(build_status="building")
+            try:
+                dispatch_build(build)
+            except Exception:
+                logger.exception("Auto-rebuild dispatch failed for build #%s", build_id)
+                continue
+            dispatched += 1
+
+        logger.info(
+            "Staleness check complete: %d templates checked, %d stale, %d rebuilds dispatched",
+            checked,
+            stale,
+            dispatched,
+        )
 
 
 def dispatch_build(build):

@@ -500,6 +500,8 @@ def test_template_form_declutters_machine_managed_fields() -> None:
         "built_at",
         "packer_template_ref",
         "installer_config_checksum_at_build",
+        "base_image_url_at_build",
+        "base_image_sha256_at_build",
         "provisions_service",
     ):
         assert f'"{machine_field}"' not in block, (

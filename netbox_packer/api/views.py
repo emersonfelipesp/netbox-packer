@@ -41,7 +41,9 @@ class InfluxDBProfileListView(APIView):
                     **profile,
                     "template_id": template.pk if template else None,
                     "build_status": template.build_status if template else "missing",
-                    "ready": bool(template and template.build_status == "ready"),
+                    "ready": bool(
+                        template and template.build_status == "ready" and not template.is_stale
+                    ),
                 }
             )
         return Response({"profiles": profiles})

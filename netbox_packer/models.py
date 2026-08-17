@@ -1,10 +1,12 @@
 import base64
 import hashlib
 
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
+from .base_image import base_image_pin_applies, pin_differs_from_built_source
 from .choices import (
     BuildStatusChoices,
     OSFamilyChoices,
@@ -207,6 +209,56 @@ class PackerTemplate(NetBoxModel):
     # changing the meaning of an established golden template.
     provisions_service = models.CharField(max_length=64, blank=True, default="", editable=False)
 
+    # Reproducible, verifiable OS base. Without these the bake resolves the vendor's
+    # mutable "latest" directory, so rebuilding the same profile can silently produce a
+    # different root filesystem, and the artifact that becomes the guest's entire
+    # operating system is accepted with no integrity check.
+    #
+    # base_image_url pins an exact (normally dated) vendor artifact instead of the
+    # derived default. base_image_sha256 is the digest proxbox-api verifies after
+    # download. Setting a pinned URL without a digest is refused at build time — see
+    # jobs._resolve_cloud_image_source() — because a pin that is not verified only looks
+    # like provenance.
+    base_image_url = models.URLField(
+        blank=True,
+        default="",
+        max_length=500,
+        help_text=(
+            "Optional exact base image URL, pinning this template to a specific vendor "
+            "artifact instead of the release default. Requires Base image sha256."
+        ),
+    )
+    base_image_sha256 = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        validators=[
+            RegexValidator(
+                regex=r"^[0-9a-f]{64}$",
+                message="Enter a lowercase 64-character hexadecimal sha256 digest.",
+            )
+        ],
+        help_text=(
+            "Reviewed sha256 of the base image, verified by proxbox-api after download. "
+            "Record where the digest was obtained and verified; an unverified digest "
+            "proves nothing."
+        ),
+    )
+    base_image_url_at_build = models.URLField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=500,
+        help_text="Resolved base image URL used by the last successful cloud-image build.",
+    )
+    base_image_sha256_at_build = models.CharField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=64,
+        help_text="Resolved base image sha256 used by the last successful cloud-image build.",
+    )
+
     class Meta:
         ordering = ["name"]
         verbose_name = "Packer Template"
@@ -229,18 +281,52 @@ class PackerTemplate(NetBoxModel):
         return (timezone.now() - self.built_at).days
 
     @property
+    def supports_base_image_pin(self):
+        """Only the cloud_config builder resolves, verifies, and snapshots a base image."""
+        installer = self.installer_config
+        return installer is not None and base_image_pin_applies(installer.installer_type)
+
+    def clean(self):
+        super().clean()
+        # Reject a pin the builder would silently ignore. Accepting one is worse than
+        # useless: it looks like the base image is verified while nothing enforces it, and
+        # because the local path records no at-build snapshot the template also becomes
+        # permanently stale, which `auto_rebuild` turns into an endless rebuild loop.
+        if (self.base_image_url or self.base_image_sha256) and not self.supports_base_image_pin:
+            message = (
+                "Base image pinning applies only to templates whose installer config is "
+                "of type 'cloud_config'. The local Packer builder never resolves a base "
+                "image URL, so a pin here would not be enforced and would leave this "
+                "template permanently stale."
+            )
+            field = "base_image_url" if self.base_image_url else "base_image_sha256"
+            raise ValidationError({field: message})
+
+    @property
     def is_stale(self):
-        if self.max_age_days is None:
-            return False
-        age = self.age_days
-        if age is None:
+        if self.built_at is None:
             return False
         config_stale = (
             self.installer_config is not None
             and self.installer_config_checksum_at_build
             and self.installer_config.checksum != self.installer_config_checksum_at_build
         )
-        return age > self.max_age_days or config_stale
+        # Base image pins are only meaningful on the cloud_config path: that is the only
+        # builder which resolves a vendor image, forwards the digest, and records the
+        # at-build snapshot. The local Packer path builds from HCL inputs and writes no
+        # snapshot, so a pin there would leave `built_*` permanently empty while
+        # `desired_*` is set — reporting the template stale forever and, with
+        # `auto_rebuild`, rebuilding it in an endless loop. `clean()` refuses to create
+        # that state; this guard also neutralises any row that already carries it.
+        base_image_stale = self.supports_base_image_pin and pin_differs_from_built_source(
+            desired_url=self.base_image_url,
+            desired_sha256=self.base_image_sha256,
+            built_url=self.base_image_url_at_build,
+            built_sha256=self.base_image_sha256_at_build,
+        )
+        age = self.age_days
+        age_stale = self.max_age_days is not None and age is not None and age > self.max_age_days
+        return age_stale or config_stale or base_image_stale
 
     @property
     def derived_vms(self):
@@ -282,6 +368,20 @@ class PackerBuild(NetBoxModel):
     exit_code = models.IntegerField(null=True, blank=True)
     result_template_id = models.IntegerField(null=True, blank=True)
     selected_node = models.CharField(max_length=100, blank=True)
+    base_image_url_at_build = models.URLField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=500,
+        help_text="Resolved base image URL used by this successful cloud-image build.",
+    )
+    base_image_sha256_at_build = models.CharField(
+        blank=True,
+        default="",
+        editable=False,
+        max_length=64,
+        help_text="Resolved base image sha256 used by this successful cloud-image build.",
+    )
 
     class Meta:
         ordering = ["-queued_at"]

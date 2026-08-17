@@ -87,8 +87,9 @@ The template add/edit form is tuned for creating cloud-init templates:
   - Add a new offered version by appending a `("<ver>", "<label>")` tuple to the
     relevant family list in `OS_VERSIONS_BY_FAMILY`; no migration needed.
 - **Machine-managed fields are hidden** from the form (`built_at`,
-  `packer_template_ref`, `installer_config_checksum_at_build`) — they are written
-  by `PackerBuildJob` and remain available via the REST API.
+  `packer_template_ref`, `installer_config_checksum_at_build`,
+  `base_image_url_at_build`, `base_image_sha256_at_build`) — they are written
+  by `PackerBuildJob` and remain available read-only via the REST API.
 - **Help text** guides `os_version`, `proxmox_template_id`, `storage_pool`,
   `cloud_init_ready`, and `installer_config`.
 
@@ -122,8 +123,9 @@ nms UI /virtualization/packer (Create dialog -> Build)
             execute=true, preflight_plan_token=<returned token>
   -> proxbox-api: download image -> create VM -> write cicustom user-data snippet
        on <vm_storage>:snippets -> qm template -> returns vmid
-  -> PackerBuild.result_template_id=vmid, build_status=success;
-     PackerTemplate.build_status=ready, built_at=now()
+  -> PackerBuild.result_template_id=vmid, build_status=success, resolved base source saved;
+     PackerTemplate records built_at + last successful source and becomes ready only
+     when that source still matches its current declared pin (otherwise stale)
 ```
 
 Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
@@ -147,6 +149,10 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   appends an error line to the build log, and sets the template back to
   `failed` unless another build is still queued/running. UI and API callers must
   surface the failure instead of reporting a false queued success.
+- Auto-rebuild staleness scans follow the same dispatch invariant. They include pin
+  drift when `max_age_days` is unset, recover queued rows left by the old
+  create-without-dispatch path, set the template to `building`, and dispatch only
+  after an optional branching merge succeeds.
 - Local `packer init` / `packer build` subprocesses must honor
   `PACKER_BUILD_TIMEOUT_SECONDS` even when the process emits no stdout. The
   watchdog in `_run_subprocess()` is intentionally independent of output
@@ -272,7 +278,10 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 | `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
 | `0024` | `akvorado-2.4.0-ubuntu-2404` | 9070 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Akvorado 2.4.0 all-in-one Compose image with Kafka 4.2.0, Valkey 9.0, ClickHouse 26.3, exact lifecycle unit `akvorado.service`, working default config, and NMS agent self-registration enabled |
-| `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Replaces a row only if its content still matches the exact `0020` baseline; marks rewritten rows' templates `pending` for rebake; reverse is a no-op |
+| `0026` | *(data only — hardens the `0020` profiles)* | 9050/9051/9011 | — | — | Brings both `0020` InfluxDB profiles and the legacy `9011` row to `0025` parity: single-key repository trust, final-release-only version pin, bounded downloads and readiness loop. Locked compare-and-set write, so a concurrent operator edit is never overwritten; a row that no longer matches the exact `0020` baseline **fails the migration by name** rather than being skipped; rebake invalidation follows `installer_config_id`; refuses to run while a build is queued/running; reverse is a no-op |
+| `0027` | *(schema only — base image pin)* | — | — | — | Adds optional `base_image_url` + `base_image_sha256` to `PackerTemplate`. A pinned URL without a digest fails the build closed; the digest is forwarded to proxbox-api as `sha256`. Defaults empty, so existing templates are unchanged |
+| `0028` | *(schema only — base image build snapshots)* | — | — | — | Records the resolved URL + digest on each successful cloud-image build and on the template as its last successful source. Desired-vs-built pin drift is stale even without an age policy; snapshot fields are machine-managed |
+| `0029` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | Pins the one Debian 13 profile to the **dated** snapshot `trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2` and its verified sha256. Debian publishes only SHA512SUMS, so the digest was produced by downloading the artifact, matching its SHA-512 to the published value, then hashing for SHA-256. No GPG signature exists in that directory, so trust is TLS + published checksum. Compare-and-set against the unpinned state; refuses to overwrite an operator's own pin; reverse is a no-op |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -328,6 +337,81 @@ that lineage to `provisions_service="akvorado"`; do not replace this with
 hostname inference or duplicate it as a second VM tag. Keep Kafka/Valkey/
 ClickHouse/Akvorado versions, the unit name, VMID, endpoint, docs, and tests
 aligned whenever this seed changes.
+
+**Pins are cloud-config-only.** `PackerTemplate.clean()` rejects `base_image_url` /
+`base_image_sha256` unless the installer config is `cloud_config`, and `is_stale` ignores a
+pin on any other type. Only the cloud-config builder resolves a base image, forwards the
+digest for verification, and records the at-build snapshot; the local Packer path does
+none of those, so a pin there would be silently unenforced and would also make the
+template permanently stale — an endless rebuild loop under `auto_rebuild`. The predicate is
+`base_image.base_image_pin_applies()`.
+
+#### Migration 0029 — the one pinned profile
+
+`0027` added the pin fields and `0028` their at-build snapshots, but no profile used
+them, so the mechanism protected nothing. `0029` pins exactly one:
+`influxdb-core-3.11.0-debian-13` (VMID 9052).
+
+The migration fails closed if that exact template row is missing, and its
+compare-and-set must update exactly one row. A rename, deletion, or concurrent edit
+cannot let migration `0029` be recorded as a zero-effect success.
+
+**Only this profile, deliberately.** Pinning a template that is already `ready` marks it
+pending for rebake (`pin_differs_from_built_source`), so pinning the whole seeded catalog
+would demand estate-wide rebakes — an operator decision. 9052 has no baked artifact, so
+pinning it invalidates nothing.
+
+**Obtaining a digest (the required procedure).** Debian publishes **only `SHA512SUMS`**
+for cloud images — there is no `SHA256SUMS`, and SHA-256 cannot be derived from SHA-512.
+So: fetch `SHA512SUMS` from the dated snapshot directory, download the exact dated
+`.qcow2`, confirm its SHA-512 equals the published value, and only then compute the
+SHA-256. Step 3 is what makes the digest mean anything — it proves the hashed bytes are
+the bytes Debian published a checksum for. A checksum copied from a listing without
+hashing the artifact proves only that the listing and the field agree.
+
+**Honest limit:** the snapshot directory carries no `SHA512SUMS.sign`, so this chain is
+TLS to `cloud.debian.org` plus the published checksum — better than an unpinned mutable
+URL, weaker than an offline-verifiable Debian signature. Do not describe it as
+signature-verified.
+
+Refreshing the pin means repeating the whole procedure against the new snapshot, never
+editing the constants alone. Every other seeded profile remains unpinned; that gap closes
+per profile, by an operator who has verified a digest.
+
+#### Migration 0027 — base image pin
+
+Adds `base_image_url` and `base_image_sha256` to `PackerTemplate`, both optional and
+empty by default so every existing template keeps its behaviour and payload.
+`jobs._resolve_cloud_image_source()` resolves URL and digest with precedence
+override → template field → derived release default (URL only), and forwards the digest
+to proxbox-api as `sha256` (a field its `CloudImageTemplateBuildRequest` already
+accepts), omitting it entirely when empty.
+
+**A pinned URL must carry a digest** — supplied by either source — or the build fails
+closed. An unverified pin looks like provenance while guaranteeing nothing about the
+bytes. A malformed digest is refused rather than forwarded; an uppercase one is
+normalised, since hex is case-insensitive. An **unpinned** release build still works
+without a digest, because requiring one everywhere would break every existing template
+at once; that gap closes per profile, by pinning it.
+
+**No profile is pinned by this migration.** Choosing a dated vendor image and obtaining
+a *verified* digest are operator judgements — see
+`docs/cloud-init-template-images.md` → "Base Image Pinning" for the procedure, including
+the requirement to record where each digest came from and how it was verified.
+
+#### Migration 0028 — successful-build base image snapshots
+
+Adds machine-managed `base_image_url_at_build` and
+`base_image_sha256_at_build` fields to `PackerBuild` and `PackerTemplate`. A successful
+cloud-image build records the resolved source on its build row and updates the
+template's last-successful source in the same locked transaction as `built_at`.
+The template becomes `ready` only when its current declared pin still matches the
+resolved source; an override mismatch or a pin edited during the build is committed as
+`stale`. `PackerTemplate.is_stale` compares a declared pin with those snapshots,
+so changing or clearing a pin, or using a per-build pin that differs from the template,
+cannot silently describe old bytes as current. Pin/checksum staleness is evaluated even
+when `max_age_days` is unset. Existing unpinned rows with empty historical snapshots
+retain their prior behavior.
 
 #### Migration 0025 — InfluxDB 3 Core on Debian 13
 

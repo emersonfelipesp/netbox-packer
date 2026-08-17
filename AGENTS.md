@@ -193,6 +193,55 @@ confirmed execution and artifact verification fail the build with an actionable
 log entry. A 404 from the preflight endpoint means the proxbox-api service is
 incompatible; do not fall back to legacy one-step execution.
 
+## Base Image Pin Guardrail
+
+`PackerTemplate.base_image_url` / `base_image_sha256` (migration `0027`) pin a template
+to an exact vendor artifact and its reviewed digest, which
+`jobs._resolve_cloud_image_source()` forwards to proxbox-api as `sha256`.
+`variable_overrides['image_url']` / `['image_sha256']` override them per build.
+Migration `0028` records the resolved URL and digest on the successful `PackerBuild`
+and atomically updates the template's last-successful-build snapshots with `built_at`.
+The success transaction locks and reloads the template: it writes `build_status="ready"`
+only if the resolved source still matches the current declared pin, otherwise it writes
+`stale`. Those snapshots are machine-managed and make a
+changed or cleared declared pin stale; a per-build pin that differs from the template
+also leaves the resulting template stale until it is rebuilt from the declared source.
+Readiness consumers require both ready status and `not is_stale`. The staleness job and
+management command must evaluate pin drift even when `max_age_days` is unset, recover a
+previously orphaned queued auto-rebuild, set the template to `building`, and call
+`dispatch_build()` after changes commit (and after a branch merges).
+
+- **A pinned URL without a digest fails the build, by design.** Never "fix" that by
+  making the digest optional for pinned URLs — an unverified pin looks like provenance
+  while proving nothing.
+- **Never invent, guess, or copy an unverified digest**, and never take one from this
+  repository's history. Obtain it from the vendor's published checksum file for the
+  exact artifact, verify it by downloading and hashing, and record where it came from.
+- An **unpinned** release build still resolves the vendor's mutable `latest` directory
+  with no digest. That is a known, accepted gap — closing it is per-profile pinning, not
+  a blanket requirement, which would break every existing template at once.
+- A malformed digest is refused rather than forwarded; an uppercase digest is
+  normalised. Keep both behaviours.
+- **Exactly one profile is pinned** (`influxdb-core-3.11.0-debian-13`, migration `0029`).
+  Do not pin others casually: pinning an already-`ready` template marks it pending for
+  rebake, so a blanket pin demands estate-wide rebakes. That is an operator decision.
+  Migration `0029` must fail when that expected row is missing and must update exactly
+  one row when applying the pin; it may never be recorded as a zero-effect success.
+- **Debian publishes only `SHA512SUMS` for cloud images.** There is no `SHA256SUMS`, and
+  SHA-256 cannot be derived from SHA-512. To obtain a digest: fetch `SHA512SUMS`,
+  download the exact dated artifact, verify its SHA-512 against the published value,
+  then hash it for SHA-256. Never skip the verify step and never copy a checksum out of
+  a listing — that proves only that the listing and the field agree.
+- The Debian snapshot directory has **no GPG signature**, so this trust chain is TLS plus
+  a published checksum. Do not describe a pinned image as signature-verified.
+- **Base image pins apply only to `cloud_config` installer configs.** `PackerTemplate.clean()`
+  refuses a pin on any other installer type, and `is_stale` ignores one. The local Packer
+  builder never resolves a base image URL and writes no at-build snapshot, so a pin there
+  would be unenforced *and* would leave the template permanently stale — which
+  `auto_rebuild` turns into an endless rebuild loop. The decision lives in
+  `base_image.base_image_pin_applies()`; keep `PIN_CAPABLE_INSTALLER_TYPES` in step with
+  `PackerInstallerConfig.INSTALLER_TYPE_CHOICES`.
+
 ## Build Dispatch Guardrail
 
 Every UI, API, or maintenance trigger that creates a `PackerBuild` must call the

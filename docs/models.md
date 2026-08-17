@@ -66,14 +66,17 @@ installer config, target node/storage, and monitoring-agent injection preference
 | `description` | TextField | blank | — |
 | `installer_config` | FK → PackerInstallerConfig | null | SET_NULL; drives build type |
 | `installer_config_checksum_at_build` | CharField(64) | blank | Snapshot of checksum at last successful build |
+| `base_image_url_at_build` | URLField(500) | blank | Read-only resolved URL used by the last successful cloud-image build |
+| `base_image_sha256_at_build` | CharField(64) | blank | Read-only resolved digest used by the last successful cloud-image build |
 | `provisions_service` | CharField(64) | blank | Read-only, migration-managed service marker; downstream code follows a VM's `source_packer_template` lineage to this value |
 
 !!! note "Template form vs. model fields"
     The template add/edit form intentionally hides machine-managed lifecycle
     fields (`built_at`, `packer_template_ref`,
-    `installer_config_checksum_at_build`, and `provisions_service`) — they are written by
-    `PackerBuildJob`, not by operators. The full set of fields is still
-    available through the REST API. The form also renders `os_version` as an
+    `installer_config_checksum_at_build`, `base_image_url_at_build`,
+    `base_image_sha256_at_build`, and `provisions_service`) — they are written by
+    `PackerBuildJob`, not by operators. The base-image snapshots are available
+    read-only through the REST API. The form also renders `os_version` as an
     OS-family-grouped dropdown and carries help text on the key
     cloud-init-template fields (`os_version`, `proxmox_template_id`,
     `storage_pool`, `cloud_init_ready`, `installer_config`).
@@ -108,7 +111,7 @@ new trust mechanism.
 | Property | Returns |
 | --- | --- |
 | `age_days` | Days since `built_at`, or `None` when not yet built |
-| `is_stale` | `True` when `age_days > max_age_days` or `installer_config.checksum != installer_config_checksum_at_build` |
+| `is_stale` | `True` when the age policy is exceeded, installer content changed, or the desired base-image pin differs from the successful-build snapshots |
 | `derived_vms` | `VirtualMachine` queryset where `custom_field_data__source_packer_template == self.pk` |
 
 ---
@@ -146,6 +149,8 @@ arrives.
 | `exit_code` | IntegerField | null | Exit code from `packer build` or proxbox-api response |
 | `result_template_id` | IntegerField | null | Proxmox VMID of the completed template |
 | `selected_node` | CharField(100) | blank | Proxmox node selected by `select_build_node()` |
+| `base_image_url_at_build` | URLField(500) | blank | Read-only resolved URL used by this successful cloud-image build |
+| `base_image_sha256_at_build` | CharField(64) | blank | Read-only resolved digest used by this successful cloud-image build |
 
 ---
 

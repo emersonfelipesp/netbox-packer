@@ -50,9 +50,10 @@ creating cloud-init images:
   version stays listed under its optgroup. An existing template whose stored
   version is not in the offered list keeps that value selectable, so editing an
   older template never fails validation.
-- **Machine-managed fields are hidden.** `built_at`, `packer_template_ref`, and
-  `installer_config_checksum_at_build` are written by `PackerBuildJob`, so the
-  form no longer asks operators to fill them in. They remain available via the
+- **Machine-managed fields are hidden.** `built_at`, `packer_template_ref`,
+  `installer_config_checksum_at_build`, `base_image_url_at_build`, and
+  `base_image_sha256_at_build` are written by `PackerBuildJob`, so the form no
+  longer asks operators to fill them in. They remain available read-only via the
   REST API.
 - **Guidance help text** is shown on `os_version`, `proxmox_template_id`,
   `storage_pool`, `cloud_init_ready`, and `installer_config` to make picking the
@@ -282,6 +283,129 @@ Per the estate destructive-operation guardrail this migration seeds catalog rows
 only and builds nothing. Confirm VMID `9052` is free on the destination cluster
 before baking, and supersede a bad artifact by baking a new VMID rather than
 deleting the previous one.
+
+## Base Image Pinning (reproducible, verifiable OS bases)
+
+A cloud-init bake downloads a vendor base image that becomes the guest's **entire
+operating system**. By default `netbox-packer` derives that URL from the template's
+`os_family`/`os_version` and points at the vendor's **mutable `latest`** directory,
+sending no content digest — so rebuilding the same profile can silently produce a
+different root filesystem, and the artifact is accepted with no integrity check.
+
+`PackerTemplate` therefore carries two optional fields:
+
+| Field | Purpose |
+|---|---|
+| `base_image_url` | An exact (normally dated) vendor artifact, replacing the derived release default. |
+| `base_image_sha256` | The reviewed digest, forwarded to proxbox-api as `sha256` and verified after download. |
+
+### Currently pinned: one profile
+
+Migration `0029` pins **`influxdb-core-3.11.0-debian-13`** (VMID 9052) and nothing else:
+
+```
+base_image_url    = https://cloud.debian.org/images/cloud/trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2
+base_image_sha256 = 34f5481f320aef28408720a861582dcfe3a81781ee69f3910a64c29ad5395b89
+```
+
+Migration `0029` fails closed if that exact template row is missing and requires its
+compare-and-set to update exactly one row, so a rename, deletion, or concurrent edit
+cannot be recorded as a successful migration that pinned zero profiles.
+
+Every other seeded profile is still unpinned and still resolves the vendor's mutable
+`latest` directory with no digest. That is a **known, accepted gap**, not an oversight —
+it closes per profile, by an operator who has verified a digest. Pinning is not free:
+changing the pin on a template that is already `ready` marks it pending for rebake, so a
+blanket pin across the catalog demands estate-wide rebakes.
+
+### Obtaining a digest you can defend
+
+**Debian publishes only `SHA512SUMS` for cloud images.** There is no `SHA256SUMS`, and a
+SHA-256 cannot be derived from a SHA-512, so the digest must come from hashing the
+artifact yourself:
+
+```bash
+SNAP=20260509-2473                      # a DATED directory, never latest/
+FILE=debian-13-genericcloud-amd64-$SNAP.qcow2
+BASE=https://cloud.debian.org/images/cloud/trixie/$SNAP
+
+# 1. the vendor's published checksum for this exact file
+curl -sSf "$BASE/SHA512SUMS" | grep "  $FILE$"
+
+# 2. the artifact itself
+curl -sSfL --proto '=https' --tlsv1.2 -o "$FILE" "$BASE/$FILE"
+
+# 3. THE STEP THAT MATTERS: prove the bytes you hashed are the bytes Debian published
+#    a checksum for. If this does not match, stop — do not pin.
+sha512sum "$FILE"
+
+# 4. only now derive the value for base_image_sha256
+sha256sum "$FILE"
+```
+
+Never skip step 3, and never copy a checksum out of a listing into the field: that proves
+only that the listing and the field agree, while looking exactly like provenance.
+
+**Limit worth stating plainly:** these snapshot directories carry no `SHA512SUMS.sign`, so
+the trust chain is TLS to `cloud.debian.org` plus the published checksum. That is
+meaningfully stronger than an unpinned mutable URL and meaningfully weaker than an
+offline-verifiable Debian signature. Do not call a pinned image signature-verified.
+
+To refresh a pin, repeat the whole procedure against the new snapshot — do not edit the
+constants alone.
+| `base_image_url_at_build` | Machine-managed resolved URL used by the last successful cloud-image build. |
+| `base_image_sha256_at_build` | Machine-managed resolved digest used by the last successful cloud-image build. |
+
+Both may also be supplied per build via `variable_overrides['image_url']` and
+`variable_overrides['image_sha256']`, which take precedence over the template fields.
+
+Migration `0028` adds the two `*_at_build` snapshots to both `PackerBuild` and
+`PackerTemplate`. On success, the build's resolved source and the template's
+last-successful source are committed atomically with the timestamp. The transaction
+locks and reloads the template before comparing its current declared pin with the
+resolved source, so a mismatched override or a pin edit during the build writes `stale`
+instead of `ready`. Readiness requires both ready status and no computed staleness. Pin
+changes are therefore visible immediately: changing or clearing a declared pin makes
+the old artifact stale, and a per-build pin that differs from the template also produces
+a stale template. Pin drift is checked even when `max_age_days` is unset; automatic
+remediation sets the template to `building` and dispatches the queued build after any
+configured branch merge. A queued row left by the former create-only path is recovered
+rather than blocking remediation forever.
+An unpinned build records its derived URL with an empty digest and does not become stale
+merely because historical unpinned snapshots are empty.
+
+**The rule that matters: a pinned URL must carry a digest.** If an explicit URL comes
+from either source and no digest resolves, `jobs._resolve_cloud_image_source()` raises
+and the build fails closed. A pin without verification is the worst of both worlds — it
+looks like provenance while guaranteeing nothing about the bytes, and it does not even
+survive the vendor replacing the artifact at that URL. A malformed digest is refused
+rather than forwarded; an uppercase digest is normalised, since hex is case-insensitive.
+
+An **unpinned** release build still runs without a digest. Requiring one everywhere
+would break every existing template at once, so that gap is closed per profile, by
+pinning it.
+
+### What this does NOT do
+
+**No profile is pinned by this change.** Pinning requires two judgements that must not
+be guessed: which dated vendor image a profile should target, and a digest that has
+actually been *verified*. An invented or unverified digest is worse than none.
+
+To pin a profile:
+
+1. Choose a dated vendor directory instead of `latest` (for example a dated Debian
+   cloud-image build, or an Ubuntu release-dated image).
+2. Obtain the digest from the vendor's own published checksum file for that exact
+   artifact — not from a mirror, a search result, or this repository's history.
+3. Verify it: download the image, compute `sha256sum`, and confirm it matches the
+   vendor's published value.
+4. Set `base_image_url` and `base_image_sha256` on the template, and record in the
+   template description (or the pinning PR) **where the digest came from and how it was
+   verified**.
+5. Rebake the profile so the recorded artifact is the one in use.
+
+Pinning trades automatic upstream fixes for reproducibility, so a pinned profile needs a
+periodic refresh to pick up base-image security updates.
 
 ## PowerDNS Authoritative + Recursor Template
 
