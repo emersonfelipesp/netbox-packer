@@ -3196,7 +3196,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0030_seed_influxdb3_explorer_debian13_cloud_init"}
+    assert names - internal_dependencies == {"0031_seed_windows11"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
