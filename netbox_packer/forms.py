@@ -1,13 +1,37 @@
+import json
+import re
+
 from django import forms
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
+from utilities.forms import add_blank_choice
 from utilities.forms.fields import DynamicModelChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
 from .choices import (
+    OS_VERSIONS_BY_FAMILY,
     BuildStatusChoices,
     OSFamilyChoices,
+    os_version_grouped_choices,
+    os_version_known_values,
 )
-from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+from .models import (
+    NMS_AGENT_BACKEND_URL_VALIDATOR,
+    PackerBuild,
+    PackerBuildTarget,
+    PackerInstallerConfig,
+    PackerTemplate,
+)
+
+_VM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_NODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_STORAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]*$")
+_SSH_KEY_PREFIXES = (
+    "ssh-ed25519 ",
+    "ssh-rsa ",
+    "ecdsa-sha2-",
+    "sk-ecdsa-sha2-",
+    "sk-ssh-ed25519 ",
+)
 
 # ── PackerInstallerConfig ─────────────────────────────────────────────────────
 
@@ -48,10 +72,21 @@ class PackerInstallerConfigFilterForm(NetBoxModelFilterSetForm):
 
 
 class PackerTemplateForm(NetBoxModelForm):
+    os_version = forms.ChoiceField(
+        choices=(),
+        help_text=(
+            "Pick a release for the selected OS family. The list narrows to the "
+            "chosen family; every version stays selectable if JavaScript is off."
+        ),
+    )
     installer_config = DynamicModelChoiceField(
         queryset=PackerInstallerConfig.objects.all(),
         required=False,
+        help_text="For a cloud-init template, select an installer config whose type is 'Cloud-config YAML'.",
     )
+
+    class Media:
+        js = ("netbox_packer/os_version_filter.js",)
 
     class Meta:
         model = PackerTemplate
@@ -68,8 +103,6 @@ class PackerTemplateForm(NetBoxModelForm):
             "cloud_init_ready",
             "min_cpu_type",
             "build_status",
-            "built_at",
-            "packer_template_ref",
             "max_age_days",
             "auto_rebuild",
             "description",
@@ -79,10 +112,13 @@ class PackerTemplateForm(NetBoxModelForm):
             "hcp_build_id",
             "hcp_last_synced_at",
             "installer_config",
-            "installer_config_checksum_at_build",
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
+            "install_nms_agent",
+            "nms_agent_backend_url",
+            "base_image_url",
+            "base_image_sha256",
             "tags",
         )
         fieldsets = (
@@ -100,22 +136,26 @@ class PackerTemplateForm(NetBoxModelForm):
             ),
             FieldSet(
                 "build_status",
-                "built_at",
-                "packer_template_ref",
                 "max_age_days",
                 "auto_rebuild",
                 name="Build",
             ),
             FieldSet(
                 "installer_config",
-                "installer_config_checksum_at_build",
                 name="Installer",
             ),
             FieldSet(
                 "install_qemu_guest_agent",
                 "install_zabbix_agent2",
                 "zabbix_server",
+                "install_nms_agent",
+                "nms_agent_backend_url",
                 name="Monitoring Agents",
+            ),
+            FieldSet(
+                "base_image_url",
+                "base_image_sha256",
+                name="Base Image Pin",
             ),
             FieldSet(
                 "hcp_bucket_name",
@@ -127,6 +167,88 @@ class PackerTemplateForm(NetBoxModelForm):
             ),
             FieldSet("description", "tags", name="Metadata"),
         )
+        help_texts = {
+            "proxmox_template_id": "Proxmox VMID the baked template will occupy (must be free on the target node).",
+            "storage_pool": "Proxmox storage pool that will hold the template disk (e.g. 'local', 'local-lvm').",
+            "cloud_init_ready": "Leave enabled for cloud-init images so clones receive user-data at first boot.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Grouped (optgroup-by-family) choices; works fully without JavaScript.
+        grouped = os_version_grouped_choices()
+
+        # Never drop an existing template's stored version: if the persisted
+        # value is outside the offered lists, keep it selectable so editing an
+        # older template does not fail validation.
+        current = self.instance.os_version if self.instance and self.instance.pk else None
+        if current and current not in os_version_known_values():
+            grouped = [*grouped, (f"{current} (current)", [(current, current)])]
+
+        self.fields["os_version"].choices = add_blank_choice(grouped)
+
+        # Expose the family→versions map so the progressive-enhancement script
+        # can narrow the dropdown to the selected OS family.
+        self.fields["os_version"].widget.attrs["data-os-version-map"] = json.dumps(OS_VERSIONS_BY_FAMILY)
+
+        # Opt os_version out of NetBox's Tom Select enhancement. Tom Select owns
+        # the rendered dropdown from its own option registry, so the native
+        # DOM narrowing in os_version_filter.js would silently no-op against it.
+        # A plain <select> lets the script drive the visible list, and for a
+        # short release list a non-searchable select is also the better UX.
+        existing_class = self.fields["os_version"].widget.attrs.get("class", "")
+        self.fields["os_version"].widget.attrs["class"] = f"{existing_class} no-ts".strip()
+
+    def clean(self):
+        """Reject an os_version that does not belong to the selected os_family.
+
+        This is the server-side counterpart to the ``os_version_filter.js``
+        progressive enhancement, closing the case where JavaScript is disabled.
+        It is intentionally scoped to this UI form only — the model field and
+        REST serializer keep ``os_version`` free-form so automation may send any
+        version. An existing template's originally-stored value is always allowed
+        so editing an older (off-list) template never fails validation.
+
+        ``super().clean() or self.cleaned_data`` works around a NetBox 4.6.4
+        core bug: ``CheckLastUpdatedMixin.clean()`` (in the MRO between this
+        form and ``forms.ModelForm``) returns ``None`` on every one of its
+        normal paths — e.g. any new (unsaved) instance — instead of
+        propagating ``cleaned_data``. Django's ``BaseForm._clean_form()`` only
+        overwrites ``self.cleaned_data`` when a ``clean()`` override returns a
+        non-``None`` value, so ``self.cleaned_data`` itself is unaffected and
+        safe to fall back to.
+        """
+        cleaned_data = super().clean() or self.cleaned_data
+
+        family = cleaned_data.get("os_family")
+        version = cleaned_data.get("os_version")
+
+        if not family or not version:
+            return cleaned_data
+
+        # Preserve the persisted value on edit (mirrors the __init__ guard).
+        stored = self.instance.os_version if self.instance and self.instance.pk else None
+        if version == stored:
+            return cleaned_data
+
+        allowed = {value for value, _label in OS_VERSIONS_BY_FAMILY.get(family, [])}
+        if version not in allowed:
+            family_label = dict(OSFamilyChoices).get(family, family)
+            self.add_error(
+                "os_version",
+                f"'{version}' is not a valid version for OS family '{family_label}'. "
+                "Choose a version that belongs to the selected OS family.",
+            )
+
+        return cleaned_data
+
+    def clean_nms_agent_backend_url(self):
+        """Reject plaintext agent backends at the UI validation boundary."""
+
+        value = self.cleaned_data["nms_agent_backend_url"]
+        NMS_AGENT_BACKEND_URL_VALIDATOR(value)
+        return value
 
 
 class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
@@ -146,6 +268,142 @@ class PackerTemplateFilterForm(NetBoxModelFilterSetForm):
     )
     cloud_init_ready = forms.NullBooleanSelect()
     tag = TagFilterField(model)
+
+
+class PackerTemplateCreateInstanceForm(forms.Form):
+    """Validate the PackerTemplate table modal payload for proxbox-api VM clone."""
+
+    endpoint_id = forms.IntegerField(
+        min_value=1,
+        label="Proxbox endpoint ID",
+        help_text="Backend ProxmoxEndpoint ID used by proxbox-api for clone operations.",
+    )
+    new_vmid = forms.IntegerField(
+        min_value=100,
+        label="New VMID",
+        help_text="Destination VMID to reserve for the new virtual machine.",
+    )
+    new_name = forms.CharField(max_length=128, label="VM name")
+    target_node = forms.CharField(max_length=100)
+    storage = forms.CharField(max_length=100, required=False)
+    cores = forms.IntegerField(min_value=1, required=False)
+    memory_mb = forms.IntegerField(min_value=64, required=False, label="Memory (MB)")
+    full_clone = forms.BooleanField(required=False, initial=True)
+    start_after_provision = forms.BooleanField(required=False, initial=True)
+    ci_user = forms.CharField(max_length=64, required=False, label="Cloud-init user")
+    ssh_keys = forms.CharField(
+        required=False,
+        widget=forms.Textarea,
+        label="SSH public keys",
+        help_text="One authorized SSH public key per line.",
+    )
+    static_ip = forms.GenericIPAddressField(required=False, label="Static IP")
+    static_cidr = forms.IntegerField(min_value=0, max_value=128, required=False, label="CIDR")
+    gateway = forms.GenericIPAddressField(required=False)
+    dns_servers = forms.CharField(
+        max_length=255,
+        required=False,
+        help_text="Comma-separated DNS server IP addresses.",
+    )
+
+    def __init__(self, *args, template: PackerTemplate | None = None, **kwargs):
+        self.template = template
+        super().__init__(*args, **kwargs)
+        if template is not None:
+            self.fields["target_node"].initial = template.proxmox_node
+            self.fields["storage"].initial = template.storage_pool
+
+    def clean_new_name(self):
+        value = self.cleaned_data["new_name"].strip()
+        if not _VM_NAME_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_target_node(self):
+        value = self.cleaned_data["target_node"].strip()
+        if not _NODE_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_storage(self):
+        value = self.cleaned_data.get("storage", "").strip()
+        if value and not _STORAGE_RE.fullmatch(value):
+            raise forms.ValidationError("Use a valid Proxmox storage identifier.")
+        return value
+
+    def clean_ci_user(self):
+        value = self.cleaned_data.get("ci_user", "").strip()
+        if value and not _VM_NAME_RE.fullmatch(value):
+            raise forms.ValidationError(
+                "Use letters, numbers, dots, underscores, and hyphens; start with a letter or number."
+            )
+        return value
+
+    def clean_ssh_keys(self):
+        raw = self.cleaned_data.get("ssh_keys", "")
+        keys = [line.strip() for line in raw.splitlines() if line.strip()]
+        for key in keys:
+            if not key.startswith(_SSH_KEY_PREFIXES):
+                raise forms.ValidationError("SSH keys must start with a supported public-key prefix.")
+        return keys
+
+    def clean_dns_servers(self):
+        raw = self.cleaned_data.get("dns_servers", "")
+        servers = [entry.strip() for entry in raw.split(",") if entry.strip()]
+        field = forms.GenericIPAddressField()
+        for server in servers:
+            field.clean(server)
+        return servers
+
+    def clean(self):
+        cleaned_data = super().clean()
+        network_values = (
+            cleaned_data.get("static_ip"),
+            cleaned_data.get("static_cidr"),
+            cleaned_data.get("gateway"),
+        )
+        if any(value not in (None, "") for value in network_values) and not all(
+            value not in (None, "") for value in network_values
+        ):
+            raise forms.ValidationError("Static IP, CIDR, and gateway must be provided together.")
+        return cleaned_data
+
+    def cloud_init_payload(self) -> dict[str, object]:
+        """Return the validated proxbox-api cloud_init object."""
+        payload: dict[str, object] = {}
+        if self.cleaned_data.get("ci_user"):
+            payload["user"] = self.cleaned_data["ci_user"]
+        if self.cleaned_data.get("ssh_keys"):
+            payload["ssh_keys"] = self.cleaned_data["ssh_keys"]
+        if self.cleaned_data.get("static_ip"):
+            payload["network"] = {
+                "ip": self.cleaned_data["static_ip"],
+                "cidr": self.cleaned_data["static_cidr"],
+                "gw": self.cleaned_data["gateway"],
+            }
+        if self.cleaned_data.get("dns_servers"):
+            payload["dns_servers"] = self.cleaned_data["dns_servers"]
+        return payload
+
+    def proxbox_payload(self, template: PackerTemplate) -> dict[str, object]:
+        """Return the validated ``/cloud/vm/provision`` payload."""
+        return {
+            "endpoint_id": self.cleaned_data["endpoint_id"],
+            "template_vmid": template.proxmox_template_id,
+            "new_vmid": self.cleaned_data["new_vmid"],
+            "new_name": self.cleaned_data["new_name"],
+            "target_node": self.cleaned_data["target_node"],
+            "cloud_init": self.cloud_init_payload(),
+            "start_after_provision": self.cleaned_data["start_after_provision"],
+            "storage": self.cleaned_data.get("storage") or None,
+            "memory_mb": self.cleaned_data.get("memory_mb"),
+            "cores": self.cleaned_data.get("cores"),
+            "full_clone": self.cleaned_data["full_clone"],
+        }
 
 
 # ── PackerBuild ───────────────────────────────────────────────────────────────

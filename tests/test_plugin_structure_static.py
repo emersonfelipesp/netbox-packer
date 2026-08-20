@@ -1,4 +1,5 @@
 """Static structure tests — run without Django or NetBox installed."""
+
 from __future__ import annotations
 
 import ast
@@ -7,6 +8,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "netbox_packer"
+SUPPORTED_NETBOX_IMAGES = (
+    "netboxcommunity/netbox:v4.5.8",
+    "netboxcommunity/netbox:v4.5.9",
+    "netboxcommunity/netbox:v4.6.0",
+    "netboxcommunity/netbox:v4.6.1",
+    "netboxcommunity/netbox:v4.6.2",
+    "netboxcommunity/netbox:v4.6.3",
+    "netboxcommunity/netbox:v4.6.4",
+)
 
 
 def _read(path: str) -> str:
@@ -36,7 +46,7 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.4"
+    assert project["version"] == "0.0.5"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
     assert project["license"] == "Apache-2.0"
@@ -57,8 +67,18 @@ def test_plugin_config_fields() -> None:
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
-    assert 'min_version = "4.5.8"' in src
-    assert 'max_version = "4.6.99"' in src
+    # Bounds are sourced from the shared compat module rather than re-typed
+    # here, so assert the wiring in the source AND the values in compat.py --
+    # a source substring alone would pass for any constant name.
+    assert "min_version = PLUGIN_MIN_VERSION" in src
+    assert "max_version = PLUGIN_MAX_VERSION" in src
+    compat_src = _read("netbox_packer/compat.py")
+    assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
+    assert 'STABLE_MAX_NETBOX_VERSION = "4.6.99"' in compat_src
+    assert 'EXPERIMENTAL_MIN_NETBOX_VERSION = "4.7.0"' in compat_src
+    assert 'EXPERIMENTAL_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src
+    assert "PLUGIN_MAX_VERSION = EXPERIMENTAL_MAX_NETBOX_VERSION" in compat_src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 
@@ -99,6 +119,8 @@ def test_packer_template_model_fields() -> None:
     ):
         assert field in block, f"Missing field '{field}' in PackerTemplate"
 
+    assert "validators=[NMS_AGENT_BACKEND_URL_VALIDATOR]" in block
+
 
 def test_packer_template_computed_properties() -> None:
     """PackerTemplate must have age_days, is_stale, and derived_vms properties."""
@@ -125,18 +147,117 @@ def test_packer_build_target_model_fields() -> None:
 
 
 def test_api_routes_registered() -> None:
-    """API router must register all four viewsets."""
+    """API router must register all viewsets and InfluxDB profile discovery."""
     api_urls = _read("netbox_packer/api/urls.py")
     for route in ("packer-templates", "build-jobs", "installer-configs", "build-targets"):
         assert f'"{route}"' in api_urls, f"Missing route '{route}' in api/urls.py"
+    assert '"influxdb-profiles/"' in api_urls
 
 
 def test_build_action_endpoint_exists() -> None:
     """POST /build/ action and cancel action must exist in api/views.py."""
     api_views = _read("netbox_packer/api/views.py")
-    assert 'def build' in api_views
-    assert 'def cancel' in api_views
-    assert 'HTTP_202_ACCEPTED' in api_views
+    assert "def build" in api_views
+    assert "def cancel" in api_views
+    assert "HTTP_202_ACCEPTED" in api_views
+
+
+def test_template_table_has_create_instance_column() -> None:
+    """PackerTemplate table must expose the create-instance modal action."""
+    tables_src = _read("netbox_packer/tables.py")
+    block = _class_block(tables_src, "PackerTemplateTable")
+
+    assert "create_instance = tables.TemplateColumn" in block
+    assert "netbox_packer/inc/create_instance_button.html" in block
+    assert 'verbose_name="Create new instance"' in block
+    assert '"create_instance"' in block
+
+
+def test_create_instance_modal_template_contract() -> None:
+    """The row action must render a modal wizard scoped to the selected template."""
+    template = _read("netbox_packer/templates/netbox_packer/inc/create_instance_button.html")
+
+    assert "Create new instance" in template
+    assert 'data-bs-toggle="modal"' in template
+    assert 'data-bs-target="#packer-create-instance-{{ record.pk }}"' in template
+    assert "packertemplate_create_instance" in template
+    assert "record.proxmox_template_id" in template
+    assert "record.proxmox_node" in template
+    for field in (
+        "endpoint_id",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "cores",
+        "memory_mb",
+        "ssh_keys",
+    ):
+        assert f'name="{field}"' in template
+    for step in (
+        "Step 1: Confirm template",
+        "Step 2: Name and destination",
+        "Step 3: Resources and cloud-init",
+        "Step 4: Submit",
+    ):
+        assert step in template
+
+
+def test_create_instance_form_validates_proxbox_payload_fields() -> None:
+    """The modal form must validate proxbox-api clone payload fields."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateCreateInstanceForm")
+
+    for field in (
+        "endpoint_id",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "storage",
+        "cores",
+        "memory_mb",
+        "full_clone",
+        "start_after_provision",
+        "ci_user",
+        "ssh_keys",
+        "static_ip",
+        "static_cidr",
+        "gateway",
+        "dns_servers",
+    ):
+        assert field in block, f"Missing create-instance form field '{field}'"
+    assert "cloud_init_payload" in block
+    assert "proxbox_payload" in block
+    assert "template.proxmox_template_id" in block
+
+
+def test_create_instance_view_registered_and_delegates_to_proxbox() -> None:
+    """The PackerTemplate POST action must call proxbox-api through plugin settings."""
+    views_src = _read("netbox_packer/views.py")
+    assert '@register_model_view(models.PackerTemplate, name="create_instance", path="create-instance/")' in views_src
+    assert "class PackerTemplateCreateInstanceView" in views_src
+    assert "PackerTemplateCreateInstanceForm" in views_src
+    assert "PackerPluginSettings.get_solo()" in views_src
+    assert "call_proxbox_vm_provision" in views_src
+    assert "netbox_packer.change_packertemplate" in views_src
+
+
+def test_proxbox_client_has_vm_provision_call() -> None:
+    """The stdlib proxbox client must know the VM clone endpoint."""
+    client_src = _read("netbox_packer/proxbox_client.py")
+
+    assert "def call_proxbox_vm_provision" in client_src
+    assert 'path="/cloud/vm/provision"' in client_src
+    for key in (
+        "endpoint_id",
+        "template_vmid",
+        "new_vmid",
+        "new_name",
+        "target_node",
+        "cloud_init",
+        "start_after_provision",
+        "full_clone",
+    ):
+        assert f'"{key}"' in client_src
 
 
 def test_validate_node_uses_node_affinity_validator() -> None:
@@ -206,6 +327,28 @@ def test_ci_workflow_exists() -> None:
     assert "ruff check" in ci
     assert "ruff format" in ci
     assert "pytest tests" in ci
+
+
+def test_e2e_workflow_covers_supported_netbox_versions() -> None:
+    workflow = _read(".github/workflows/e2e.yml")
+
+    for image in SUPPORTED_NETBOX_IMAGES:
+        assert image in workflow
+
+
+def test_docs_name_supported_netbox_versions() -> None:
+    docs = "\n".join(
+        [
+            _read("CERTIFICATION.md"),
+            _read("README.md"),
+            _read("docs/certification.md"),
+            _read("docs/index.md"),
+            _read("docs/release-notes/version-0.0.2.post2.md"),
+        ]
+    )
+
+    for image in SUPPORTED_NETBOX_IMAGES:
+        assert image.rsplit(":", 1)[1] in docs
 
 
 def test_migration_0011_k8s_role_templates_exists() -> None:
@@ -334,3 +477,115 @@ def test_migration_0012_powerdns_seed_exists() -> None:
 
     # Both cloud-configs must be valid Python strings (checked by test_all_python_files_parse)
     assert src.count("#cloud-config") >= 2, "Expected #cloud-config marker in both configs"
+
+
+def test_os_versions_by_family_mapping() -> None:
+    """choices.py must expose an OS version map covering seeded values + helpers."""
+    choices_src = _read("netbox_packer/choices.py")
+    assert "OS_VERSIONS_BY_FAMILY" in choices_src, "Missing OS_VERSIONS_BY_FAMILY mapping"
+    assert "def os_version_grouped_choices" in choices_src, "Missing os_version_grouped_choices helper"
+    assert "def os_version_known_values" in choices_src, "Missing os_version_known_values helper"
+    # Seeded os_version values must stay offered so existing templates remain editable.
+    for version in ('"24.04"', '"26.04"'):
+        assert version in choices_src, f"Missing seeded os_version {version} in OS_VERSIONS_BY_FAMILY"
+
+
+def test_template_form_os_version_is_grouped_dropdown() -> None:
+    """PackerTemplateForm must render os_version as a grouped ChoiceField dropdown."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "os_version = forms.ChoiceField" in block, "os_version must be a forms.ChoiceField (dropdown)"
+    assert "os_version_grouped_choices()" in block, "os_version choices must use os_version_grouped_choices()"
+    assert "add_blank_choice" in block, "os_version dropdown must include a blank placeholder"
+    assert "os_version_known_values()" in block, "os_version __init__ must guard off-list current values"
+    assert "data-os-version-map" in block, "os_version widget must expose the family->versions map for the JS filter"
+    assert 'js = ("netbox_packer/os_version_filter.js",)' in block, "Form.Media must load os_version_filter.js"
+
+
+def test_template_form_declutters_machine_managed_fields() -> None:
+    """Machine-managed lifecycle fields must not be exposed on the template form."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    for machine_field in (
+        "built_at",
+        "packer_template_ref",
+        "installer_config_checksum_at_build",
+        "base_image_url_at_build",
+        "base_image_sha256_at_build",
+        "provisions_service",
+    ):
+        assert f'"{machine_field}"' not in block, (
+            f"Machine-managed field '{machine_field}' should not appear on PackerTemplateForm"
+        )
+
+
+def test_template_form_exposes_optional_nms_agent_controls() -> None:
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert '"install_nms_agent"' in block
+    assert '"nms_agent_backend_url"' in block
+
+
+def test_os_version_filter_js_asset() -> None:
+    """The progressive-enhancement JS must exist and be XSS-safe."""
+    js_src = _read("netbox_packer/static/netbox_packer/os_version_filter.js")
+    assert 'name="os_version"' in js_src, "JS must target the os_version select"
+    assert 'name="os_family"' in js_src, "JS must target the os_family select"
+    assert "data-os-version-map" in js_src, "JS must read the family->versions map"
+    assert "new Option(" in js_src, "JS must build options with the DOM Option API"
+    # Must preserve an off-list current value so edits never lose data.
+    assert "(current)" in js_src, "JS must keep an off-list current version selectable"
+    # Security: no unsafe HTML injection.
+    assert "innerHTML" not in js_src, "JS must not use innerHTML"
+
+
+def test_os_version_select_opts_out_of_tom_select() -> None:
+    """os_version must render as a plain <select> (no-ts) so native narrowing wins.
+
+    NetBox wraps static <select> elements in Tom Select, which owns the rendered
+    dropdown; the ``no-ts`` class opts os_version out so os_version_filter.js can
+    drive the visible list.
+    """
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "no-ts" in block, "os_version widget must be excluded from Tom Select via the 'no-ts' class"
+
+
+def test_os_version_filter_js_resets_on_family_change() -> None:
+    """A user-driven OS family change must reset os_version (no stale value)."""
+    js_src = _read("netbox_packer/static/netbox_packer/os_version_filter.js")
+    # Initial pass preserves the stored value; the change handler does not.
+    assert "populate(familySelect.value, true)" in js_src, "Initial pass must preserve the stored value"
+    assert "populate(familySelect.value, false)" in js_src, (
+        "OS family change must reset the version (preserveSelection=false)"
+    )
+
+
+def test_template_form_validates_family_version_pairing() -> None:
+    """PackerTemplateForm.clean must reject a version outside the selected family."""
+    forms_src = _read("netbox_packer/forms.py")
+    block = _class_block(forms_src, "PackerTemplateForm")
+    assert "def clean(self)" in block, "PackerTemplateForm must add a clean() cross-field guard"
+    assert "OS_VERSIONS_BY_FAMILY" in block, "clean() must check the family->versions map"
+    assert "add_error" in block, "clean() must raise a field error for a mismatched os_version"
+
+
+def test_packaging_is_a_declared_dependency() -> None:
+    """`compat.py` imports packaging at module scope, so the metadata must say so.
+
+    Inside a NetBox install it happens to be present transitively — NetBox core
+    uses it on the very same `PluginConfig.validate` path — and pytest drags it
+    in during CI. Neither is a declaration. Without this the wheel's metadata
+    misstates what the package imports, and a consumer resolving it outside a
+    NetBox environment gets an ImportError at plugin import time.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = data["project"]["dependencies"]
+
+    assert any(spec.split(">=")[0].strip() == "packaging" for spec in declared), (
+        f"packaging must be declared in [project.dependencies]; got {declared}"
+    )

@@ -1,16 +1,26 @@
 from netbox.plugins import PluginConfig
 
+from .compat import (
+    PLUGIN_MAX_VERSION,
+    PLUGIN_MIN_VERSION,
+    register_netbox_compatibility_check,
+)
+
 
 class NetBoxPackerConfig(PluginConfig):
     name = "netbox_packer"
     verbose_name = "NetBox Packer"
     description = "Manage Packer VM template builds and catalog"
-    version = "0.0.4"
+    version = "0.0.5"
     base_url = "packer"
     author = "Emerson Felipe"
     author_email = "emersonfelipe.2003@gmail.com"
-    min_version = "4.5.8"
-    max_version = "4.6.99"
+    # Sourced from .compat so the stable/experimental bands are declared in
+    # one place across the Proxbox plugin stack. max_version is the
+    # *experimental* ceiling: NetBox 4.7 loads without an opt-in, and
+    # .compat's system check warns that the line is not yet certified.
+    min_version = PLUGIN_MIN_VERSION
+    max_version = PLUGIN_MAX_VERSION
     default_settings = {
         "PACKER_BUILD_TIMEOUT_SECONDS": 3600,
         "PACKER_STALENESS_CHECK_INTERVAL": "0 */6 * * *",
@@ -26,6 +36,7 @@ class NetBoxPackerConfig(PluginConfig):
 
     def ready(self):
         super().ready()
+        register_netbox_compatibility_check(self)
         from . import (
             hcp_sync,  # noqa: F401 — registers PackerHCPSyncJobRunner
             jobs,  # noqa: F401 — registers PackerBuildJob and PackerStalenessCheckJob

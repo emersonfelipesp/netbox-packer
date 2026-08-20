@@ -48,7 +48,7 @@ WIN11_UNATTEND_CONTENT = """\
 WIN11_CONFIG_NAME = "windows-11-24h2"
 WIN11_CONFIG_VERSION = "1.0.0"
 WIN11_TEMPLATE_NAME = "windows-11-24h2"
-WIN11_VMID = 9019
+WIN11_VMID = 9020
 
 PROXMOX_ENDPOINT = "https://10.0.30.71:8006"
 PROXMOX_NODE = "10.0.30.71"
@@ -77,7 +77,7 @@ def seed_windows11(apps, schema_editor):
                 "template; WinRM password is supplied via PKR_VAR_winrm_password env var "
                 "on the netbox-rq worker (never stored). Post-install: VirtIO guest tools, "
                 "cloudbase-init (Proxmox cloud-init support), sysprep generalize. "
-                "Targets Proxmox 10.0.30.71, VMID 9019, storage local."
+                "Targets Proxmox 10.0.30.71, VMID 9020, storage local."
             ),
         },
     )
@@ -102,7 +102,7 @@ def seed_windows11(apps, schema_editor):
             "install_zabbix_agent2": True,
             "zabbix_server": "zabbix.nmulti.cloud",
             "description": (
-                "Windows 11 24H2 Proxmox cloud-init template (VMID 9019). "
+                "Windows 11 24H2 Proxmox cloud-init template (VMID 9020). "
                 "Built via Packer HCL2 proxmox-iso builder on ProxmoxEndpoint "
                 "10.0.30.71 (storage: local). Includes: VirtIO drivers, "
                 "cloudbase-init for Proxmox cloud-init support (hostname, SSH keys, "
@@ -121,7 +121,7 @@ def unseed_windows11(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("netbox_packer", "0012_seed_powerdns_cloud_init"),
+        ("netbox_packer", "0030_seed_influxdb3_explorer_debian13_cloud_init"),
     ]
 
     operations = [

@@ -1,3 +1,4 @@
 recursive-include netbox_packer/templates *
 recursive-include netbox_packer/static *
+recursive-include netbox_packer/seeds *
 include README.md LICENSE

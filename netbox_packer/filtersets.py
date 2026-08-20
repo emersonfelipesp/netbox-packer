@@ -21,6 +21,7 @@ class PackerTemplateFilterSet(NetBoxModelFilterSet):
             "cloud_init_ready",
             "proxmox_node",
             "auto_rebuild",
+            "provisions_service",
         )
 
     def search(self, queryset, name, value):

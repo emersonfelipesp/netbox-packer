@@ -1,0 +1,139 @@
+<button type="button" class="btn btn-sm btn-outline-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#packer-create-instance-{{ record.pk }}">
+  <i class="mdi mdi-plus-box"></i> Create new instance
+</button>
+
+<div class="modal fade" id="packer-create-instance-{{ record.pk }}" tabindex="-1" aria-labelledby="packer-create-instance-{{ record.pk }}-label" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form action="{% url 'plugins:netbox_packer:packertemplate_create_instance' pk=record.pk %}" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
+        <div class="modal-header">
+          <h5 class="modal-title" id="packer-create-instance-{{ record.pk }}-label">Create new instance</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+            <span class="badge text-bg-primary">Step 1</span>
+            <span class="badge text-bg-secondary">Step 2</span>
+            <span class="badge text-bg-secondary">Step 3</span>
+            <span class="badge text-bg-secondary">Step 4</span>
+          </div>
+
+          <section class="mb-4">
+            <h6 class="mb-3">Step 1: Confirm template</h6>
+            <div class="table-responsive">
+              <table class="table table-sm attr-table mb-0">
+                <tr>
+                  <th scope="row">Template</th>
+                  <td>{{ record.name }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Source VMID</th>
+                  <td>{{ record.proxmox_template_id }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Node</th>
+                  <td>{{ record.proxmox_node }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Endpoint</th>
+                  <td>{{ record.proxmox_endpoint|default:"-" }}</td>
+                </tr>
+              </table>
+            </div>
+          </section>
+
+          <section class="mb-4">
+            <h6 class="mb-3">Step 2: Name and destination</h6>
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-endpoint-{{ record.pk }}">Proxbox endpoint ID</label>
+                <input type="number" class="form-control" id="packer-create-endpoint-{{ record.pk }}" name="endpoint_id" min="1" required>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-vmid-{{ record.pk }}">New VMID</label>
+                <input type="number" class="form-control" id="packer-create-vmid-{{ record.pk }}" name="new_vmid" min="100" required>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-node-{{ record.pk }}">Target node</label>
+                <input type="text" class="form-control" id="packer-create-node-{{ record.pk }}" name="target_node" maxlength="100" value="{{ record.proxmox_node }}" required>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="packer-create-name-{{ record.pk }}">VM name</label>
+                <input type="text" class="form-control" id="packer-create-name-{{ record.pk }}" name="new_name" maxlength="128" required>
+              </div>
+            </div>
+          </section>
+
+          <section class="mb-4">
+            <h6 class="mb-3">Step 3: Resources and cloud-init</h6>
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-cores-{{ record.pk }}">Cores</label>
+                <input type="number" class="form-control" id="packer-create-cores-{{ record.pk }}" name="cores" min="1" placeholder="2">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-memory-{{ record.pk }}">Memory (MB)</label>
+                <input type="number" class="form-control" id="packer-create-memory-{{ record.pk }}" name="memory_mb" min="64" step="64" placeholder="2048">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-storage-{{ record.pk }}">Storage</label>
+                <input type="text" class="form-control" id="packer-create-storage-{{ record.pk }}" name="storage" maxlength="100" value="{{ record.storage_pool }}">
+              </div>
+              <div class="col-md-6">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="packer-create-full-clone-{{ record.pk }}" name="full_clone" checked>
+                  <label class="form-check-label" for="packer-create-full-clone-{{ record.pk }}">Full clone</label>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="packer-create-start-{{ record.pk }}" name="start_after_provision" checked>
+                  <label class="form-check-label" for="packer-create-start-{{ record.pk }}">Start after provision</label>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="packer-create-ci-user-{{ record.pk }}">Cloud-init user</label>
+                <input type="text" class="form-control" id="packer-create-ci-user-{{ record.pk }}" name="ci_user" maxlength="64" placeholder="ubuntu">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="packer-create-dns-{{ record.pk }}">DNS servers</label>
+                <input type="text" class="form-control" id="packer-create-dns-{{ record.pk }}" name="dns_servers" maxlength="255" placeholder="1.1.1.1, 8.8.8.8">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-ip-{{ record.pk }}">Static IP</label>
+                <input type="text" class="form-control" id="packer-create-ip-{{ record.pk }}" name="static_ip" placeholder="192.0.2.10">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-cidr-{{ record.pk }}">CIDR</label>
+                <input type="number" class="form-control" id="packer-create-cidr-{{ record.pk }}" name="static_cidr" min="0" max="128" placeholder="24">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="packer-create-gateway-{{ record.pk }}">Gateway</label>
+                <input type="text" class="form-control" id="packer-create-gateway-{{ record.pk }}" name="gateway" placeholder="192.0.2.1">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="packer-create-ssh-keys-{{ record.pk }}">SSH public keys</label>
+                <textarea class="form-control" id="packer-create-ssh-keys-{{ record.pk }}" name="ssh_keys" rows="3" placeholder="ssh-ed25519 ..."></textarea>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h6 class="mb-3">Step 4: Submit</h6>
+            <p class="text-muted mb-0">
+              This will ask proxbox-api to clone source VMID {{ record.proxmox_template_id }} from template {{ record.name }}.
+            </p>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="mdi mdi-plus-box"></i> Create new instance
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
