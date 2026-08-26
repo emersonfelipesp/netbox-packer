@@ -245,10 +245,11 @@ obtain an unexpired `plan_token`; then `POST /cloud/templates/images` with the
 same build fields, `execute=true`, and that token. Never compute the recipe
 digest locally or allow request fields to drift between plan and execute.
 
-This requires `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25`, where the
-explicit packer-template capability is persisted, propagated, signed, and
-rechecked at the final execution boundary. `proxbox-api 0.0.19.post5` has only
-the earlier signed-preflight contract and is insufficient.
+This requires capability-bearing revisions where the explicit packer-template
+capability is persisted, propagated, signed, and rechecked at the final
+execution boundary. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are
+pre-capability releases; use reviewed revisions after those tags until release
+engineering records the exact validated inclusive version floors.
 Preflight unavailability or findings, `ready=false`, writes disabled, missing or
 expired tokens, execute-time mismatch/expiry, and responses without both
 confirmed execution and artifact verification fail the build with an actionable

@@ -99,15 +99,16 @@ and clones retain the credential already baked into root-only
 
 The `cloud_config` bake path requires:
 
-- **`proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25`** — netbox-packer
+- **Capability-bearing proxbox-api and netbox-proxbox revisions** — netbox-packer
   requires the explicit packer-template capability in both services plus the signed preflight
   contract: a non-executing build plan returns `recipe_digest`,
   `/cloud/templates/images/preflight` returns an expiring `plan_token`, and the
   execute request consumes that token. A 404 from the preflight endpoint is an
   incompatible older service and fails closed; there is no legacy one-step
   fallback. The runtime image includes `openssh-client` starting from
-  `0.0.18.post1`. The older `proxbox-api 0.0.19.post5` contract is insufficient:
-  it signs preflight plans but does not persist or enforce the narrow capability.
+  `0.0.18.post1`. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are
+  pre-capability releases; use reviewed revisions after those tags until release
+  engineering records the exact validated inclusive version floors.
 - **`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`** — set in the proxbox-api
   environment. Cloud image execution is disabled by default.
 - **`PROXBOX_SSH_KEY_DIR`** — directory on the proxbox-api host containing the

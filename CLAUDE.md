@@ -182,16 +182,17 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
 
 ### Prerequisites (proxbox-api side)
 
-- `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25` with the explicit
-  packer-template capability bound into the signed-preflight contract,
+- Capability-bearing revisions of proxbox-api and netbox-proxbox with the
+  explicit packer-template capability bound into the signed-preflight contract,
   `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, and `PROXBOX_SSH_KEY_DIR`; the
   runtime image bakes in `openssh-client` (`0.0.18.post1`). The target
   `ProxmoxEndpoint` needs `allow_writes=True` and
   `allow_packer_template_builds=True`, and the chosen storage must allow
   `snippets,import,images` content types. A 404 from the preflight endpoint is
-  deliberately incompatible and fails closed. `proxbox-api 0.0.19.post5`
-  predates the narrow server-side gate; never fall back to the legacy
-  one-step execute call.
+  deliberately incompatible and fails closed. `proxbox-api 0.0.20` and
+  `netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+  after those tags until release engineering records the exact validated
+  inclusive version floors. Never fall back to the legacy one-step execute call.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 
