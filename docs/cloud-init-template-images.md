@@ -40,10 +40,11 @@ netbox-proxbox endpoint by normalized host and port. Missing, malformed,
 disabled, unmatched, or ambiguous targets fail before queueing. A numeric
 `variable_overrides.endpoint_id` is never treated as authorization.
 
-This requires `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25`, where the
-signed-preflight contract is bound to the explicit packer-template capability.
-`proxbox-api 0.0.19.post5` is insufficient because it predates that server-side
-capability gate. If the preflight endpoint returns 404, the service
+This requires capability-bearing revisions where the signed-preflight contract
+is bound to the explicit packer-template capability. `proxbox-api 0.0.20` and
+`netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+after those tags until release engineering records the exact validated inclusive
+version floors. If the preflight endpoint returns 404, the service
 is incompatible: netbox-packer fails the build with an upgrade message and does
 not fall back to the unsafe legacy one-step execute call. Unreachable/not-ready
 preflight, returned findings, missing or expired plan tokens, plan mismatch, and

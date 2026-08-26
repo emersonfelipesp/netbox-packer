@@ -107,6 +107,11 @@ Installations that do not use branching are unaffected.
 
 | netbox-packer | NetBox | Python | netbox-proxbox | proxbox-api | pydantic |
 |---|---|---|---|---|---|
-| v0.0.5 | v4.5.8, v4.5.9, v4.6.0-v4.6.4 | ≥3.12 | ≥0.0.25 for `cloud_config`; optional for local Packer | ≥0.0.20 for `cloud_config` | ≥2.0.0 |
+| v0.0.5 | v4.5.8, v4.5.9, v4.6.0-v4.6.4 | ≥3.12 | capability-bearing revision after 0.0.25 for `cloud_config`; optional for local Packer | capability-bearing revision after 0.0.20 for `cloud_config` | ≥2.0.0 |
 | v0.0.2.post2 | 4.5.8 – 4.6.x | ≥3.12 | Optional | Required | ≥2.0.0 |
 | v0.0.2 | 4.5.x – 4.6.x | ≥3.12 | ≥0.0.16 | Required | ≥2.0.0 |
+
+`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are pre-capability releases;
+use reviewed revisions after those tags until release engineering records the
+exact validated inclusive version floors. This deliberately avoids a numeric
+`>` placeholder, whose PEP 440 semantics could exclude a valid `.postN` release.

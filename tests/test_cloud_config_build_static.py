@@ -31,6 +31,34 @@ def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def test_capability_version_floor_excludes_pre_feature_packages() -> None:
+    operative_statement = (
+        "`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are "
+        "pre-capability releases; use reviewed revisions after those tags until "
+        "release engineering records the exact validated inclusive version floors."
+    )
+    docs = (
+        "README.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "COMPATIBILITY.md",
+        "docs/cloud-init-template-images.md",
+        "docs/configuration.md",
+    )
+    for rel in docs:
+        text = _read(rel)
+        assert operative_statement in " ".join(text.split()), rel
+        assert not re.search(r"proxbox-api\s*(?:>=|>|\u2265)\s*0\.0\.20", text), rel
+        assert not re.search(r"netbox-proxbox\s*(?:>=|>|\u2265)\s*0\.0\.25", text), rel
+
+    matrix = _read("COMPATIBILITY.md")
+    row = next(line for line in matrix.splitlines() if line.startswith("| v0.0.5 |"))
+    cells = [cell.strip() for cell in row.strip("|").split("|")]
+    assert cells[3] == "capability-bearing revision after 0.0.25 for `cloud_config`; optional for local Packer"
+    assert cells[4] == "capability-bearing revision after 0.0.20 for `cloud_config`"
+    assert "could exclude a valid `.postN` release" in matrix
+
+
 def _literal_assignments(rel: str) -> dict[str, object]:
     tree = ast.parse(_read(rel))
     values: dict[str, object] = {}
