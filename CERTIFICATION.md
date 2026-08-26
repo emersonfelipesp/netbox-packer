@@ -20,5 +20,5 @@ This checklist tracks readiness for the NetBox Plugin Certification Program.
 - Documentation: <https://emersonfelipesp.github.io/netbox-packer/>
 - PyPI: <https://pypi.org/project/netbox-packer/>
 - Support: <https://github.com/emersonfelipesp/netbox-packer/issues>
-- Certification target release: `0.0.4`
+- Certification target release: `0.0.5`
 - Verified NetBox targets: `v4.5.8`, `v4.5.9`, `v4.6.0`, `v4.6.1`, `v4.6.2`, `v4.6.3`, and `v4.6.4`

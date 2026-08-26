@@ -21,30 +21,36 @@ PLUGINS_CONFIG = {
 
 ## PackerPluginSettings
 
-After running migrations, the singleton settings row is available in NetBox under
-**Plugins → Packer Plugin Settings**. All fields can be edited through the UI or
-the REST API.
+After running migrations, the singleton settings row exists in the database
+(`PackerPluginSettings.get_solo()`), but **there is currently no NetBox UI page
+and no REST API endpoint for it** — there is no navigation menu entry, no
+registered model view, and the plugin's API router only registers
+`packer-templates`, `build-jobs`, `installer-configs`, and `build-targets` (not
+`plugin-settings`). The only supported way to read or write these fields today
+is the Django/NetBox Python shell (`manage.py nbshell` or `manage.py shell`);
+see "Storing the key" below.
 
-| Setting | UI label | Description |
+| Setting | Model field | Description |
 | --- | --- | --- |
-| `proxbox_api_url` | Proxbox API URL | Base URL of the proxbox-api backend (e.g. `http://10.0.30.207:8000`). Required for `cloud_config` installer-type builds. |
-| `proxbox_api_key` | Proxbox API key | Plaintext key entry (stored Fernet-encrypted). See key management below. |
-| `branching_enabled` | Enable branching | When `True`, staleness-check jobs run inside a netbox-branching branch. |
-| `branch_name_prefix` | Branch name prefix | Prefix for auto-created branch names (default: `packer-stale`). |
-| `branch_on_conflict` | Branch conflict behavior | `fail` (leave branch open) or `acknowledge` (merge anyway). |
+| Proxbox API URL | `proxbox_api_url` | Base URL of the proxbox-api backend (e.g. `http://10.0.30.207:8000`). Required for `cloud_config` installer-type builds. |
+| Proxbox API key | `proxbox_api_key_encrypted` | Set only via `set_proxbox_api_key()` / read via `get_proxbox_api_key()` — never stored or read as plaintext. See key management below. |
+| File Server package-read user | `fileserver_package_read_user` | Plaintext username for the dedicated non-human Gitea package reader. |
+| File Server package-read token | `fileserver_package_read_token_encrypted` | Set only via `set_fileserver_package_read_token()` / read via `get_fileserver_package_read_token()` — never stored or read as plaintext. |
+| Enable branching | `branching_enabled` | When `True`, staleness-check jobs run inside a netbox-branching branch. |
+| Branch name prefix | `branch_name_prefix` | Prefix for auto-created branch names (default: `packer-stale`). |
+| Branch conflict behavior | `branch_on_conflict` | `fail` (leave branch open) or `acknowledge` (merge anyway). |
 
 ## Proxbox API key management
 
-The `proxbox_api_key` is **not** stored in plain text. It is encrypted with a
+The proxbox-api key is **not** stored in plain text. It is encrypted with a
 Fernet cipher derived from `settings.SECRET_KEY` (SHA-256 → base64url). There
 is **no dependency on `netbox-nms`** for this encryption.
 
 ### Storing the key
 
-**Via the NetBox UI.** Edit the Packer Plugin Settings object and enter the key
-in the **Proxbox API key** field. The plugin encrypts it on `save()`.
-
-**Via the Python shell.** This is useful for automation or initial bootstrap:
+**Via the Python shell.** This is currently the only supported way to set or
+rotate the key (there is no UI form or REST endpoint for `PackerPluginSettings`
+yet):
 
 ```python
 from netbox_packer.models import PackerPluginSettings
@@ -54,9 +60,8 @@ settings_row.set_proxbox_api_key("your-proxbox-api-key-here")
 settings_row.save()
 ```
 
-**Via the REST API.** `POST /api/plugins/packer/plugin-settings/` (or `PATCH` the
-existing row) with the `proxbox_api_key` field in the request body. The
-serializer handles encryption transparently.
+`proxbox_api_url` can be set the same way (`settings_row.proxbox_api_url = "..."`)
+before calling `.save()`.
 
 ### Verifying the key
 
@@ -68,13 +73,39 @@ key = settings_row.get_proxbox_api_key()
 print("Key configured:", bool(key))
 ```
 
+## File Server package-index credential management
+
+The File Server golden-image bake reads its package-index credential from the
+same singleton settings row, not from the NetBox or RQ service environment.
+The username is not secret; the token uses the same Django `SECRET_KEY`-derived
+Fernet cipher as the proxbox-api key. Set it from the Django/NetBox shell:
+
+```python
+from netbox_packer.models import PackerPluginSettings
+
+settings_row = PackerPluginSettings.get_solo()
+settings_row.fileserver_package_read_user = "nms-pkg-reader"
+settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
+settings_row.save()
+```
+
+Use a dedicated non-human Gitea identity and grant package-Read permission only.
+Never use a personal token or `PACKAGE_WRITE_TOKEN`. When the token changes,
+rotate it through the setter and rebake File Server VMID `9300`; existing images
+and clones retain the credential already baked into root-only
+`/etc/nms-fileserver-agent/pip.conf`.
+
 ## proxbox-api prerequisites
 
 The `cloud_config` bake path requires:
 
-- **`proxbox-api >= 0.0.18`** — the `user_data_yaml` parameter and `cicustom`
-  snippet writing were introduced in this version. The runtime image includes
-  `openssh-client` starting from `0.0.18.post1`.
+- **`proxbox-api >= 0.0.19.post5`** — netbox-packer requires the signed preflight
+  contract: a non-executing build plan returns `recipe_digest`,
+  `/cloud/templates/images/preflight` returns an expiring `plan_token`, and the
+  execute request consumes that token. A 404 from the preflight endpoint is an
+  incompatible older service and fails closed; there is no legacy one-step
+  fallback. The runtime image includes `openssh-client` starting from
+  `0.0.18.post1`.
 - **`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`** — set in the proxbox-api
   environment. Cloud image execution is disabled by default.
 - **`PROXBOX_SSH_KEY_DIR`** — directory on the proxbox-api host containing the

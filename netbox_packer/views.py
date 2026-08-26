@@ -97,7 +97,15 @@ class PackerTemplateBuildView(generic.ObjectView):
 
         from .jobs import dispatch_build
 
-        dispatch_build(build)
+        try:
+            dispatch_build(build)
+        except Exception as exc:
+            messages.error(
+                request,
+                f"Build #{build.pk} could not be queued for template '{template.name}': {exc}",
+            )
+            return redirect(build.get_absolute_url())
+
         messages.success(
             request,
             f"Build #{build.pk} queued for template '{template.name}'.",

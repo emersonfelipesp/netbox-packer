@@ -66,18 +66,22 @@ installer config, target node/storage, and monitoring-agent injection preference
 | `description` | TextField | blank | — |
 | `installer_config` | FK → PackerInstallerConfig | null | SET_NULL; drives build type |
 | `installer_config_checksum_at_build` | CharField(64) | blank | Snapshot of checksum at last successful build |
+| `base_image_url_at_build` | URLField(500) | blank | Read-only resolved URL used by the last successful cloud-image build |
+| `base_image_sha256_at_build` | CharField(64) | blank | Read-only resolved digest used by the last successful cloud-image build |
+| `provisions_service` | CharField(64) | blank | Read-only, migration-managed service marker; downstream code follows a VM's `source_packer_template` lineage to this value |
 
 !!! note "Template form vs. model fields"
     The template add/edit form intentionally hides machine-managed lifecycle
-    fields (`built_at`, `packer_template_ref`, and
-    `installer_config_checksum_at_build`) — they are written by
-    `PackerBuildJob`, not by operators. The full set of fields is still
-    available through the REST API. The form also renders `os_version` as an
+    fields (`built_at`, `packer_template_ref`,
+    `installer_config_checksum_at_build`, `base_image_url_at_build`,
+    `base_image_sha256_at_build`, and `provisions_service`) — they are written by
+    `PackerBuildJob`, not by operators. The base-image snapshots are available
+    read-only through the REST API. The form also renders `os_version` as an
     OS-family-grouped dropdown and carries help text on the key
     cloud-init-template fields (`os_version`, `proxmox_template_id`,
     `storage_pool`, `cloud_init_ready`, `installer_config`).
 
-### Monitoring agent injection fields (added in migration `0008`)
+### Monitoring agent injection fields (migrations `0008` and `0023`)
 
 These fields control what `PackerBuildJob._inject_monitoring_agents()` adds to
 `cloud_config` content at build time. They have no effect on non-`cloud_config`
@@ -88,6 +92,14 @@ installer types.
 | `install_qemu_guest_agent` | BooleanField | `True` | Inject `qemu-guest-agent` package + `systemctl enable --now` runcmd into the cloud-config; skipped if `qemu-guest-agent` already appears in the installer config's packages list |
 | `install_zabbix_agent2` | BooleanField | `True` | Inject Zabbix Agent 2 bootstrap script into `write_files` + `runcmd`; skipped entirely when `"zabbix-agent2"` appears anywhere in the installer config (e.g. the Zabbix server seed manages its own agent) |
 | `zabbix_server` | CharField(255) | `"zabbix.nmulti.cloud"` | `ServerActive=` value in the injected `zabbix_agent2.conf`; validated against hostname/IP + optional `:port`, comma-separated; no spaces or shell metacharacters |
+| `install_nms_agent` | BooleanField | `False` | Inject the pinned static NMS host agent, config, and systemd unit; structural deduplication skips only when all managed files and the exact bootstrap command are present, and completes partial state |
+| `nms_agent_backend_url` | URLField | `"https://backend.nms.nmulti.cloud"` | HTTPS-only bootstrap/heartbeat/OTLP base URL; rendering also rejects credentials, query strings, and fragments |
+
+The Akvorado seed is the first template to set `install_nms_agent=True`. Its
+`provisions_service="akvorado"` marker also causes the injected local RPC
+allowlist to contain exactly `akvorado.service`. The injection reuses the
+agent's secure-prefix bootstrap flow and does not bake a token, signing key, or
+new trust mechanism.
 
 ### HCP Packer fields
 
@@ -99,7 +111,7 @@ installer types.
 | Property | Returns |
 | --- | --- |
 | `age_days` | Days since `built_at`, or `None` when not yet built |
-| `is_stale` | `True` when `age_days > max_age_days` or `installer_config.checksum != installer_config_checksum_at_build` |
+| `is_stale` | `True` when the age policy is exceeded, installer content changed, or the desired base-image pin differs from the successful-build snapshots |
 | `derived_vms` | `VirtualMachine` queryset where `custom_field_data__source_packer_template == self.pk` |
 
 ---
@@ -116,6 +128,14 @@ A single build-run record for a `PackerTemplate`. Created by
     `"Jobs cannot be assigned to this object type"` and the Build button will
     silently do nothing.
 
+Build triggers must call the shared `dispatch_build(build)` helper immediately
+after creating the row and setting the template to `build_status="building"`.
+If enqueue fails, the helper marks the build `failed`, appends an error to the
+build log, and sets the template to `failed` unless another build remains active.
+Local Packer subprocesses enforce `PACKER_BUILD_TIMEOUT_SECONDS` with a watchdog
+that kills silent `packer init` / `packer build` stalls even when no new output
+arrives.
+
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `template` | FK → PackerTemplate | — | CASCADE |
@@ -129,6 +149,8 @@ A single build-run record for a `PackerTemplate`. Created by
 | `exit_code` | IntegerField | null | Exit code from `packer build` or proxbox-api response |
 | `result_template_id` | IntegerField | null | Proxmox VMID of the completed template |
 | `selected_node` | CharField(100) | blank | Proxmox node selected by `select_build_node()` |
+| `base_image_url_at_build` | URLField(500) | blank | Read-only resolved URL used by this successful cloud-image build |
+| `base_image_sha256_at_build` | CharField(64) | blank | Read-only resolved digest used by this successful cloud-image build |
 
 ---
 
@@ -164,6 +186,8 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
 | `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |
 | `proxbox_api_key_encrypted` | CharField(512) | blank | Fernet-encrypted API key; not editable directly — use `set_proxbox_api_key()` |
+| `fileserver_package_read_user` | CharField(255) | blank | Plaintext username for the File Server image's read-only package index |
+| `fileserver_package_read_token_encrypted` | CharField(512) | blank | Fernet-encrypted package-read token; not editable directly — use `set_fileserver_package_read_token()` |
 
 ### Key-management methods
 
@@ -176,6 +200,12 @@ settings_row.save()
 
 # Retrieve the decrypted key at job time
 api_key = settings_row.get_proxbox_api_key()
+
+# Store and retrieve the File Server package-index credential
+settings_row.fileserver_package_read_user = "nms-pkg-reader"
+settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
+settings_row.save()
+package_read_token = settings_row.get_fileserver_package_read_token()
 ```
 
 The Fernet cipher is derived from `settings.SECRET_KEY` (SHA-256 → base64url).

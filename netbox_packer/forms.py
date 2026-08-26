@@ -14,7 +14,13 @@ from .choices import (
     os_version_grouped_choices,
     os_version_known_values,
 )
-from .models import PackerBuild, PackerBuildTarget, PackerInstallerConfig, PackerTemplate
+from .models import (
+    NMS_AGENT_BACKEND_URL_VALIDATOR,
+    PackerBuild,
+    PackerBuildTarget,
+    PackerInstallerConfig,
+    PackerTemplate,
+)
 
 _VM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _NODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -109,6 +115,10 @@ class PackerTemplateForm(NetBoxModelForm):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
+            "install_nms_agent",
+            "nms_agent_backend_url",
+            "base_image_url",
+            "base_image_sha256",
             "tags",
         )
         fieldsets = (
@@ -138,7 +148,14 @@ class PackerTemplateForm(NetBoxModelForm):
                 "install_qemu_guest_agent",
                 "install_zabbix_agent2",
                 "zabbix_server",
+                "install_nms_agent",
+                "nms_agent_backend_url",
                 name="Monitoring Agents",
+            ),
+            FieldSet(
+                "base_image_url",
+                "base_image_sha256",
+                name="Base Image Pin",
             ),
             FieldSet(
                 "hcp_bucket_name",
@@ -192,8 +209,17 @@ class PackerTemplateForm(NetBoxModelForm):
         REST serializer keep ``os_version`` free-form so automation may send any
         version. An existing template's originally-stored value is always allowed
         so editing an older (off-list) template never fails validation.
+
+        ``super().clean() or self.cleaned_data`` works around a NetBox 4.6.4
+        core bug: ``CheckLastUpdatedMixin.clean()`` (in the MRO between this
+        form and ``forms.ModelForm``) returns ``None`` on every one of its
+        normal paths — e.g. any new (unsaved) instance — instead of
+        propagating ``cleaned_data``. Django's ``BaseForm._clean_form()`` only
+        overwrites ``self.cleaned_data`` when a ``clean()`` override returns a
+        non-``None`` value, so ``self.cleaned_data`` itself is unaffected and
+        safe to fall back to.
         """
-        cleaned_data = super().clean()
+        cleaned_data = super().clean() or self.cleaned_data
 
         family = cleaned_data.get("os_family")
         version = cleaned_data.get("os_version")
@@ -216,6 +242,13 @@ class PackerTemplateForm(NetBoxModelForm):
             )
 
         return cleaned_data
+
+    def clean_nms_agent_backend_url(self):
+        """Reject plaintext agent backends at the UI validation boundary."""
+
+        value = self.cleaned_data["nms_agent_backend_url"]
+        NMS_AGENT_BACKEND_URL_VALIDATOR(value)
+        return value
 
 
 class PackerTemplateFilterForm(NetBoxModelFilterSetForm):

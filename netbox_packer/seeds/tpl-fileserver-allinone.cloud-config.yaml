@@ -51,6 +51,18 @@ write_files:
       NETBOX_URL=https://netbox.nmulti.cloud
       # Enrollment token is intentionally not baked into the golden image.
       # Clone-time cloud-init user-data writes the per-instance one-time token.
+  - path: /etc/nms-fileserver-agent/pip.conf
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # netbox-packer replaces these placeholders from PackerPluginSettings.
+      # Operators update fileserver_package_read_user and rotate the token with
+      # set_fileserver_package_read_token(), then rebake VMID 9300; use only a
+      # dedicated non-human Gitea package-Read token, never a personal token or
+      # PACKAGE_WRITE_TOKEN.
+      [global]
+      index-url = https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/
+      extra-index-url =
   - path: /etc/cloud/cloud.cfg.d/99-fileserver-allinone-template.cfg
     permissions: "0644"
     owner: root:root
@@ -141,8 +153,14 @@ write_files:
       apt-get install -y zabbix-agent2
 
       python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"
-      "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --upgrade pip
-      "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install "${NMS_FILESERVER_AGENT_PIP_SPEC}"
+      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \
+        "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --upgrade pip
+      PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL="" \
+        "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install "httpx>=0.27"
+      env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL="" \
+        PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf" \
+        "${NMS_FILESERVER_AGENT_VENV_DIR}/bin/python" -m pip install --no-deps \
+        "${NMS_FILESERVER_AGENT_PIP_SPEC}"
 
       cat > /etc/zabbix/zabbix_agent2.conf <<'ZABBIX_CONF'
       LogFile=/var/log/zabbix/zabbix_agent2.log
