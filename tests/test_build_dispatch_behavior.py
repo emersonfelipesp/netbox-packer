@@ -204,6 +204,239 @@ def test_dispatch_build_enqueues_with_build_id_keyword(isolated_imports) -> None
     assert "instance" not in enqueue.call_args.kwargs
 
 
+def test_dispatch_authorizes_cloud_build_before_enqueue(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    calls: list[str] = []
+    jobs._authorize_cloud_build_dispatch = lambda build: calls.append(f"authorize:{build.pk}")
+    jobs.PackerBuildJob.enqueue = lambda **kwargs: calls.append(f"enqueue:{kwargs['build_id']}")
+    build = SimpleNamespace(
+        pk=124,
+        template=SimpleNamespace(installer_config=SimpleNamespace(installer_type="cloud_config")),
+    )
+
+    jobs.dispatch_build(build)
+
+    assert calls == ["authorize:124", "enqueue:124"]
+
+
+def test_dispatch_authorizes_every_possible_enabled_cloud_build_target(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            assert field == "priority"
+            return [
+                SimpleNamespace(enabled=True, proxmox_endpoint="https://pve-a.example:8006"),
+                SimpleNamespace(enabled=True, proxmox_endpoint="https://pve-b.example:8006"),
+            ]
+
+    build = SimpleNamespace(
+        variable_overrides={},
+        template=SimpleNamespace(
+            proxmox_endpoint="",
+            build_targets=Targets(),
+        ),
+    )
+
+    assert jobs._endpoint_urls_for_cloud_dispatch(build) == [
+        "https://pve-a.example:8006",
+        "https://pve-b.example:8006",
+    ]
+
+
+def test_cloud_dispatch_refuses_all_disabled_configured_targets(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            assert field == "priority"
+            return [SimpleNamespace(enabled=False)]
+
+    build = SimpleNamespace(
+        variable_overrides={},
+        template=SimpleNamespace(
+            name="cloud-template",
+            proxmox_endpoint="https://primary.example:8006",
+            build_targets=Targets(),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="No enabled PackerBuildTarget"):
+        jobs._endpoint_urls_for_cloud_dispatch(build)
+
+
+def test_cloud_dispatch_authorizes_each_possible_target_with_configured_backend(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+    calls = []
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            return [
+                SimpleNamespace(enabled=True, proxmox_endpoint="https://pve-a.example:8006"),
+                SimpleNamespace(enabled=True, proxmox_endpoint="https://pve-b.example:8006"),
+            ]
+
+    settings_row = SimpleNamespace(proxbox_api_url="https://proxbox-api.example")
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    sys.modules["netbox_packer.models"] = models_mod
+    jobs._authorize_selected_endpoint = lambda endpoint, backend: calls.append((endpoint, backend))
+    build = SimpleNamespace(
+        variable_overrides={},
+        template=SimpleNamespace(
+            name="cloud-template",
+            installer_config=SimpleNamespace(installer_type="cloud_config"),
+            build_targets=Targets(),
+        ),
+    )
+
+    jobs._authorize_cloud_build_dispatch(build)
+
+    assert calls == [
+        ("https://pve-a.example:8006", "https://proxbox-api.example"),
+        ("https://pve-b.example:8006", "https://proxbox-api.example"),
+    ]
+
+
+@pytest.mark.parametrize("has_targets", (False, True))
+def test_cloud_selection_distinguishes_no_targets_from_all_disabled(
+    isolated_imports,
+    has_targets: bool,
+) -> None:
+    jobs = _import_jobs_module()
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            return [SimpleNamespace(enabled=False)] if has_targets else []
+
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerBuild = type("PackerBuild", (), {})
+    sys.modules["netbox_packer.models"] = models_mod
+    validators_mod = types.ModuleType("netbox_packer.validators")
+    validators_mod.NodeAffinityValidator = object
+    sys.modules["netbox_packer.validators"] = validators_mod
+    template = SimpleNamespace(
+        name="cloud-template",
+        proxmox_endpoint="https://primary.example:8006",
+        proxmox_node="pve-primary",
+        build_targets=Targets(),
+    )
+
+    if has_targets:
+        with pytest.raises(RuntimeError, match="No enabled PackerBuildTarget"):
+            jobs.select_build_node(template, fail_if_targets_exhausted=True)
+    else:
+        assert jobs.select_build_node(template, fail_if_targets_exhausted=True) == (
+            "https://primary.example:8006",
+            "pve-primary",
+        )
+
+
+def test_cloud_selection_never_falls_back_when_enabled_targets_are_at_capacity(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+    target = SimpleNamespace(
+        enabled=True,
+        priority=1,
+        proxmox_endpoint="https://target.example:8006",
+        proxmox_node="pve-target",
+    )
+    targets = Mock()
+    targets.all.return_value.order_by.return_value = [target]
+    build_filter = Mock()
+    build_filter.count.return_value = 2
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerBuild = type(
+        "PackerBuild",
+        (),
+        {"objects": SimpleNamespace(filter=Mock(return_value=build_filter))},
+    )
+    sys.modules["netbox_packer.models"] = models_mod
+    validators_mod = types.ModuleType("netbox_packer.validators")
+    validators_mod.NodeAffinityValidator = object
+    sys.modules["netbox_packer.validators"] = validators_mod
+    template = SimpleNamespace(
+        name="cloud-template",
+        proxmox_endpoint="https://primary.example:8006",
+        proxmox_node="pve-primary",
+        build_targets=targets,
+    )
+
+    with pytest.raises(RuntimeError, match="No authorized build target"):
+        jobs.select_build_node(
+            template,
+            skip_affinity_check=True,
+            fail_if_targets_exhausted=True,
+        )
+
+
+def test_cloud_selection_never_falls_back_when_affinity_rejects_every_target(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+    target = SimpleNamespace(
+        enabled=True,
+        priority=1,
+        proxmox_endpoint="https://target.example:8006",
+        proxmox_node="pve-target",
+    )
+    targets = Mock()
+    targets.all.return_value.order_by.return_value = [target]
+    build_filter = Mock()
+    build_filter.count.return_value = 0
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerBuild = type(
+        "PackerBuild",
+        (),
+        {"objects": SimpleNamespace(filter=Mock(return_value=build_filter))},
+    )
+    sys.modules["netbox_packer.models"] = models_mod
+
+    class RejectAffinity:
+        def __init__(self, template):
+            self.template = template
+
+        def validate(self):
+            return False, ["node rejected"], []
+
+    validators_mod = types.ModuleType("netbox_packer.validators")
+    validators_mod.NodeAffinityValidator = RejectAffinity
+    sys.modules["netbox_packer.validators"] = validators_mod
+    template = SimpleNamespace(
+        name="cloud-template",
+        proxmox_endpoint="https://primary.example:8006",
+        proxmox_node="pve-primary",
+        build_targets=targets,
+    )
+
+    with pytest.raises(RuntimeError, match="No authorized build target"):
+        jobs.select_build_node(template, fail_if_targets_exhausted=True)
+
+    assert template.proxmox_endpoint == "https://primary.example:8006"
+    assert template.proxmox_node == "pve-primary"
+
+
 def test_dispatch_build_marks_build_failed_when_enqueue_raises(isolated_imports) -> None:
     jobs = _import_jobs_module()
     jobs.PackerBuildJob.enqueue = Mock(side_effect=RuntimeError("queue offline"))
@@ -240,6 +473,38 @@ def test_dispatch_build_marks_build_failed_when_enqueue_raises(isolated_imports)
     template_filter.update.assert_called_once_with(build_status="failed")
 
 
+def test_dispatch_authorization_failure_never_enqueues_and_marks_failed(
+    isolated_imports,
+) -> None:
+    jobs = _import_jobs_module()
+    jobs._authorize_cloud_build_dispatch = Mock(side_effect=RuntimeError("endpoint authorization revoked"))
+    jobs.PackerBuildJob.enqueue = Mock()
+
+    build_filter = Mock()
+    build_filter.exclude.return_value.exists.return_value = False
+    template_filter = Mock()
+
+    class PackerBuild:
+        objects = SimpleNamespace(filter=Mock(return_value=build_filter))
+
+    class PackerTemplate:
+        objects = SimpleNamespace(filter=Mock(return_value=template_filter))
+
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerBuild = PackerBuild
+    models_mod.PackerTemplate = PackerTemplate
+    sys.modules["netbox_packer.models"] = models_mod
+    build = SimpleNamespace(pk=322, template_id=655, status="queued", log="", save=Mock())
+
+    with pytest.raises(RuntimeError, match="authorization revoked"):
+        jobs.dispatch_build(build)
+
+    jobs.PackerBuildJob.enqueue.assert_not_called()
+    assert build.status == "failed"
+    assert "endpoint authorization revoked" in build.log
+    template_filter.update.assert_called_once_with(build_status="failed")
+
+
 def test_run_subprocess_timeout_kills_silent_process(isolated_imports) -> None:
     jobs = _import_jobs_module()
     build = SimpleNamespace(log="", save=Mock())
@@ -261,7 +526,7 @@ def test_run_subprocess_timeout_kills_silent_process(isolated_imports) -> None:
     build.save.assert_called_with(update_fields=["log"])
 
 
-def test_explicit_endpoint_keeps_target_and_ssh_resolution_on_same_boundary(
+def test_caller_endpoint_id_cannot_override_proxbox_api_ssh_authority(
     isolated_imports,
 ) -> None:
     jobs = _import_jobs_module()
@@ -283,7 +548,7 @@ def test_explicit_endpoint_keeps_target_and_ssh_resolution_on_same_boundary(
     assert jobs._resolve_storage(template, {"storage": "fast-zfs"}) == "fast-zfs"
 
 
-def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -> None:
+def test_cloud_build_never_sends_legacy_url_derived_ssh_authority(isolated_imports) -> None:
     jobs = _import_jobs_module()
     template = SimpleNamespace(
         proxmox_endpoint="https://legacy-pve.example:8006",
@@ -293,7 +558,7 @@ def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -
     )
 
     assert jobs._resolve_target_node(template, None, {}) == "legacy-node"
-    assert jobs._resolve_ssh_host(template, {}) == "legacy-pve.example"
+    assert jobs._resolve_ssh_host(template, {}) is None
     assert jobs._resolve_template_vmid(template, {}) == 9050
     assert jobs._resolve_storage(template, {}) == "local"
 
@@ -311,8 +576,7 @@ def test_legacy_build_without_endpoint_retains_safe_fallback(isolated_imports) -
         {"image_url": "https://images.example/base.qcow2?token=do-not-persist"},
         {
             "image_url": (
-                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
-                "&X-Amz-Signature=do-not-persist"
+                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist&X-Amz-Signature=do-not-persist"
             )
         },
     ),
@@ -345,10 +609,7 @@ def test_build_overrides_allow_typed_non_secret_selectors(isolated_imports) -> N
     "image_url",
     (
         "https://images.example/base.qcow2?token=do-not-persist",
-        (
-            "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
-            "&X-Amz-Signature=do-not-persist"
-        ),
+        ("https://images.example/base.qcow2?X-Amz-Credential=do-not-persist&X-Amz-Signature=do-not-persist"),
     ),
 )
 def test_generic_api_serializers_reject_credentialed_base_image_urls(
@@ -367,10 +628,7 @@ def test_generic_api_serializers_reject_credentialed_base_image_urls(
     "image_url",
     (
         "https://images.example/base.qcow2?token=do-not-persist",
-        (
-            "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
-            "&X-Amz-Signature=do-not-persist"
-        ),
+        ("https://images.example/base.qcow2?X-Amz-Credential=do-not-persist&X-Amz-Signature=do-not-persist"),
     ),
 )
 def test_models_reject_credentialed_base_image_urls(
@@ -670,6 +928,71 @@ def test_api_build_action_creates_build_and_dispatches_it(isolated_imports) -> N
     assert response.data == {"id": 88, "status": "queued"}
 
 
+def test_api_endpoint_agnostic_cloud_build_uses_target_without_numeric_endpoint_id(
+    isolated_imports,
+) -> None:
+    template = SimpleNamespace(
+        pk=12,
+        name="endpoint-agnostic-cloud-template",
+        proxmox_endpoint="",
+        proxmox_node="select-at-build",
+        installer_config=SimpleNamespace(installer_type="cloud_config"),
+    )
+    build = SimpleNamespace(pk=89, status="queued")
+    build_manager = ChainManager()
+    build_manager.create.return_value = build
+    template_manager = ChainManager()
+    dispatch_build = Mock()
+    _install_api_import_stubs(template, build_manager, template_manager, dispatch_build)
+    api_views = importlib.import_module("netbox_packer.api.views")
+
+    view = api_views.PackerTemplateViewSet()
+    view.template = template
+    request = SimpleNamespace(
+        user="api-user",
+        data={"variable_overrides": {"target_node": "pve01"}},
+    )
+
+    response = view.build(request, pk=12)
+
+    build_manager.create.assert_called_once_with(
+        template=template,
+        triggered_by="api-user",
+        variable_overrides={"target_node": "pve01"},
+        status="queued",
+    )
+    dispatch_build.assert_called_once_with(build)
+    assert response.status_code == 202
+
+
+def test_api_endpoint_agnostic_cloud_build_requires_target_node(
+    isolated_imports,
+) -> None:
+    template = SimpleNamespace(
+        pk=12,
+        name="endpoint-agnostic-cloud-template",
+        proxmox_endpoint="",
+        proxmox_node="select-at-build",
+        installer_config=SimpleNamespace(installer_type="cloud_config"),
+    )
+    build_manager = ChainManager()
+    template_manager = ChainManager()
+    dispatch_build = Mock()
+    _install_api_import_stubs(template, build_manager, template_manager, dispatch_build)
+    api_views = importlib.import_module("netbox_packer.api.views")
+
+    view = api_views.PackerTemplateViewSet()
+    view.template = template
+    request = SimpleNamespace(user="api-user", data={"variable_overrides": {}})
+
+    response = view.build(request, pk=12)
+
+    build_manager.create.assert_not_called()
+    dispatch_build.assert_not_called()
+    assert response.status_code == 400
+    assert "PackerBuildTarget URL supplies endpoint identity" in response.data["detail"]
+
+
 def test_influxdb_profile_readiness_rejects_a_stale_ready_template(isolated_imports) -> None:
     templates = [
         SimpleNamespace(
@@ -737,9 +1060,7 @@ class StalenessBuildManager:
 
     def filter(self, *, template, status):
         matches = [
-            build
-            for build in self.builds.values()
-            if build.template_id == template.pk and build.status == status
+            build for build in self.builds.values() if build.template_id == template.pk and build.status == status
         ]
 
         class Query:
@@ -897,9 +1218,7 @@ def test_staleness_management_command_dispatches_pin_only_drift(
     jobs_module.dispatch_build = dispatch
     sys.modules["netbox_packer.jobs"] = jobs_module
 
-    command_module = importlib.import_module(
-        "netbox_packer.management.commands.check_packer_staleness"
-    )
+    command_module = importlib.import_module("netbox_packer.management.commands.check_packer_staleness")
     command_module.Command().handle(dry_run=False)
 
     template_manager.exclude.assert_called_once_with(build_status__in=("building",))
@@ -955,9 +1274,7 @@ class MigrationTemplateQuery:
 
     def _matches(self):
         return [
-            row
-            for row in self.manager.rows
-            if all(getattr(row, key) == value for key, value in self.criteria.items())
+            row for row in self.manager.rows if all(getattr(row, key) == value for key, value in self.criteria.items())
         ]
 
     def first(self):
@@ -1119,9 +1436,7 @@ def _migration_0030_apps(config_manager, template_manager):
             {"objects": template_manager},
         ),
     }
-    return SimpleNamespace(
-        get_model=Mock(side_effect=lambda _app, model_name: models[model_name])
-    )
+    return SimpleNamespace(get_model=Mock(side_effect=lambda _app, model_name: models[model_name]))
 
 
 def test_migration_0030_seeds_and_reapplies_after_build_state_changes(
@@ -1195,3 +1510,75 @@ def test_migration_0030_refuses_template_collision_without_overwrite(
     assert templates[0].storage_pool == "operator-storage"
     assert len(configs) == 1
     assert len(templates) == 1
+
+
+def _load_migration_0032():
+    django_db = types.ModuleType("django.db")
+
+    class Migration:
+        pass
+
+    class RunPython:
+        noop = staticmethod(lambda *_args, **_kwargs: None)
+
+        def __init__(self, forwards, backwards):
+            self.forwards = forwards
+            self.backwards = backwards
+
+    django_db.migrations = SimpleNamespace(Migration=Migration, RunPython=RunPython)
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.db"] = django_db
+
+    path = PKG / "migrations" / "0032_update_endpoint_authorization_descriptions.py"
+    spec = importlib.util.spec_from_file_location("migration_0032_behavior", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_0032_updates_only_exact_historical_descriptions_and_is_idempotent(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0032()
+    rows = [
+        SimpleNamespace(name=name, description=old_description)
+        for name, old_description, _new_description in migration.DESCRIPTION_UPDATES
+    ]
+    manager = MigrationTemplateManager(rows)
+    apps = _migration_apps(manager)
+
+    migration.update_endpoint_authorization_descriptions(apps, None)
+
+    assert [row.description for row in rows] == [
+        new_description for _name, _old_description, new_description in migration.DESCRIPTION_UPDATES
+    ]
+
+    migration.update_endpoint_authorization_descriptions(apps, None)
+    assert [row.description for row in rows] == [
+        new_description for _name, _old_description, new_description in migration.DESCRIPTION_UPDATES
+    ]
+
+
+def test_migration_0032_preserves_operator_edited_and_unrelated_rows(
+    isolated_imports,
+) -> None:
+    migration = _load_migration_0032()
+    target_name, _old_description, _new_description = migration.DESCRIPTION_UPDATES[0]
+    corrected_name, _corrected_old_description, corrected_description = migration.DESCRIPTION_UPDATES[1]
+    rows = [
+        SimpleNamespace(name=target_name, description="operator-owned description"),
+        SimpleNamespace(name="unrelated-template", description="unrelated description"),
+        SimpleNamespace(name=corrected_name, description=corrected_description),
+    ]
+
+    migration.update_endpoint_authorization_descriptions(
+        _migration_apps(MigrationTemplateManager(rows)),
+        None,
+    )
+
+    assert [row.description for row in rows] == [
+        "operator-owned description",
+        "unrelated description",
+        corrected_description,
+    ]

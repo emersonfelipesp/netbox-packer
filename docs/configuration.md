@@ -99,18 +99,26 @@ and clones retain the credential already baked into root-only
 
 The `cloud_config` bake path requires:
 
-- **`proxbox-api >= 0.0.19.post5`** — netbox-packer requires the signed preflight
+- **`proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25`** — netbox-packer
+  requires the explicit packer-template capability in both services plus the signed preflight
   contract: a non-executing build plan returns `recipe_digest`,
   `/cloud/templates/images/preflight` returns an expiring `plan_token`, and the
   execute request consumes that token. A 404 from the preflight endpoint is an
   incompatible older service and fails closed; there is no legacy one-step
   fallback. The runtime image includes `openssh-client` starting from
-  `0.0.18.post1`.
+  `0.0.18.post1`. The older `proxbox-api 0.0.19.post5` contract is insufficient:
+  it signs preflight plans but does not persist or enforce the narrow capability.
 - **`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`** — set in the proxbox-api
   environment. Cloud image execution is disabled by default.
 - **`PROXBOX_SSH_KEY_DIR`** — directory on the proxbox-api host containing the
   SSH private key that trusts the target Proxmox host.
 - **`allow_writes=True`** on the target `ProxmoxEndpoint` row in netbox-proxbox.
+- **`allow_packer_template_builds=True`** on that same endpoint. This separate,
+  default-off capability authorizes only netbox-packer template-image creation;
+  it does not replace or imply `allow_writes`.
+- A `PackerTemplate.proxmox_endpoint` or enabled `PackerBuildTarget.proxmox_endpoint`
+  URL that matches exactly one enabled netbox-proxbox endpoint by normalized
+  host and port. Numeric build overrides do not grant endpoint authorization.
 - The selected Proxmox storage pool must have the `snippets`, `import`, and
   `images` content types enabled.
 

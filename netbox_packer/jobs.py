@@ -144,47 +144,15 @@ def _derive_release_image_url(template):
 
 
 def _resolve_ssh_host(template, overrides):
-    """Resolve the Proxmox node host that proxbox-api should SSH into for the bake.
+    """Leave SSH authority entirely to the selected proxbox-api endpoint.
 
-    Honors ``variable_overrides['ssh_host']`` first, then the hostname of the
-    template's ``proxmox_endpoint`` (the netbox-proxbox ProxmoxEndpoint URL),
-    then ``proxmox_node``.
+    Caller-provided hosts and legacy URL-derived hosts are not authorization.
+    The exact endpoint id resolved through netbox-proxbox selects the persisted
+    SSH binding in proxbox-api, so this assertion stays unset.
     """
-    # When a proxbox-api endpoint id is selected, proxbox-api must derive the
-    # SSH host from that same endpoint.  Sending legacy template metadata could
-    # otherwise gate one endpoint while connecting to another host.
-    if _resolve_endpoint_id(overrides) is not None:
-        return None
-    override = (overrides or {}).get("ssh_host")
-    if override:
-        return str(override)
-    endpoint = (template.proxmox_endpoint or "").strip()
-    if endpoint:
-        from urllib.parse import urlparse
 
-        host = urlparse(endpoint).hostname
-        if host:
-            return host
-    return template.proxmox_node or None
-
-
-def _resolve_endpoint_id(overrides):
-    """Resolve the proxbox-api backend ProxmoxEndpoint id for the bake.
-
-    proxbox-api requires ``endpoint_id`` when ``execute=true`` so it can enforce
-    the ``allow_writes`` + ``access_methods=api_ssh`` gates before any SSH. The
-    template's ``proxmox_endpoint`` is a URL string, NOT the proxbox-api backend
-    primary key (see CLAUDE.md "Important boundary"), so the id is taken from
-    ``variable_overrides['endpoint_id']`` — supplied per-build the same way the
-    create-instance modal collects it. Returns an ``int`` or ``None``.
-    """
-    raw = (overrides or {}).get("endpoint_id")
-    if raw in (None, ""):
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
+    del template, overrides
+    return None
 
 
 def _resolve_target_node(template, selected_node, overrides):
@@ -213,7 +181,12 @@ def _resolve_storage(template, overrides):
     return value or "local"
 
 
-def select_build_node(template, skip_affinity_check=False):
+def select_build_node(
+    template,
+    skip_affinity_check=False,
+    required_node=None,
+    fail_if_targets_exhausted=False,
+):
     """
     Select the best build node for a template from its PackerBuildTarget list.
 
@@ -223,8 +196,11 @@ def select_build_node(template, skip_affinity_check=False):
     - NodeAffinityValidator reports hard errors for the target node (unless
       skip_affinity_check=True is passed).
 
-    Falls back to (template.proxmox_endpoint, template.proxmox_node) when no
-    PackerBuildTarget records exist.
+    ``required_node`` restricts selection to its one configured node.
+    ``fail_if_targets_exhausted`` prevents a cloud build from silently falling
+    back to the template primary endpoint after all configured targets are
+    unavailable. When no target records exist, the primary endpoint remains the
+    only candidate and is authorized independently before dispatch and execute.
 
     Returns (proxmox_endpoint, proxmox_node) tuple.
     """
@@ -232,9 +208,20 @@ def select_build_node(template, skip_affinity_check=False):
     from .validators import NodeAffinityValidator
 
     max_concurrent = _get_plugin_setting("MAX_CONCURRENT_BUILDS_PER_NODE", 2)
-    targets = list(template.build_targets.filter(enabled=True).order_by("priority"))
+    # PostgreSQL READ COMMITTED can return a different result for each query.
+    # One ordered snapshot prevents a disabled row inserted between ``exists``
+    # and ``filter`` from accidentally restoring the legacy primary fallback.
+    target_snapshot = list(template.build_targets.all().order_by("priority"))
+    has_configured_targets = bool(target_snapshot)
+    targets = [target for target in target_snapshot if target.enabled]
+    if required_node:
+        targets = [target for target in targets if target.proxmox_node == required_node]
+        if has_configured_targets and not targets and fail_if_targets_exhausted:
+            raise RuntimeError(f"No enabled PackerBuildTarget matches requested node {required_node!r}.")
 
     if not targets:
+        if has_configured_targets and fail_if_targets_exhausted:
+            raise RuntimeError(f"No enabled PackerBuildTarget is available for template {template.name!r}.")
         # No multi-cluster targets — fall back to template primary node
         return template.proxmox_endpoint, template.proxmox_node
 
@@ -277,13 +264,65 @@ def select_build_node(template, skip_affinity_check=False):
 
         return target.proxmox_endpoint, target.proxmox_node
 
-    # All targets exhausted — fall back to template primary node
+    if fail_if_targets_exhausted:
+        raise RuntimeError(f"No authorized build target is available for template {template.name!r}.")
+
+    # All targets exhausted — local Packer builds retain the legacy primary fallback.
     logger.warning(
         "select_build_node: no suitable target found for template '%s'; falling back to primary node '%s'",
         template.name,
         template.proxmox_node,
     )
     return template.proxmox_endpoint, template.proxmox_node
+
+
+def _endpoint_urls_for_cloud_dispatch(build):
+    """Return every endpoint URL that the queued cloud build could select."""
+
+    template = build.template
+    # Derive existence and eligibility from the same database statement. A
+    # split snapshot can otherwise race a disabled insertion and fall back to
+    # the primary endpoint even though configured targets now exist.
+    target_snapshot = list(template.build_targets.all().order_by("priority"))
+    has_configured_targets = bool(target_snapshot)
+    targets = [target for target in target_snapshot if target.enabled]
+    requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
+    if targets and requested_node:
+        matching = [target for target in targets if target.proxmox_node == requested_node]
+        if len(matching) != 1:
+            raise RuntimeError(f"Exactly one enabled PackerBuildTarget must match requested node {requested_node!r}.")
+        return [str(matching[0].proxmox_endpoint or "").strip()]
+    if targets:
+        # Runtime capacity/affinity selects one of these. Authorize every
+        # possible target before queueing so target selection cannot bypass the
+        # endpoint capability.
+        return list(dict.fromkeys(str(target.proxmox_endpoint or "").strip() for target in targets))
+    if has_configured_targets:
+        raise RuntimeError(f"No enabled PackerBuildTarget is available for template {template.name!r}.")
+    return [str(template.proxmox_endpoint or "").strip()]
+
+
+def _authorize_selected_endpoint(endpoint_url, proxbox_api_url):
+    """Load the shared endpoint authorization lazily for test/NetBox isolation."""
+
+    from .endpoint_authorization import authorize_packer_template_build
+
+    return authorize_packer_template_build(endpoint_url, proxbox_api_url)
+
+
+def _authorize_cloud_build_dispatch(build):
+    """Require endpoint authorization before a cloud-config build is queued."""
+
+    template = getattr(build, "template", None)
+    installer = getattr(template, "installer_config", None)
+    if installer is None or installer.installer_type != "cloud_config":
+        return
+
+    from .models import PackerPluginSettings
+
+    proxbox_api_url = (PackerPluginSettings.get_solo().proxbox_api_url or "").strip()
+    for endpoint_url in _endpoint_urls_for_cloud_dispatch(build):
+        _authorize_selected_endpoint(endpoint_url, proxbox_api_url)
 
 
 def _zabbix_agent2_bootstrap(zabbix_server: str) -> str:
@@ -671,9 +710,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         if unknown_keys:
             # Refusing any unknown key, rather than only the `encoding` name above, means a
             # future cloud-init key cannot reopen the same hole without being noticed.
-            raise _explorer_payload_error(
-                f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}"
-            )
+            raise _explorer_payload_error(f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}")
 
         raw_path = entry.get("path")
         if not isinstance(raw_path, str) or not raw_path:
@@ -684,8 +721,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         # into the baked image. Require plain text so everything is actually scanned.
         if not isinstance(entry.get("content"), str):
             raise _explorer_payload_error(
-                f"write_files entry {raw_path!r} has non-text content, which cannot be "
-                "inspected for credentials"
+                f"write_files entry {raw_path!r} has non-text content, which cannot be inspected for credentials"
             )
 
         if entry.get("path") == _EXPLORER_CONFIG_PATH:
@@ -712,9 +748,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
                 "the payload contains binary content, which cannot be inspected for credentials"
             )
         if not isinstance(item, (str, int, float, bool)) and item is not None:
-            raise _explorer_payload_error(
-                f"the payload contains an uninspectable {type(item).__name__} value"
-            )
+            raise _explorer_payload_error(f"the payload contains an uninspectable {type(item).__name__} value")
         if not isinstance(item, str):
             continue
 
@@ -725,9 +759,9 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         credential_scan_value = item.replace(_EXPLORER_PLACEHOLDER_SECRET_REF, "")
         if _EXPLORER_PRIVATE_KEY_RE.search(item):
             raise _explorer_payload_error("private key material is present")
-        if _EXPLORER_CREDENTIAL_ASSIGNMENT_RE.search(
+        if _EXPLORER_CREDENTIAL_ASSIGNMENT_RE.search(credential_scan_value) or _EXPLORER_AUTHORIZATION_RE.search(
             credential_scan_value
-        ) or _EXPLORER_AUTHORIZATION_RE.search(credential_scan_value):
+        ):
             raise _explorer_payload_error("a credential-bearing value is present")
         if _EXPLORER_USERINFO_URL_RE.search(item):
             raise _explorer_payload_error("URL userinfo is present")
@@ -789,32 +823,35 @@ class PackerBuildJob(JobRunner):
 
         template = build.template
         timeout = _get_plugin_setting("PACKER_BUILD_TIMEOUT_SECONDS", 3600)
+        installer = template.installer_config
+        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
 
         # Mark build as running
         build.status = "running"
         build.started_at = timezone.now()
         build.save(update_fields=["status", "started_at"])
 
-        # Endpoint-agnostic profiles carry their cluster and node selectors in
-        # variable_overrides.  Legacy templates retain affinity-based fallback.
-        requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
-        endpoint, node = select_build_node(
-            template,
-            skip_affinity_check=bool(requested_node and _resolve_endpoint_id(build.variable_overrides)),
-        )
-        if requested_node:
-            node = requested_node
-        build.selected_node = node or ""
-        build.save(update_fields=["selected_node"])
-
-        installer = template.installer_config
-        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
-
         try:
+            # Endpoint-agnostic profiles carry their cluster and node selectors
+            # in variable_overrides. Legacy templates retain affinity-based
+            # fallback. Selection is inside the failure boundary so a target
+            # exhausted after queueing cannot strand the build as ``running``.
+            requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
+            endpoint, node = select_build_node(
+                template,
+                skip_affinity_check=bool(requested_node and is_cloud_config),
+                required_node=requested_node if is_cloud_config else None,
+                fail_if_targets_exhausted=is_cloud_config,
+            )
+            if requested_node:
+                node = requested_node
+            build.selected_node = node or ""
+            build.save(update_fields=["selected_node"])
+
             if is_cloud_config:
                 # Cloud-init template image: delegate the real Proxmox bake to proxbox-api,
                 # which writes installer_config.content as a cicustom user snippet over SSH.
-                self._run_proxbox_cloud_build(build, template, node, timeout)
+                self._run_proxbox_cloud_build(build, template, endpoint, node, timeout)
             else:
                 self._run_packer(build, template, endpoint, node, timeout)
         except Exception as exc:
@@ -826,7 +863,7 @@ class PackerBuildJob(JobRunner):
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
             raise
 
-    def _run_proxbox_cloud_build(self, build, template, node, timeout):
+    def _run_proxbox_cloud_build(self, build, template, endpoint, node, timeout):
         """Bake a cloud-init template image by delegating to proxbox-api."""
         from .models import PackerPluginSettings, PackerTemplate
         from .proxbox_client import ProxboxApiError, call_proxbox_build
@@ -841,7 +878,6 @@ class PackerBuildJob(JobRunner):
         image_url, image_sha256 = _resolve_cloud_image_source(template, build.variable_overrides)
         safe_image_url = redact_base_image_url(image_url)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
-        endpoint_id = _resolve_endpoint_id(build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
         installer_name = str(getattr(installer, "name", "") or "unnamed")
         installer_version = str(getattr(installer, "version", "") or "unknown")
@@ -853,12 +889,7 @@ class PackerBuildJob(JobRunner):
             f"[INFO] Base image: {safe_image_url}",
             f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
             f"[INFO] Destination template VMID: {template_vmid}",
-            "[INFO] proxbox-api endpoint_id: "
-            + (
-                str(endpoint_id)
-                if endpoint_id is not None
-                else "UNSET (required by proxbox-api when execute=true — pass variable_overrides['endpoint_id'])"
-            ),
+            f"[INFO] Selected netbox-proxbox endpoint URL: {endpoint or 'UNSET'}",
         ]
 
         if not api_url:
@@ -901,6 +932,11 @@ class PackerBuildJob(JobRunner):
                 raise
 
         try:
+            # Re-resolve both default-off endpoint gates and translate this
+            # exact selected URL to the configured proxbox-api backend id at the
+            # final call boundary. Revocation after queueing therefore wins.
+            authorization = _authorize_selected_endpoint(endpoint, api_url)
+            log_lines.append(f"[INFO] Authorized proxbox-api endpoint_id: {authorization.backend_endpoint_id}")
             response = call_proxbox_build(
                 proxbox_api_url=api_url,
                 proxbox_api_key=settings_row.get_proxbox_api_key(),
@@ -915,7 +951,7 @@ class PackerBuildJob(JobRunner):
                 storage=storage,
                 snippets_storage=storage,
                 ssh_host=ssh_host,
-                endpoint_id=endpoint_id,
+                endpoint_id=authorization.backend_endpoint_id,
                 timeout=int(timeout) + 300,
             )
         except ProxboxApiError as exc:
@@ -1154,11 +1190,7 @@ class PackerStalenessCheckJob(JobRunner):
                 if PackerBuild.objects.filter(template=template, status="running").exists():
                     continue
 
-                build = (
-                    PackerBuild.objects.filter(template=template, status="queued")
-                    .order_by("queued_at")
-                    .first()
-                )
+                build = PackerBuild.objects.filter(template=template, status="queued").order_by("queued_at").first()
                 if build is None:
                     build = PackerBuild.objects.create(
                         template=template,
@@ -1227,6 +1259,7 @@ def dispatch_build(build):
     never started a job.
     """
     try:
+        _authorize_cloud_build_dispatch(build)
         # No `instance=`: PackerBuild is not a jobs-assignable object type in NetBox
         # ("Jobs cannot be assigned to this object type"); the job links via build_id.
         PackerBuildJob.enqueue(build_id=build.pk)

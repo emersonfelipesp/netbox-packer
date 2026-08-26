@@ -35,10 +35,17 @@ template. The flow is triggerable from the NMS UI
 at `nms.nmulti.cloud/virtualization/packer` (Installer Configs + a "Create
 cloud-init template image" dialog + per-row Build button).
 
-Requirements: `proxbox-api >= 0.0.19.post5` with the signed-preflight contract,
+Requirements: `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25` with the
+explicit packer-template capability contract,
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
-`snippets,import,images`. Configure `proxbox_api_url` and an encrypted API key
+`snippets,import,images`. The same enabled netbox-proxbox endpoint must also
+have the narrower `allow_packer_template_builds=True` capability. The template's
+`proxmox_endpoint`, or the selected enabled `PackerBuildTarget` URL, is matched
+by normalized host and port to exactly one endpoint; caller-supplied numeric
+`endpoint_id` overrides never authorize a bake. When build-target rows exist,
+an all-disabled or exhausted set fails closed rather than falling back to the
+template's primary endpoint. Configure `proxbox_api_url` and an encrypted API key
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 (there is no NetBox UI page or REST endpoint for this settings model yet — see
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
@@ -71,9 +78,11 @@ Zabbix database schema on first boot. Do not target the production
 Migration `0020` adds endpoint-agnostic, credential-free InfluxDB profiles:
 `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` (VMID `9050`) for Proxmox
 metrics/Flux and `influxdb-core-3.11.0-ubuntu-2404` (VMID `9051`) for general
-SQL/InfluxQL workloads. Build requests must supply the proxbox-api
-`endpoint_id` and `target_node`, with optional typed `template_vmid` and
-`storage` overrides; proxbox-api derives the SSH host from that same endpoint.
+SQL/InfluxQL workloads. Configure an enabled `PackerBuildTarget` whose
+`proxmox_endpoint` URL identifies the authorized netbox-proxbox endpoint, and
+select its `target_node`; optional typed `template_vmid` and `storage` overrides
+select destination identifiers. netbox-packer resolves the exact proxbox-api
+endpoint id and proxbox-api derives SSH authority from that persisted row.
 Package versions are pinned and held. Initial users, databases, and
 tokens are created only through typed NMS RPC and stored as `nms-secret:`
 references—never in cloud-init. The legacy VMID `9011` development profile is

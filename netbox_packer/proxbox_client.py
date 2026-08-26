@@ -85,9 +85,7 @@ def _post_json(
     except urllib.error.URLError as exc:
         raise ProxboxApiError(f"proxbox-api unreachable at {url}: {exc.reason}") from exc
     except TimeoutError as exc:
-        raise ProxboxApiError(
-            f"proxbox-api timed out at {url} after {timeout}s"
-        ) from exc
+        raise ProxboxApiError(f"proxbox-api timed out at {url} after {timeout}s") from exc
 
     try:
         response = json.loads(body)
@@ -238,8 +236,8 @@ def call_proxbox_build(
 
     if endpoint_id is None:
         raise ProxboxApiError(
-            "proxbox-api signed preflight requires endpoint_id; pass a positive "
-            "variable_overrides['endpoint_id'] for this build"
+            "proxbox-api signed preflight requires the backend endpoint id; "
+            "netbox-packer could not resolve it from the authorized selected endpoint"
         )
     if not target_node:
         raise ProxboxApiError(
@@ -319,21 +317,16 @@ def call_proxbox_build(
 
     plan_token = preflight.get("plan_token")
     if not isinstance(plan_token, str) or not plan_token:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight returned ready=true but no plan_token; "
-            "refusing execution"
-        )
+        raise ProxboxApiError("proxbox-api signed preflight returned ready=true but no plan_token; refusing execution")
     expires_at = preflight.get("expires_at")
     if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
         raise ProxboxApiError(
-            "proxbox-api signed preflight returned a plan_token without a valid "
-            "expires_at; refusing execution"
+            "proxbox-api signed preflight returned a plan_token without a valid expires_at; refusing execution"
         )
     expires_at = float(expires_at)
     if not math.isfinite(expires_at) or expires_at <= time.time():
         raise ProxboxApiError(
-            "proxbox-api signed preflight plan expired before execution; start a fresh "
-            "build to obtain a new plan"
+            "proxbox-api signed preflight plan expired before execution; start a fresh build to obtain a new plan"
         )
 
     execute_payload = {

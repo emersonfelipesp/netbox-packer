@@ -48,8 +48,7 @@ from django.db import migrations
 TEMPLATE_NAME = "influxdb-core-3.11.0-debian-13"
 
 PINNED_IMAGE_URL = (
-    "https://cloud.debian.org/images/cloud/trixie/20260509-2473/"
-    "debian-13-genericcloud-amd64-20260509-2473.qcow2"
+    "https://cloud.debian.org/images/cloud/trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2"
 )
 PINNED_IMAGE_SHA256 = "34f5481f320aef28408720a861582dcfe3a81781ee69f3910a64c29ad5395b89"
 
@@ -57,9 +56,7 @@ PINNED_IMAGE_SHA256 = "34f5481f320aef28408720a861582dcfe3a81781ee69f3910a64c29ad
 def pin_influxdb3_debian13_base_image(apps, schema_editor):
     PackerTemplate = apps.get_model("netbox_packer", "PackerTemplate")
 
-    template = (
-        PackerTemplate.objects.select_for_update().filter(name=TEMPLATE_NAME).first()
-    )
+    template = PackerTemplate.objects.select_for_update().filter(name=TEMPLATE_NAME).first()
     if template is None:
         raise RuntimeError(
             f"Cannot pin the required base image because {TEMPLATE_NAME!r} is missing. "
@@ -70,10 +67,7 @@ def pin_influxdb3_debian13_base_image(apps, schema_editor):
         )
 
     if template.base_image_url or template.base_image_sha256:
-        if (
-            template.base_image_url == PINNED_IMAGE_URL
-            and template.base_image_sha256 == PINNED_IMAGE_SHA256
-        ):
+        if template.base_image_url == PINNED_IMAGE_URL and template.base_image_sha256 == PINNED_IMAGE_SHA256:
             return
         raise RuntimeError(
             f"Refusing to overwrite an existing base image pin on {TEMPLATE_NAME!r}: "
@@ -86,9 +80,7 @@ def pin_influxdb3_debian13_base_image(apps, schema_editor):
 
     # Compare-and-set against the unpinned state so a concurrent operator edit is
     # never overwritten. A missed compare-and-set fails the migration below.
-    updated = PackerTemplate.objects.filter(
-        pk=template.pk, base_image_url="", base_image_sha256=""
-    ).update(
+    updated = PackerTemplate.objects.filter(pk=template.pk, base_image_url="", base_image_sha256="").update(
         base_image_url=PINNED_IMAGE_URL,
         base_image_sha256=PINNED_IMAGE_SHA256,
     )

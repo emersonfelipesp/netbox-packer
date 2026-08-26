@@ -40,9 +40,7 @@ class InfluxDBProfileListView(APIView):
                     **profile,
                     "template_id": template.pk if template else None,
                     "build_status": template.build_status if template else "missing",
-                    "ready": bool(
-                        template and template.build_status == "ready" and not template.is_stale
-                    ),
+                    "ready": bool(template and template.build_status == "ready" and not template.is_stale),
                 }
             )
         return Response({"profiles": profiles})
@@ -67,7 +65,20 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
         endpoint_id = variable_overrides.get("endpoint_id")
         target_node = variable_overrides.get("target_node")
         endpoint_agnostic = not template.proxmox_endpoint or template.proxmox_node == "select-at-build"
-        if endpoint_agnostic and (not endpoint_id or not target_node):
+        installer = getattr(template, "installer_config", None)
+        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
+        if endpoint_agnostic and is_cloud_config and not target_node:
+            return Response(
+                {
+                    "detail": (
+                        "Endpoint-agnostic Cloud-Init templates require "
+                        "variable_overrides.target_node. The matching enabled "
+                        "PackerBuildTarget URL supplies endpoint identity."
+                    )
+                },
+                status=http_status.HTTP_400_BAD_REQUEST,
+            )
+        if endpoint_agnostic and not is_cloud_config and (not endpoint_id or not target_node):
             return Response(
                 {
                     "detail": (
@@ -78,7 +89,7 @@ class PackerTemplateViewSet(NetBoxModelViewSet):
                 status=http_status.HTTP_400_BAD_REQUEST,
             )
         skip_validation = request_serializer.validated_data["skip_node_validation"]
-        selector_is_explicit = bool(endpoint_id and target_node)
+        selector_is_explicit = bool(target_node and (is_cloud_config or endpoint_id))
 
         if not skip_validation and not selector_is_explicit:
             validator = NodeAffinityValidator(template)

@@ -294,8 +294,8 @@ runcmd:
 CONFIG_NAME = "influxdb-core-3.11.0-debian-13-cloud-config"
 CONFIG_VERSION = "3.11.0"
 TEMPLATE_NAME = "influxdb-core-3.11.0-debian-13"
-# Endpoint-agnostic, like the 0020 InfluxDB profiles: build dispatch supplies the
-# proxbox-api endpoint_id and target_node.
+# Endpoint-agnostic, like the 0020 InfluxDB profiles: build dispatch selects an
+# authorized enabled PackerBuildTarget URL and target_node.
 PROXMOX_ENDPOINT = ""
 PROXMOX_NODE = "select-at-build"
 # Free against every VMID seeded to date (9010-9014, 9017-9019, 9032, 9040-9042,
@@ -377,11 +377,11 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
         "installer_config": config,
         "description": (
             "InfluxDB 3 Core 3.11.0 cloud-init template for Debian 13 (Trixie), "
-            "VMID 9052. Endpoint-agnostic: build dispatch supplies endpoint_id and "
-            "target_node. First boot installs the pinned package, writes the managed "
-            "loopback-only configuration, holds the package, and waits on the local "
-            "readiness endpoint. Tokens, databases, and config changes are managed "
-            "only through typed NMS RPC."
+            "VMID 9052. Endpoint-agnostic: build dispatch selects an authorized enabled "
+            "PackerBuildTarget URL and target_node. First boot installs the pinned package, "
+            "writes the managed loopback-only configuration, holds the package, and waits "
+            "on the local readiness endpoint. Tokens, databases, and config changes are "
+            "managed only through typed NMS RPC."
         ),
     }
     template, template_created = PackerTemplate.objects.get_or_create(

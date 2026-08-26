@@ -134,8 +134,8 @@ PROFILES = (
         "vmid": 9050,
         "description": (
             "Endpoint-agnostic InfluxDB OSS 2.9.1 profile for Proxmox metrics and Flux. "
-            "Build dispatch supplies proxbox-api endpoint_id and target_node; setup and "
-            "credentials are managed only by typed NMS RPC."
+            "Build dispatch selects an authorized enabled PackerBuildTarget URL and "
+            "target_node; setup and credentials are managed only by typed NMS RPC."
         ),
     },
     {
@@ -146,8 +146,8 @@ PROFILES = (
         "vmid": 9051,
         "description": (
             "Endpoint-agnostic InfluxDB 3 Core 3.11.0 profile for general-purpose SQL, "
-            "InfluxQL, and processing-engine workloads. Build dispatch supplies proxbox-api "
-            "endpoint_id and target_node; tokens are managed only by typed NMS RPC."
+            "InfluxQL, and processing-engine workloads. Build dispatch selects an authorized "
+            "enabled PackerBuildTarget URL and target_node; tokens are managed only by typed NMS RPC."
         ),
     },
 )

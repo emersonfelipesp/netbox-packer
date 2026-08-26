@@ -51,7 +51,7 @@ installer config, target node/storage, and monitoring-agent injection preference
 | `os_family` | CharField(20) | — | Choices from `OSFamilyChoices` |
 | `os_version` | CharField(40) | — | e.g. `24.04`. The web form renders this as a dropdown grouped by OS family (`OS_VERSIONS_BY_FAMILY` in `choices.py`); the model/API stay free-form so automation can send any version. |
 | `proxmox_template_id` | PositiveIntegerField | — | Proxmox VMID for the resulting template |
-| `proxmox_endpoint` | URLField | blank | Proxmox API URL (used to derive SSH host) |
+| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint for Cloud-Init template builds; proxbox-api derives SSH authority from the translated backend row. |
 | `proxmox_node` | CharField(100) | — | Proxmox node name or IP |
 | `storage_pool` | CharField(100) | blank | Proxmox storage pool name (default: `local`) |
 | `storage_pool_type` | CharField(20) | blank | Choices from `StoragePoolTypeChoices` |
@@ -144,7 +144,7 @@ arrives.
 | `started_at` | DateTimeField | null | Set when job starts running |
 | `finished_at` | DateTimeField | null | Set on success or failure |
 | `status` | CharField(20) | `queued` | `queued`, `running`, `success`, `failed`, `cancelled` |
-| `variable_overrides` | JSONField | `{}` | Per-build overrides (e.g. `image_url`, `ssh_host`) |
+| `variable_overrides` | JSONField | `{}` | Per-build overrides (for example `image_url`, `target_node`, `template_vmid`, or `storage`). Caller `ssh_host` and numeric `endpoint_id` values do not authorize Cloud-Init template builds. |
 | `log` | TextField | blank | Accumulated build output |
 | `exit_code` | IntegerField | null | Exit code from `packer build` or proxbox-api response |
 | `result_template_id` | IntegerField | null | Proxmox VMID of the completed template |
@@ -158,13 +158,15 @@ arrives.
 
 A multi-cluster target entry for distributing builds across Proxmox nodes.
 `select_build_node()` iterates enabled targets in ascending `priority` order,
-skipping nodes at `MAX_CONCURRENT_BUILDS_PER_NODE` capacity. Falls back to the
-template's primary node when no targets exist or all targets are exhausted.
+skipping nodes at `MAX_CONCURRENT_BUILDS_PER_NODE` capacity. Local Packer builds
+retain the legacy primary-node fallback when targets are exhausted. Cloud-init
+image builds fall back only when no target rows exist; if target rows are
+configured but all are disabled or unavailable, dispatch fails closed.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `template` | FK → PackerTemplate | — | CASCADE; `related_name="build_targets"` |
-| `proxmox_endpoint` | URLField | blank | Proxmox API URL for this target |
+| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint when this target is selected. |
 | `proxmox_node` | CharField(100) | — | Node name or IP |
 | `priority` | PositiveIntegerField | `10` | Lower = higher priority |
 | `enabled` | BooleanField | `True` | Disabled targets are skipped |
