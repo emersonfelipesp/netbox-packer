@@ -53,10 +53,7 @@ WIN11_VMID = 9020
 PROXMOX_ENDPOINT = "https://10.0.30.71:8006"
 PROXMOX_NODE = "10.0.30.71"
 
-PACKER_HCL_REF = (
-    "/opt/netbox/netbox/netbox-packer/netbox_packer/"
-    "packer_templates/windows-11-proxmox.pkr.hcl"
-)
+PACKER_HCL_REF = "/opt/netbox/netbox/netbox-packer/netbox_packer/packer_templates/windows-11-proxmox.pkr.hcl"
 
 
 def seed_windows11(apps, schema_editor):

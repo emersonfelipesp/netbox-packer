@@ -22,10 +22,16 @@ when changing the cloud-init template image flow.
 ## InfluxDB Profile Guardrail
 
 Migration `0020` seeds OSS 2.9.1 (VMID `9050`) and Core 3.11.0 (VMID `9051`)
-profiles. They are endpoint-agnostic: every build must provide a proxbox-api
-`endpoint_id` and `target_node`, and the SSH host must be derived from that same
-endpoint. Optional `template_vmid` and `storage` overrides select destination
-identifiers. Never put a password, token, setup request, or private key in an
+profiles. They are endpoint-agnostic: every build must select an enabled
+`PackerBuildTarget` carrying the netbox-proxbox endpoint URL and `target_node`.
+The URL must resolve to exactly one enabled `ProxmoxEndpoint` with both
+`allow_writes=True` and `allow_packer_template_builds=True`; netbox-packer then
+translates that exact row to the proxbox-api `endpoint_id`, and proxbox-api
+derives SSH authority from it. Numeric caller overrides are not authorization.
+Configured-but-all-disabled or exhausted build-target sets fail closed for
+cloud builds; they must never fall back to the template's primary endpoint.
+Optional `template_vmid` and `storage` overrides select destination identifiers.
+Never put a password, token, setup request, or private key in an
 installer config or build override. Initial setup, database creation, and token
 creation are typed NMS RPC operations backed by netbox-nms secret references.
 RPC responses may expose `nms-secret:` references, never plaintext values.
@@ -182,8 +188,11 @@ Migration `0030` seeds `influxdb3-explorer-1.9.0-debian-13` at VMID `9053` as
 an endpoint-agnostic Debian 13 cloud-init profile. Its verbatim source is
 `netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml`, and
 the migration constant must remain byte-identical. Migration `0030` depends on
-`0029` and must remain the sole migration leaf unless a later linear migration
-supersedes it. Collision handling follows `0025`: compare existing rows, report
+`0029`; later migrations extend that same linear graph, and `0032` is the current
+sole leaf. Migration `0032` corrects only exact historical template descriptions
+that still tell callers to supply `endpoint_id`; it must preserve missing,
+renamed, already-corrected, and operator-edited rows. Collision handling in the
+`0030` seed follows `0025`: compare existing rows, report
 all mismatched fields, never overwrite them, exclude mutable build state, and
 leave reverse as a no-op because VMID `9053` may already be baked.
 
@@ -236,7 +245,10 @@ obtain an unexpired `plan_token`; then `POST /cloud/templates/images` with the
 same build fields, `execute=true`, and that token. Never compute the recipe
 digest locally or allow request fields to drift between plan and execute.
 
-This requires the signed-preflight contract in `proxbox-api >= 0.0.19.post5`.
+This requires `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25`, where the
+explicit packer-template capability is persisted, propagated, signed, and
+rechecked at the final execution boundary. `proxbox-api 0.0.19.post5` has only
+the earlier signed-preflight contract and is insufficient.
 Preflight unavailability or findings, `ready=false`, writes disabled, missing or
 expired tokens, execute-time mismatch/expiry, and responses without both
 confirmed execution and artifact verification fail the build with an actionable

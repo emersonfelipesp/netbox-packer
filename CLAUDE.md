@@ -165,17 +165,32 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   is submitted for execution. Preflight failures/findings, missing or expired
   tokens, plan rejection, and responses without confirmed execution plus final
   artifact verification fail the build and remain visible in its log.
+- Cloud-config dispatch resolves the selected primary/build-target URL to
+  exactly one netbox-proxbox `ProxmoxEndpoint` by normalized host and port. It
+  requires `enabled`, `allow_writes`, and the separate default-off
+  `allow_packer_template_builds` capability before queueing and repeats the
+  exact resolution immediately before `call_proxbox_build()`. Missing,
+  malformed, disabled, unmatched, ambiguous, or revoked endpoints fail closed;
+  caller-supplied numeric `endpoint_id` overrides never grant authorization.
+  The configured `proxbox_api_url` must match exactly one usable
+  netbox-proxbox `FastAPIEndpoint` context, and the backend-id resolver must
+  succeed through that context. No configured target rows retains the legacy
+  primary endpoint candidate; configured-but-all-disabled or exhausted target
+  rows fail closed for cloud builds instead of falling back.
 - These contracts are locked by `tests/test_cloud_config_build_static.py` and
   `tests/test_build_dispatch_behavior.py`.
 
 ### Prerequisites (proxbox-api side)
 
-- `proxbox-api >= 0.0.19.post5` with the signed-preflight contract,
+- `proxbox-api >= 0.0.20` and `netbox-proxbox >= 0.0.25` with the explicit
+  packer-template capability bound into the signed-preflight contract,
   `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, and `PROXBOX_SSH_KEY_DIR`; the
   runtime image bakes in `openssh-client` (`0.0.18.post1`). The target
-  `ProxmoxEndpoint` needs `allow_writes=True`, and the chosen storage must allow
+  `ProxmoxEndpoint` needs `allow_writes=True` and
+  `allow_packer_template_builds=True`, and the chosen storage must allow
   `snippets,import,images` content types. A 404 from the preflight endpoint is
-  deliberately incompatible and fails closed; never fall back to the legacy
+  deliberately incompatible and fails closed. `proxbox-api 0.0.19.post5`
+  predates the narrow server-side gate; never fall back to the legacy
   one-step execute call.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
   `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
@@ -241,10 +256,16 @@ to the configured `PackerPluginSettings.proxbox_api_url` using the encrypted API
 key. The selected template supplies `template_vmid` from
 `proxmox_template_id`, plus default `target_node` and `storage`.
 
-Important boundary: `PackerTemplate.proxmox_endpoint` is a URL string, not the
-proxbox-api backend endpoint primary key. Do not silently derive `endpoint_id`
-from that field unless the model is changed to hold a reliable backend endpoint
-reference.
+Important boundary: the create-instance modal's numeric proxbox-api endpoint id
+is a provisioning selector, not template-bake authorization. Cloud-config bakes
+instead match `PackerTemplate.proxmox_endpoint` or an enabled
+`PackerBuildTarget.proxmox_endpoint` URL to exactly one netbox-proxbox endpoint,
+verify both write gates, and use netbox-proxbox's established
+`resolve_backend_endpoint_id()` translation against the exact configured
+backend. Never trust a caller-supplied numeric build override as that proof.
+If any target rows are configured, cloud builds must select an enabled,
+available target; an all-disabled or exhausted set is an authorization failure,
+not permission to use the template's primary endpoint.
 
 ### Seeded examples and migration chain
 
@@ -272,8 +293,8 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0017` | `tpl-fileserver-allinone-ubuntu-2404` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Repoints the File Server template to installer config v1.0.1, corrects its current VMID to 9300, injects the authenticated package-Read index, and marks it pending for rebake |
 | `0018` | *(schema only — `AlterField` on `PackerTemplate.name`)* | — | — | — | Adds a DB-level `unique=True` constraint to `name`. Historical/defense-in-depth: at the time this migration landed, the File Server package-index credential guard in `package_index.py` trusted an exact `name` match, so this stopped two rows sharing `FILESERVER_TEMPLATE_NAME` simultaneously. Migration 0019 replaced `name` as the actual credential-injection trust boundary — see below |
 | `0019` | *(schema + data — `AddField` + `RunPython` on `PackerTemplate`)* | — | — | — | Adds `is_fileserver_golden_template` (`BooleanField`, `editable=False`) and stamps it `True` on the row named `tpl-fileserver-allinone-ubuntu-2404`. `unique=True` (0018) only stops two rows sharing the trusted name *simultaneously* — it does not stop the trusted row being renamed away and a different row later reclaiming the freed name. `package_index.py` now authorizes credential injection on this immutable flag instead of on `name`; the flag is settable only by a migration (excluded from `PackerTemplateForm` and the DRF serializer's explicit `fields` tuples) |
-| `0020` | `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | 9050 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned OSS 2.9.1 profile for Proxmox metrics/Flux; requires `endpoint_id` + `target_node` |
-| `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires `endpoint_id` + `target_node` |
+| `0020` | `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` | 9050 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned OSS 2.9.1 profile for Proxmox metrics/Flux; requires an authorized enabled build-target URL + `target_node` |
+| `0020` | `influxdb-core-3.11.0-ubuntu-2404` | 9051 | Ubuntu 24.04 | Selected per build | Credential-free, version-pinned Core 3.11.0 profile; requires an authorized enabled build-target URL + `target_node` |
 | `0021` | *(schema only — `AddField` on `PackerPluginSettings`)* | — | — | — | Adds the plaintext File Server package-read username and Fernet-encrypted token; build rendering and redaction source both from this singleton instead of worker environment variables |
 | `0022` | `fileserver-allinone-cloud-config` | 9300 | Ubuntu 24.04 | `https://10.0.30.71:8006` | Replaces the stale environment-variable rotation comment in the existing v1.0.1 installer config with `PackerPluginSettings` / `set_fileserver_package_read_token()` guidance, updates its checksum, and marks linked templates pending for rebake |
 | `0023` | *(schema only — NMS agent + service marker)* | — | — | — | Adds optional `install_nms_agent` (default `False`), `nms_agent_backend_url`, and non-editable `provisions_service` fields |
@@ -283,6 +304,7 @@ new reversible seeds such as `0013` delete only the named rows they add.
 | `0028` | *(schema only — base image build snapshots)* | — | — | — | Records the resolved URL + digest on each successful cloud-image build and on the template as its last successful source. Desired-vs-built pin drift is stale even without an age policy; snapshot fields are machine-managed |
 | `0029` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | Pins the one Debian 13 profile to the **dated** snapshot `trixie/20260509-2473/debian-13-genericcloud-amd64-20260509-2473.qcow2` and its verified sha256. Debian publishes only SHA512SUMS, so the digest was produced by downloading the artifact, matching its SHA-512 to the published value, then hashing for SHA-256. No GPG signature exists in that directory, so trust is TLS + published checksum. Compare-and-set against the unpinned state; refuses to overwrite an operator's own pin; reverse is a no-op |
 | `0030` | `influxdb3-explorer-1.9.0-debian-13` | 9053 | Debian 13 | Selected per build | Credential-free Explorer UI in `influxdata/influxdb3-ui`, pinned to the reviewed 1.9.0 multi-architecture manifest digest. Debian `docker.io`, loopback-default `:8080`, lifecycle owned by `influxdb3-explorer.service`; Core token supplied only after clone through the `nms-secret:` provision-time boundary |
+| `0032` | *(data only — corrects endpoint-authorization guidance)* | 9050–9053 | — | — | Compare-and-set update for the four endpoint-agnostic InfluxDB template descriptions: replaces obsolete caller `endpoint_id` instructions with authorized enabled `PackerBuildTarget` URL + `target_node` guidance. Missing, renamed, already-corrected, and operator-edited rows remain untouched; reverse is a no-op |
 | `0025` | `influxdb-core-3.11.0-debian-13` | 9052 | Debian 13 | Selected per build | InfluxDB 3 Core 3.11.0 on Debian 13 with the production posture baked in: managed config on `127.0.0.1:8181` with token auth enabled, telemetry off, Processing Engine off, `influxdb3-core.service` drop-in, held package, `node-id` from the per-VM SMBIOS UUID. Credential-free; Zabbix/NMS agent injection off (Ubuntu/amd64-only injectors); refuses any non-Debian-13 release |
 
 #### Migration 0020 — InfluxDB profiles
@@ -291,10 +313,10 @@ The two current InfluxDB profiles have no baked endpoint, user, password,
 token, organization, bucket, or database. Their cloud-init verifies the
 InfluxData signing-key fingerprint, selects only the requested semantic patch
 version from APT, verifies the installed version, and applies `apt-mark hold`.
-Build requests provide proxbox-api `endpoint_id` and `target_node`, with
-optional `template_vmid` and `storage` selectors; when an
-endpoint ID is present, netbox-packer never forwards a legacy `ssh_host` and
-proxbox-api derives transport from the selected endpoint. Product bootstrap,
+Build requests select an authorized enabled build-target URL and `target_node`,
+with optional `template_vmid` and `storage` selectors. netbox-packer resolves
+the exact proxbox-api endpoint id and never forwards a legacy `ssh_host`, so
+proxbox-api derives transport from the selected persisted endpoint. Product bootstrap,
 database/bucket creation, tokens, configs, files, services, health, and journal
 operations are performed through typed NMS RPC; plaintext credentials are
 stored only by the netbox-nms secret bridge and RPC results contain
@@ -427,7 +449,7 @@ Seeds `influxdb-core-3.11.0-debian-13` (VMID `9052`) with installer config
 `influxdb-core-3.11.0-debian-13-cloud-config` v`3.11.0`, `os_family="debian"`,
 `os_version="13"`. Endpoint-agnostic like the `0020` profiles
 (`proxmox_endpoint=""`, `proxmox_node="select-at-build"`), so build dispatch
-supplies `endpoint_id` and `target_node`. The verbatim cloud-config lives at
+selects an authorized enabled build-target URL and `target_node`. The verbatim cloud-config lives at
 `netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml`, and the
 migration constant must stay byte-identical to it (asserted by
 `tests/test_cloud_config_build_static.py::test_influxdb3_core_debian13_seed_contract`).
@@ -521,7 +543,7 @@ Seeds `influxdb3-explorer-1.9.0-debian-13` (VMID `9053`) with installer config
 `influxdb3-explorer-1.9.0-debian-13-cloud-config` v`1.9.0`,
 `os_family="debian"`, and `os_version="13"`. It is endpoint-agnostic
 (`proxmox_endpoint=""`, `proxmox_node="select-at-build"`), so build dispatch
-supplies `endpoint_id` and `target_node`. The tracked cloud-config is
+selects an authorized enabled build-target URL and `target_node`. The tracked cloud-config is
 `netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml` and
 must remain byte-identical to the migration constant.
 

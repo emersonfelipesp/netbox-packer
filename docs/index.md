@@ -50,8 +50,10 @@ drop-in, a held package, and a `node-id` derived from the per-VM SMBIOS UUID
 rather than the shared clone hostname — and refuses to install on any other Debian
 release. Its build resolves the Trixie Debian 13 base image, and the Ubuntu/amd64-only
 Zabbix and NMS agent injections are disabled for it. Its administrative token still comes only from
-`service.influxdb.1.bootstrap`. Build dispatch supplies proxbox-api
-`endpoint_id` and `target_node` explicitly. Cloud-init contains no credentials or
+`service.influxdb.1.bootstrap`. Build dispatch selects an enabled
+`PackerBuildTarget` URL plus `target_node`, verifies both endpoint write gates,
+and resolves the exact proxbox-api `endpoint_id`; a numeric caller override is
+not authorization. Cloud-init contains no credentials or
 product setup call; typed NMS RPC owns onboarding and netbox-nms owns encrypted
 secret material exposed only as `nms-secret:` references. The legacy VMID
 `9011` profile remains development-only and is

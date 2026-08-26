@@ -339,10 +339,10 @@ def seed_influxdb3_explorer_debian13(apps, schema_editor):
         "installer_config": config,
         "description": (
             "InfluxDB 3 Explorer 1.9.0 cloud-init template for Debian 13 "
-            "(Trixie), VMID 9053. Endpoint-agnostic: build dispatch supplies "
-            "endpoint_id and target_node. The Explorer container is pinned by "
-            "digest and binds to loopback by default; typed NMS provisioning "
-            "supplies the vaulted Core connection after cloning."
+            "(Trixie), VMID 9053. Endpoint-agnostic: build dispatch selects an "
+            "authorized enabled PackerBuildTarget URL and target_node. The Explorer "
+            "container is pinned by digest and binds to loopback by default; typed NMS "
+            "provisioning supplies the vaulted Core connection after cloning."
         ),
     }
     template, template_created = PackerTemplate.objects.get_or_create(
