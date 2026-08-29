@@ -31,6 +31,34 @@ def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def test_capability_version_floor_excludes_pre_feature_packages() -> None:
+    operative_statement = (
+        "`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are "
+        "pre-capability releases; use reviewed revisions after those tags until "
+        "release engineering records the exact validated inclusive version floors."
+    )
+    docs = (
+        "README.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "COMPATIBILITY.md",
+        "docs/cloud-init-template-images.md",
+        "docs/configuration.md",
+    )
+    for rel in docs:
+        text = _read(rel)
+        assert operative_statement in " ".join(text.split()), rel
+        assert not re.search(r"proxbox-api\s*(?:>=|>|\u2265)\s*0\.0\.20", text), rel
+        assert not re.search(r"netbox-proxbox\s*(?:>=|>|\u2265)\s*0\.0\.25", text), rel
+
+    matrix = _read("COMPATIBILITY.md")
+    row = next(line for line in matrix.splitlines() if line.startswith("| v0.0.5 |"))
+    cells = [cell.strip() for cell in row.strip("|").split("|")]
+    assert cells[3] == "capability-bearing revision after 0.0.25 for `cloud_config`; optional for local Packer"
+    assert cells[4] == "capability-bearing revision after 0.0.20 for `cloud_config`"
+    assert "could exclude a valid `.postN` release" in matrix
+
+
 def _literal_assignments(rel: str) -> dict[str, object]:
     tree = ast.parse(_read(rel))
     values: dict[str, object] = {}
@@ -212,7 +240,7 @@ def test_plugin_settings_has_fileserver_package_credentials() -> None:
 def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     src = _read("netbox_packer/jobs.py")
     assert 'installer.installer_type == "cloud_config"' in src
-    assert "def _run_proxbox_cloud_build(self, build, template, node, timeout):" in src
+    assert "def _run_proxbox_cloud_build(self, build, template, endpoint, node, timeout):" in src
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
@@ -243,14 +271,14 @@ def test_jobs_target_node_unset_becomes_none() -> None:
 
 
 def test_jobs_forwards_endpoint_id_to_proxbox_build() -> None:
-    # proxbox-api requires endpoint_id when execute=true (it enforces the
-    # allow_writes + access_methods=api_ssh gates). jobs.py must resolve it from
-    # variable_overrides and forward it to call_proxbox_build, or every
-    # cloud_config bake fails with HTTP 422 "endpoint_id is required".
+    # A caller-supplied numeric override cannot prove which NetBox endpoint was
+    # authorized. Resolve the selected endpoint URL through netbox-proxbox and
+    # translate that exact row to the proxbox-api id at the final call boundary.
     src = _read("netbox_packer/jobs.py")
-    assert "def _resolve_endpoint_id(overrides):" in src
-    assert "endpoint_id = _resolve_endpoint_id(build.variable_overrides)" in src
-    assert "endpoint_id=endpoint_id," in src
+    assert "def _resolve_endpoint_id(overrides):" not in src
+    assert "authorize_packer_template_build(" in src
+    assert "endpoint_id=authorization.backend_endpoint_id," in src
+    assert "_authorize_cloud_build_dispatch(build)" in src
 
 
 def test_build_actions_dispatch_the_job() -> None:
@@ -293,6 +321,25 @@ def test_migrations_present_for_settings_and_seed() -> None:
     assert "INFLUXDB_ADMIN_TOKEN" not in influx_seed
     assert '"proxmox_endpoint": ""' in influx_seed
     assert '"proxmox_node": "select-at-build"' in influx_seed
+
+
+def test_endpoint_agnostic_seed_guidance_uses_authorized_build_targets() -> None:
+    seed_paths = (
+        "netbox_packer/migrations/0020_seed_influxdb_profiles.py",
+        "netbox_packer/migrations/0025_seed_influxdb3_core_debian13_cloud_init.py",
+        "netbox_packer/migrations/0030_seed_influxdb3_explorer_debian13_cloud_init.py",
+    )
+    for seed_path in seed_paths:
+        source = _read(seed_path)
+        assert "build dispatch supplies endpoint_id" not in source.lower()
+        assert "build dispatch supplies proxbox-api endpoint_id" not in source.lower()
+        assert "authorized enabled PackerBuildTarget URL" in source
+
+    correction = _read("netbox_packer/migrations/0032_update_endpoint_authorization_descriptions.py")
+    assert '("netbox_packer", "0031_seed_windows11")' in correction
+    assert "name=name," in correction
+    assert "description=old_description," in correction
+    assert "migrations.RunPython.noop" in correction
 
 
 def test_historical_influxdb_seed_is_immutable_and_retired_additively() -> None:
@@ -1929,9 +1976,10 @@ def test_influxdb3_core_debian13_build_resolves_a_debian_13_image(monkeypatch) -
     with pytest.raises(RuntimeError):
         jobs._resolve_cloud_image_source(_template(os_family="debian", os_version="99"), None)
     # An explicit override still wins — but only with a digest (see the pin tests).
-    assert jobs._resolve_cloud_image_source(
-        template, {"image_url": "http://x/y.qcow2", "image_sha256": "a" * 64}
-    ) == ("http://x/y.qcow2", "a" * 64)
+    assert jobs._resolve_cloud_image_source(template, {"image_url": "http://x/y.qcow2", "image_sha256": "a" * 64}) == (
+        "http://x/y.qcow2",
+        "a" * 64,
+    )
 
 
 def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
@@ -2048,17 +2096,19 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
 
     # Correct upstream repository, immutable final release, and no fallback tag.
     assert seed.count("readonly EXPLORER_IMAGE_REPOSITORY='influxdata/influxdb3-ui'") == 2
-    assert seed.count(
-        "readonly EXPLORER_IMAGE_DIGEST="
-        "'sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc'"
-    ) == 2
+    assert (
+        seed.count(
+            "readonly EXPLORER_IMAGE_DIGEST='sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc'"
+        )
+        == 2
+    )
     assert seed.count('readonly EXPLORER_IMAGE="${EXPLORER_IMAGE_REPOSITORY}@${EXPLORER_IMAGE_DIGEST}"') == 2
     assert "influxdata/influxdb3-explorer" not in seed
     assert "influxdata/explorer" not in seed
     assert "influxdata/influxdb-explorer" not in seed
     assert "latest" not in seed.lower()
     assert "latest" not in source.lower()
-    assert '--pull=never' in runner
+    assert "--pull=never" in runner
     assert '/usr/bin/docker pull "${EXPLORER_IMAGE}"' in installer
     assert '/usr/bin/docker image inspect "${EXPLORER_IMAGE}"' in installer
 
@@ -2306,13 +2356,9 @@ def test_influxdb3_explorer_payload_guard_resists_encoding_and_path_aliases(
         assert alias not in allowed
         assert posixpath.normpath(alias) not in allowed
         aliased = copy.deepcopy(base)
-        aliased["write_files"].append(
-            {"path": alias, "permissions": "0640", "owner": "root:root", "content": "{}\n"}
-        )
+        aliased["write_files"].append({"path": alias, "permissions": "0640", "owner": "root:root", "content": "{}\n"})
         with pytest.raises(RuntimeError):
-            jobs._validate_influxdb3_explorer_payload(
-                "#cloud-config\n" + yaml.safe_dump(aliased, sort_keys=False)
-            )
+            jobs._validate_influxdb3_explorer_payload("#cloud-config\n" + yaml.safe_dump(aliased, sort_keys=False))
 
     # The pristine seed must still pass, or the allowlist is simply refusing everything.
     jobs._validate_influxdb3_explorer_payload(seed)
@@ -2392,13 +2438,86 @@ def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
     )
 
     with pytest.raises(RuntimeError, match="credential-free boundary"):
-        jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
+        jobs.PackerBuildJob()._run_proxbox_cloud_build(
+            build,
+            template,
+            "https://pve.example:8006",
+            "node1",
+            60,
+        )
 
     call_proxbox_build.assert_not_called()
     build.save.assert_called_once_with(update_fields=["log"])
     assert "Refusing InfluxDB 3 Explorer bake" in build.log
     assert "config.json only after cloning" in build.log
     assert plaintext_token not in build.log
+
+
+def test_cloud_build_rechecks_endpoint_authorization_at_final_call_boundary(
+    monkeypatch,
+) -> None:
+    jobs = _load_jobs_isolated(monkeypatch)
+    jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
+    jobs.render_fileserver_package_index = lambda content, **_kwargs: content
+    jobs._authorize_selected_endpoint = Mock(side_effect=RuntimeError("allow_packer_template_builds was revoked"))
+
+    settings_row = SimpleNamespace(
+        proxbox_api_url="https://proxbox.example",
+        get_fileserver_package_read_token=lambda: "",
+        get_proxbox_api_key=lambda: "api-key",
+    )
+    models_module = ModuleType("netbox_packer.models")
+    models_module.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    models_module.PackerTemplate = type("PackerTemplate", (), {})
+    monkeypatch.setitem(sys.modules, "netbox_packer.models", models_module)
+
+    call_proxbox_build = Mock()
+    client_module = ModuleType("netbox_packer.proxbox_client")
+    client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
+    client_module.call_proxbox_build = call_proxbox_build
+    monkeypatch.setitem(sys.modules, "netbox_packer.proxbox_client", client_module)
+
+    template = SimpleNamespace(
+        pk=54,
+        name="revocation-test",
+        installer_config=SimpleNamespace(
+            content="#cloud-config\n",
+            installer_type="cloud_config",
+        ),
+        storage_pool="local",
+        proxmox_node="node1",
+        proxmox_endpoint="https://pve.example:8006",
+        proxmox_template_id=9054,
+        os_family="ubuntu",
+        os_version="24.04",
+        base_image_url="",
+        base_image_sha256="",
+        is_fileserver_golden_template=False,
+        install_qemu_guest_agent=False,
+        install_zabbix_agent2=False,
+        zabbix_server="",
+        install_nms_agent=False,
+    )
+    build = SimpleNamespace(variable_overrides={}, log="", save=Mock())
+
+    with pytest.raises(RuntimeError, match="was revoked"):
+        jobs.PackerBuildJob()._run_proxbox_cloud_build(
+            build,
+            template,
+            "https://pve.example:8006",
+            "node1",
+            60,
+        )
+
+    jobs._authorize_selected_endpoint.assert_called_once_with(
+        "https://pve.example:8006",
+        "https://proxbox.example",
+    )
+    call_proxbox_build.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -2448,10 +2567,7 @@ def test_influxdb3_explorer_runner_applies_configured_bind(
     arguments = result.stdout.splitlines()
     assert arguments[0] == "run"
     assert expected_publish in arguments
-    expected_image = (
-        "influxdata/influxdb3-ui@"
-        "sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc"
-    )
+    expected_image = "influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc"
     assert expected_image in arguments
 
 
@@ -2503,14 +2619,18 @@ def test_influxdb3_explorer_installer_failure_trap_records_every_exit(
     assert trap_line, "EXIT-trap mutation target disappeared"
     assert "install -d -m 0755 /var/lib/nms || true" in prefix
     marker = tmp_path / "influxdb-install-failed"
-    harness = (prefix + trap_line).replace(
-        "readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'",
-        f"readonly NMS_FAILURE_MARKER='{marker}'",
-        1,
-    ).replace(
-        "install -d -m 0755 /var/lib/nms || true",
-        'install -d -m 0755 "${NMS_FAILURE_MARKER%/*}" || true',
-        1,
+    harness = (
+        (prefix + trap_line)
+        .replace(
+            "readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'",
+            f"readonly NMS_FAILURE_MARKER='{marker}'",
+            1,
+        )
+        .replace(
+            "install -d -m 0755 /var/lib/nms || true",
+            'install -d -m 0755 "${NMS_FAILURE_MARKER%/*}" || true',
+            1,
+        )
     )
 
     result = subprocess.run(
@@ -2677,6 +2797,8 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
     assert 'installer_config_checksum_at_build=""' in source
     assert ".delete()" not in source
     assert 'dependencies = [\n        ("netbox_packer", "0025_seed_influxdb3_core_debian13_cloud_init"),' in source
+
+
 def _template(**overrides):
     """A PackerTemplate stand-in with the base-image pin fields defaulted to empty."""
 
@@ -2751,10 +2873,7 @@ def test_pinned_base_image_requires_a_verified_digest(monkeypatch) -> None:
         ("override", "https://images.example/base.qcow2?token=do-not-persist"),
         (
             "template",
-            (
-                "https://images.example/base.qcow2?X-Amz-Credential=do-not-persist"
-                "&X-Amz-Signature=do-not-persist"
-            ),
+            ("https://images.example/base.qcow2?X-Amz-Credential=do-not-persist&X-Amz-Signature=do-not-persist"),
         ),
     ),
 )
@@ -2769,11 +2888,7 @@ def test_credentialed_base_image_urls_fail_at_the_job_boundary(
         base_image_url=image_url if source == "template" else "",
         base_image_sha256=digest if source == "template" else "",
     )
-    overrides = (
-        {"image_url": image_url, "image_sha256": digest}
-        if source == "override"
-        else {}
-    )
+    overrides = {"image_url": image_url, "image_sha256": digest} if source == "override" else {}
 
     with pytest.raises(RuntimeError, match="must not contain") as exc_info:
         jobs._resolve_cloud_image_source(template, overrides)
@@ -2782,10 +2897,7 @@ def test_credentialed_base_image_urls_fail_at_the_job_boundary(
 
 def test_base_image_url_redaction_removes_all_credential_components() -> None:
     base_image = _load_base_image_module()
-    tainted = (
-        "https://operator:do-not-persist@images.example:8443/base.qcow2"
-        "?token=do-not-persist#credential"
-    )
+    tainted = "https://operator:do-not-persist@images.example:8443/base.qcow2?token=do-not-persist#credential"
 
     redacted = base_image.redact_base_image_url(tainted)
 
@@ -2895,8 +3007,7 @@ def test_build_payload_forwards_the_digest_only_when_pinned(monkeypatch) -> None
             {},
             {
                 "image_url": (
-                    "https://operator:do-not-persist@vendor.example/override.qcow2"
-                    "?token=do-not-persist#credential"
+                    "https://operator:do-not-persist@vendor.example/override.qcow2?token=do-not-persist#credential"
                 ),
                 "image_sha256": "c" * 64,
             },
@@ -2977,6 +3088,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     client_module.ProxboxApiError = type("ProxboxApiError", (Exception,), {})
     client_module.call_proxbox_build = call_proxbox_build
     monkeypatch.setitem(sys.modules, "netbox_packer.proxbox_client", client_module)
+    jobs._authorize_selected_endpoint = Mock(return_value=SimpleNamespace(backend_endpoint_id=17))
 
     installer = SimpleNamespace(
         content="#cloud-config\n",
@@ -3027,7 +3139,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
 
     build = SimpleNamespace(
         variable_overrides={
-            "endpoint_id": 17,
+            "endpoint_id": 999,
             "target_node": "node1",
             **build_pin,
         },
@@ -3036,7 +3148,13 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
         save=save_build,
     )
 
-    jobs.PackerBuildJob()._run_proxbox_cloud_build(build, template, "node1", 60)
+    jobs.PackerBuildJob()._run_proxbox_cloud_build(
+        build,
+        template,
+        "https://pve.example:8006",
+        "node1",
+        60,
+    )
 
     client_kwargs = call_proxbox_build.call_args.kwargs
     expected_url = build_pin.get("image_url") or template_pin.get(
@@ -3046,6 +3164,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     safe_expected_url = jobs.redact_base_image_url(expected_url)
     assert client_kwargs["image_url"] == expected_url
     assert client_kwargs["image_sha256"] == expected_sha256
+    assert client_kwargs["endpoint_id"] == 17
     assert build.base_image_url_at_build == safe_expected_url
     assert build.base_image_sha256_at_build == expected_sha256
     assert template_updates == [
@@ -3107,7 +3226,7 @@ def test_staleness_evaluates_pin_drift_without_an_age_policy() -> None:
     assert "pin_differs_from_built_source(" in models_src
     assert "return age_stale or config_stale or base_image_stale" in models_src
     staleness_job = jobs_src.split("class PackerStalenessCheckJob", 1)[1].split("def dispatch_build", 1)[0]
-    assert '.exclude(max_age_days=None)' not in staleness_job
+    assert ".exclude(max_age_days=None)" not in staleness_job
 
     # A pin only counts as drift where the builder actually enforces it. The local Packer
     # path records no at-build snapshot, so honouring a pin there would report the
@@ -3196,7 +3315,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0031_seed_windows11"}
+    assert names - internal_dependencies == {"0032_update_endpoint_authorization_descriptions"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
@@ -3206,9 +3325,7 @@ def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
     used. The value of the whole feature collapses if this pin silently points back at a
     mutable directory, so assert the shape here rather than trusting review.
     """
-    migration = (PKG / "migrations" / "0029_pin_influxdb3_debian13_base_image.py").read_text(
-        encoding="utf-8"
-    )
+    migration = (PKG / "migrations" / "0029_pin_influxdb3_debian13_base_image.py").read_text(encoding="utf-8")
     namespace: dict[str, object] = {}
     tree = ast.parse(migration)
     for node in tree.body:

@@ -56,7 +56,7 @@ jobs:
   # Proves the plugin actually loads, migrates, and reports its support tier on
   # each declared NetBox release, using a **source checkout of the tag** rather
   # than a Docker image: upstream has published no 4.7 image
-  # (netboxcommunity/netbox:v4.7.0-beta1 -> 404 on Docker Hub), so the
+  # (netboxcommunity/netbox:v4.7.0-beta2 -> 404 on Docker Hub), so the
   # image-based e2e matrix cannot cover the experimental tier at all.
   #
   # netbox-packer is the only plugin in the Proxbox family with no
@@ -74,22 +74,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NOTE: v4.5.8 is deliberately absent, and that is a real finding
-          # rather than a convenience. netbox_packer migration
-          # 0004_packerpluginsettings_tags_and_more depends on
-          # extras.0138_customfieldchoiceset_choice_colors, which first appears
-          # in NetBox v4.6.0-beta2. Django resolves external migration
-          # dependencies before running anything, so a fresh install on 4.5.8
-          # raises NodeNotFoundError and this plugin cannot be installed there
-          # at all -- the declared 4.5.8 floor has never been true for a fresh
-          # database. Adding the cell would simply land a permanently red job.
-          # Tracked separately; do not "fix" this by lowering the ceiling or
-          # deleting the assertion.
-          - netbox-version: "v4.6.4"
-            netbox-ref: 3d73b2a1669ad03c9f0ccb1332fe201d60cbce9e
+          - netbox-version: "v4.5.8"
+            netbox-ref: 75e1b86613792458b4d4c8d0cbbfc94df16cfaaf
             tier: stable
-          - netbox-version: "v4.7.0-beta1"
-            netbox-ref: 9c163ba2ddfdeafa4bca5c5ca493e70e96ab53f4
+          - netbox-version: "v4.6.6"
+            netbox-ref: fb8c455ba61b57119a70670612dfdd05e8438b10
+            tier: stable
+          - netbox-version: "v4.7.0-beta2"
+            netbox-ref: aa1d49d0f5021a28e6efc2d0364b84c5bcec7137
             tier: experimental
     services:
       postgres:
@@ -209,7 +201,7 @@ jobs:
 
   # ── NetBox integration tests ──────────────────────────────────────────────
   test:
-    name: Test (NetBox v4.6.4 source)
+    name: Test (NetBox v4.6.6 source)
     runs-on: ubuntu-latest
     needs: [lint, static-tests, package]
 
@@ -250,9 +242,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev
 
-      - name: Run NetBox v4.6.4 source test suite
+      - name: Run NetBox v4.6.6 source test suite
         env:
-          NETBOX_REF: v4.6.4
+          NETBOX_REF: v4.6.6
           NETBOX_PLUGINS_JSON: '["netbox_packer"]'
           MIGRATION_APPS: "netbox_packer"
           TEST_LABELS: "netbox_packer"

@@ -54,11 +54,7 @@ class Command(BaseCommand):
                 self.stdout.write("           → skipping auto-rebuild (already running build)")
                 continue
 
-            build = (
-                PackerBuild.objects.filter(template=template, status="queued")
-                .order_by("queued_at")
-                .first()
-            )
+            build = PackerBuild.objects.filter(template=template, status="queued").order_by("queued_at").first()
             if build is None:
                 build = PackerBuild.objects.create(
                     template=template,
@@ -72,14 +68,8 @@ class Command(BaseCommand):
             PackerTemplate.objects.filter(pk=template.pk).update(build_status="building")
             dispatch_build(build)
             dispatched += 1
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"           → {action} and dispatched PackerBuild #{build.pk}"
-                )
-            )
+            self.stdout.write(self.style.SUCCESS(f"           → {action} and dispatched PackerBuild #{build.pk}"))
 
         self.stdout.write(
-            self.style.SUCCESS(
-                f"\nDone: {checked} checked, {stale} stale, {dispatched} rebuilds dispatched."
-            )
+            self.style.SUCCESS(f"\nDone: {checked} checked, {stale} stale, {dispatched} rebuilds dispatched.")
         )

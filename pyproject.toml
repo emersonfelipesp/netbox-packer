@@ -15,6 +15,7 @@ dependencies = [
     # imports it directly, so it belongs in the metadata rather than being
     # inherited by luck.
     "packaging>=23.0",
+    "PyYAML>=6.0",
     "pydantic>=2.0.0",
 ]
 authors = [

@@ -35,10 +35,20 @@ template. The flow is triggerable from the NMS UI
 at `nms.nmulti.cloud/virtualization/packer` (Installer Configs + a "Create
 cloud-init template image" dialog + per-row Build button).
 
-Requirements: `proxbox-api >= 0.0.19.post5` with the signed-preflight contract,
+Requirements: capability-bearing revisions of proxbox-api and netbox-proxbox
+with the explicit packer-template contract. `proxbox-api 0.0.20` and
+`netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+after those tags until release engineering records the exact validated inclusive
+version floors. Also required:
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
 Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
-`snippets,import,images`. Configure `proxbox_api_url` and an encrypted API key
+`snippets,import,images`. The same enabled netbox-proxbox endpoint must also
+have the narrower `allow_packer_template_builds=True` capability. The template's
+`proxmox_endpoint`, or the selected enabled `PackerBuildTarget` URL, is matched
+by normalized host and port to exactly one endpoint; caller-supplied numeric
+`endpoint_id` overrides never authorize a bake. When build-target rows exist,
+an all-disabled or exhausted set fails closed rather than falling back to the
+template's primary endpoint. Configure `proxbox_api_url` and an encrypted API key
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
 (there is no NetBox UI page or REST endpoint for this settings model yet — see
 [`docs/configuration.md`](docs/configuration.md)). Seeded examples include
@@ -71,9 +81,11 @@ Zabbix database schema on first boot. Do not target the production
 Migration `0020` adds endpoint-agnostic, credential-free InfluxDB profiles:
 `influxdb-oss-2.9.1-ubuntu-2404-proxmox-metrics` (VMID `9050`) for Proxmox
 metrics/Flux and `influxdb-core-3.11.0-ubuntu-2404` (VMID `9051`) for general
-SQL/InfluxQL workloads. Build requests must supply the proxbox-api
-`endpoint_id` and `target_node`, with optional typed `template_vmid` and
-`storage` overrides; proxbox-api derives the SSH host from that same endpoint.
+SQL/InfluxQL workloads. Configure an enabled `PackerBuildTarget` whose
+`proxmox_endpoint` URL identifies the authorized netbox-proxbox endpoint, and
+select its `target_node`; optional typed `template_vmid` and `storage` overrides
+select destination identifiers. netbox-packer resolves the exact proxbox-api
+endpoint id and proxbox-api derives SSH authority from that persisted row.
 Package versions are pinned and held. Initial users, databases, and
 tokens are created only through typed NMS RPC and stored as `nms-secret:`
 references—never in cloud-init. The legacy VMID `9011` development profile is
@@ -258,13 +270,16 @@ Certification evidence is tracked in [CERTIFICATION.md](./CERTIFICATION.md).
 The repository includes Apache-2.0 licensing, PyPI metadata, compatibility
 metadata, GitHub Actions CI, release validation, docs publishing, screenshot
 capture, and page-coverage workflows for NetBox v4.6.4. Docker install smoke
-coverage spans NetBox v4.5.8, v4.5.9, and v4.6.0 through v4.6.4.
+coverage and the real source matrix now include v4.5.8 and v4.6.6.
 
-NetBox `4.7.x` is additionally supported on an **experimental** basis: the plugin
-loads and runs with no configuration change and warns once at startup that the
-line is not yet certified. See [COMPATIBILITY.md](COMPATIBILITY.md) for the tier
-table, how to silence the notice, and why every Proxbox-family plugin must be
-upgraded together before moving an instance to 4.7.
+Canonical NetBox `v4.7.0-beta2` metadata is admitted on a **release-held**
+basis and warns once at startup; final 4.7.0 and every other 4.7 identity fail
+closed. CI pins exact source revision
+`aa1d49d0f5021a28e6efc2d0364b84c5bcec7137`, while runtime verifies canonical
+release metadata. See
+[COMPATIBILITY.md](COMPATIBILITY.md) for the tier table, how to silence the
+notice, and why every Proxbox-family plugin must be upgraded together before
+moving an instance to beta2.
 
 ## License
 

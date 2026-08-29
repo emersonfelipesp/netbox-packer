@@ -22,10 +22,16 @@ when changing the cloud-init template image flow.
 ## InfluxDB Profile Guardrail
 
 Migration `0020` seeds OSS 2.9.1 (VMID `9050`) and Core 3.11.0 (VMID `9051`)
-profiles. They are endpoint-agnostic: every build must provide a proxbox-api
-`endpoint_id` and `target_node`, and the SSH host must be derived from that same
-endpoint. Optional `template_vmid` and `storage` overrides select destination
-identifiers. Never put a password, token, setup request, or private key in an
+profiles. They are endpoint-agnostic: every build must select an enabled
+`PackerBuildTarget` carrying the netbox-proxbox endpoint URL and `target_node`.
+The URL must resolve to exactly one enabled `ProxmoxEndpoint` with both
+`allow_writes=True` and `allow_packer_template_builds=True`; netbox-packer then
+translates that exact row to the proxbox-api `endpoint_id`, and proxbox-api
+derives SSH authority from it. Numeric caller overrides are not authorization.
+Configured-but-all-disabled or exhausted build-target sets fail closed for
+cloud builds; they must never fall back to the template's primary endpoint.
+Optional `template_vmid` and `storage` overrides select destination identifiers.
+Never put a password, token, setup request, or private key in an
 installer config or build override. Initial setup, database creation, and token
 creation are typed NMS RPC operations backed by netbox-nms secret references.
 RPC responses may expose `nms-secret:` references, never plaintext values.
@@ -182,8 +188,11 @@ Migration `0030` seeds `influxdb3-explorer-1.9.0-debian-13` at VMID `9053` as
 an endpoint-agnostic Debian 13 cloud-init profile. Its verbatim source is
 `netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml`, and
 the migration constant must remain byte-identical. Migration `0030` depends on
-`0029` and must remain the sole migration leaf unless a later linear migration
-supersedes it. Collision handling follows `0025`: compare existing rows, report
+`0029`; later migrations extend that same linear graph, and `0032` is the current
+sole leaf. Migration `0032` corrects only exact historical template descriptions
+that still tell callers to supply `endpoint_id`; it must preserve missing,
+renamed, already-corrected, and operator-edited rows. Collision handling in the
+`0030` seed follows `0025`: compare existing rows, report
 all mismatched fields, never overwrite them, exclude mutable build state, and
 leave reverse as a no-op because VMID `9053` may already be baked.
 
@@ -236,7 +245,11 @@ obtain an unexpired `plan_token`; then `POST /cloud/templates/images` with the
 same build fields, `execute=true`, and that token. Never compute the recipe
 digest locally or allow request fields to drift between plan and execute.
 
-This requires the signed-preflight contract in `proxbox-api >= 0.0.19.post5`.
+This requires capability-bearing revisions where the explicit packer-template
+capability is persisted, propagated, signed, and rechecked at the final
+execution boundary. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are
+pre-capability releases; use reviewed revisions after those tags until release
+engineering records the exact validated inclusive version floors.
 Preflight unavailability or findings, `ready=false`, writes disabled, missing or
 expired tokens, execute-time mismatch/expiry, and responses without both
 confirmed execution and artifact verification fail the build with an actionable
@@ -428,8 +441,9 @@ than re-typed as literals:
 
 - **stable** `4.5.8` – `4.6.99` — admitted silently; specific versions in
   this band are exercised in CI, the rest are admitted on their strength;
-- **experimental** `4.7.0` – `4.7.99` — loads and runs with no configuration
-  change, and emits system check `netbox_packer.W001` (a **Warning**, never an Error)
+- **held beta** canonical `4.7.0-beta2` metadata only — the numeric ceiling is
+  `4.7.0`, the v3 identity guard rejects GA/other 4.7 identities, and the
+  admitted beta emits `netbox_packer.W001` (a **Warning**, never an Error)
   plus one `ready()` log line. A version that cannot be classified reports
   `netbox_packer.W002` rather than passing silently. Operators silence the notice with the
   `silence_netbox_compatibility_warning` key in this plugin's
@@ -456,8 +470,7 @@ Two hard rules:
    against NetBox still passes. Verify registration with `apps.is_installed()`
    after any upgrade rather than trusting that NetBox came up.
 
-Beta release strings are why the ceiling is `4.7.99` and not something
-pre-release-shaped: `release.yaml` at tag `v4.7.0-beta1` reads `version: "4.7.0"`
-with `designation: "beta1"`, and the plugin gate compares against
-`RELEASE.version` — the bare `"4.7.0"`. `RELEASE.full_version`
-(`"4.7.0-beta1"`) is display only.
+NetBox passes bare `RELEASE.version` (`"4.7.0"`) to the plugin gate. Contract v3
+therefore reads canonical `release.yaml`, requires designation `beta2`, and
+permits only a build label in local metadata. CI pins exact beta2 source
+revision `aa1d49d0f5021a28e6efc2d0364b84c5bcec7137`; runtime attests metadata.

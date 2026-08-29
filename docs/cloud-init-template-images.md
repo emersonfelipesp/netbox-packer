@@ -13,8 +13,11 @@
 2. Create or select a `PackerTemplate` that references the installer config.
 3. Trigger the template build from NetBox, the API, or the NMS page at
    `/virtualization/packer`.
-4. `PackerBuildJob` resolves the build node, base cloud image URL, storage, and
-   SSH host.
+4. Before queueing, netbox-packer matches the template or enabled build-target
+   URL to exactly one netbox-proxbox `ProxmoxEndpoint`, requires `enabled`,
+   `allow_writes`, and `allow_packer_template_builds`, and translates that exact
+   row to the configured proxbox-api endpoint id. It repeats the check after
+   target selection immediately before the proxbox-api call, so revocation wins.
 5. The client sends the exact build body with `execute=false`; proxbox-api
    renders it and returns the server-authored `recipe_digest`.
 6. The client submits that digest and the endpoint, node, VMID, provider, and
@@ -29,11 +32,19 @@
 The `PackerPluginSettings` singleton row must include `proxbox_api_url` and an
 encrypted proxbox-api key (see [Configuration](configuration.md) — today this
 is set via the Python shell only, not a UI page or REST endpoint). The target
-`ProxmoxEndpoint` in netbox-proxbox must allow writes, and the selected Proxmox
-storage must support `snippets`, `import`, and `images`.
+`ProxmoxEndpoint` in netbox-proxbox must have both `allow_writes=True` and
+`allow_packer_template_builds=True`, and the selected Proxmox storage must
+support `snippets`, `import`, and `images`. The template's primary endpoint URL,
+or every enabled build-target URL it may select, must match exactly one enabled
+netbox-proxbox endpoint by normalized host and port. Missing, malformed,
+disabled, unmatched, or ambiguous targets fail before queueing. A numeric
+`variable_overrides.endpoint_id` is never treated as authorization.
 
-This requires the signed-preflight contract available in
-`proxbox-api >= 0.0.19.post5`. If the preflight endpoint returns 404, the service
+This requires capability-bearing revisions where the signed-preflight contract
+is bound to the explicit packer-template capability. `proxbox-api 0.0.20` and
+`netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+after those tags until release engineering records the exact validated inclusive
+version floors. If the preflight endpoint returns 404, the service
 is incompatible: netbox-packer fails the build with an upgrade message and does
 not fall back to the unsafe legacy one-step execute call. Unreachable/not-ready
 preflight, returned findings, missing or expired plan tokens, plan mismatch, and
@@ -143,12 +154,12 @@ artifact.
 | `influxdb-core-3.11.0-debian-13` | Core `3.11.0` | `9052` | `8181` | SQL and InfluxQL on Debian 13, with the production posture baked in |
 
 Both rows store an empty `proxmox_endpoint` and `select-at-build` as the model
-placeholder node. Each build request must provide a positive proxbox-api
-`variable_overrides.endpoint_id` and a validated
-`variable_overrides.target_node`. Optional validated `template_vmid` and
-`storage` overrides select the destination identifiers. When an endpoint ID is present,
-netbox-packer suppresses all legacy `ssh_host` values so proxbox-api derives
-transport from the same selected endpoint it authorizes.
+placeholder node. Before building, create an enabled `PackerBuildTarget` with
+the authorized endpoint URL and node; select that `target_node` when a build
+chooses a specific target. Optional validated `template_vmid` and `storage`
+overrides select destination identifiers. netbox-packer translates the matched
+netbox-proxbox row to the proxbox-api endpoint id and never forwards legacy SSH
+host authority, so proxbox-api derives transport from the same persisted row.
 
 > **Hardened by migration `0026`.** Both profiles below (and the legacy `9011` row)
 > originally shared the Debian 13 profile's three defects: a keyring trust boundary that
@@ -206,7 +217,7 @@ operator installer rather than leaving the server at package defaults.
 | Installer config | `influxdb-core-3.11.0-debian-13-cloud-config` version `3.11.0` |
 | OS | Debian `13` (Trixie) |
 | Template VMID | `9052` |
-| Proxmox endpoint / node | selected at build (`endpoint_id` + `target_node`) |
+| Proxmox endpoint / node | selected by enabled authorized `PackerBuildTarget` URL + `target_node` |
 | Storage | `local` |
 | Listener | `127.0.0.1:8181` (loopback only) |
 | Managed config | `/etc/influxdb3/influxdb3-core.conf` (`root:influxdb3`, `0640`) |
@@ -289,8 +300,9 @@ deleting the previous one.
 `0030_seed_influxdb3_explorer_debian13_cloud_init.py` adds the independent
 `influxdb3-explorer-1.9.0-debian-13` template at VMID `9053`. A separate
 template gives Core and Explorer separate build runs and artifacts. Like the
-Debian Core profile it is endpoint-agnostic, so each build supplies proxbox-api
-`endpoint_id` and `target_node`.
+Debian Core profile it is endpoint-agnostic, so each build selects an authorized
+enabled build-target URL and `target_node`; netbox-packer resolves the exact
+proxbox-api endpoint id only after both endpoint gates pass.
 
 | Field | Value |
 | --- | --- |
@@ -298,7 +310,7 @@ Debian Core profile it is endpoint-agnostic, so each build supplies proxbox-api
 | Installer config | `influxdb3-explorer-1.9.0-debian-13-cloud-config` version `1.9.0` |
 | OS | Debian `13` (Trixie) |
 | Template VMID | `9053` |
-| Proxmox endpoint / node | selected at build (`endpoint_id` + `target_node`) |
+| Proxmox endpoint / node | selected by enabled authorized `PackerBuildTarget` URL + `target_node` |
 | Storage | `local` |
 | Container image | `influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc` |
 | Listener | configurable host IP, default `127.0.0.1:8080` |
