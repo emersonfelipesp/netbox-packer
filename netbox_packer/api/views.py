@@ -26,6 +26,7 @@ class InfluxDBProfileListView(APIView):
     """Expose supported InfluxDB profiles joined to their seeded template rows."""
 
     def get(self, request):
+        """Retrieve the influx dbprofile list."""
         if not request.user.has_perm("netbox_packer.view_packertemplate"):
             raise PermissionDenied("view_packertemplate permission is required.")
         template_names = [profile["template_name"] for profile in INFLUXDB_PROFILES]
