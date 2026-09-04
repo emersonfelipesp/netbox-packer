@@ -30,18 +30,23 @@ def is_branching_available() -> bool:
 
 
 def branching_enabled_settings() -> dict[str, str] | None:
-    """Return Packer branching config, or ``None`` when disabled/unavailable."""
-    if not is_branching_available():
-        return None
+    """Return Packer branching config, failing closed when isolation is unavailable."""
     try:
         from netbox_packer.models import PackerPluginSettings  # noqa: PLC0415
 
         settings_obj = PackerPluginSettings.get_solo()
-    except Exception:
-        logger.exception("Could not load PackerPluginSettings")
-        return None
+    except Exception as error:
+        raise RuntimeError(
+            "Could not determine whether Packer branch isolation is enabled; "
+            "refusing to run the staleness check against the main schema."
+        ) from error
     if not getattr(settings_obj, "branching_enabled", False):
         return None
+    if not is_branching_available():
+        raise RuntimeError(
+            "Packer branch isolation is enabled, but netbox-branching is not "
+            "available; refusing to run the staleness check against the main schema."
+        )
     return {
         "prefix": getattr(settings_obj, "branch_name_prefix", "") or "packer-stale",
         "on_conflict": getattr(settings_obj, "branch_on_conflict", "") or "fail",

@@ -1165,9 +1165,11 @@ class PackerStalenessCheckJob(JobRunner):
             try:
                 branch = create_and_provision_branch(name=branch_name, user=None)
                 logger.info("Staleness check: using branch '%s'", branch_name)
-            except Exception:
-                logger.exception("Branch provision failed; running staleness check on main")
-                branch = None
+            except Exception as error:
+                logger.exception("Branch provision failed; refusing to run staleness check on main")
+                raise RuntimeError(
+                    "Packer branch provisioning failed; refusing to run the staleness check against the main schema."
+                ) from error
 
         def _run_staleness(PackerBuild, PackerTemplate):
             checked = 0
