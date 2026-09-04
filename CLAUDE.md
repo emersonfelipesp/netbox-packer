@@ -795,8 +795,8 @@ Two hard rules:
    against NetBox still passes. Verify registration with `apps.is_installed()`
    after any upgrade rather than trusting that NetBox came up.
 
-Beta release strings are why the ceiling is `4.7.99` and not something
-pre-release-shaped: `release.yaml` at tag `v4.7.0-beta1` reads `version: "4.7.0"`
-with `designation: "beta1"`, and the plugin gate compares against
-`RELEASE.version` — the bare `"4.7.0"`. `RELEASE.full_version`
-(`"4.7.0-beta1"`) is display only.
+Pre-release release strings remain evaluation-only: `release.yaml` at tag
+`v4.7.0-beta1` reads `version: "4.7.0"` with `designation: "beta1"`, and the
+plugin classifies that identity as experimental while the certified stable
+ceiling remains the exact GA version `4.7.0`. `RELEASE.full_version`
+(`"4.7.0-beta1"`) is display-only metadata.

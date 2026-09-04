@@ -70,7 +70,7 @@ background jobs are simply gone, and anything that depended on them fails later
 and further away. A health probe against NetBox itself still returns 200.
 
 So before moving an instance to 4.7, upgrade **every** installed Proxbox-family
-plugin to a release carrying the `4.7.99` ceiling, and afterwards verify each
+plugin to a release carrying the certified `4.7.0` ceiling, and afterwards verify each
 one is actually registered rather than trusting that NetBox started:
 
 ```bash
@@ -91,10 +91,10 @@ If you use branch-isolated sync (`branching_enabled = True`), **do not move to
 NetBox 4.7 until a 4.7-capable netbox-branching release exists.** The
 availability detector here now requires the loaded app rather than an
 importable package, so a skipped branching app is correctly reported as
-unavailable; but a sync configured for branch isolation that finds branching
-unavailable currently proceeds against `main` rather than refusing, which
-silently drops the isolation boundary you configured. Tightening that to
-fail closed is tracked separately.
+unavailable. A sync configured for branch isolation that finds branching
+unavailable refuses to continue rather than silently dropping the isolation
+boundary; the sync job also fails closed when the settings or helper is
+unavailable.
 
 Installations that do not use branching are unaffected.
 
