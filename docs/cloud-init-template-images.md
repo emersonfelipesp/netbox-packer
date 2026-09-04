@@ -42,7 +42,7 @@ disabled, unmatched, or ambiguous targets fail before queueing. A numeric
 
 This requires capability-bearing revisions where the signed-preflight contract
 is bound to the explicit packer-template capability. `proxbox-api 0.0.20` and
-`netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+`netbox-proxbox 0.0.25.post1` are the reviewed capability releases; use reviewed revisions
 after those tags until release engineering records the exact validated inclusive
 version floors. If the preflight endpoint returns 404, the service
 is incompatible: netbox-packer fails the build with an upgrade message and does

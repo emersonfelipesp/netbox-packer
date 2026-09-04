@@ -106,8 +106,8 @@ The `cloud_config` bake path requires:
   execute request consumes that token. A 404 from the preflight endpoint is an
   incompatible older service and fails closed; there is no legacy one-step
   fallback. The runtime image includes `openssh-client` starting from
-  `0.0.18.post1`. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are
-  pre-capability releases; use reviewed revisions after those tags until release
+  `0.0.18.post1`. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post1` are
+  the reviewed capability releases; use reviewed revisions after those tags until release
   engineering records the exact validated inclusive version floors.
 - **`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`** — set in the proxbox-api
   environment. Cloud image execution is disabled by default.

@@ -37,7 +37,7 @@ cloud-init template image" dialog + per-row Build button).
 
 Requirements: capability-bearing revisions of proxbox-api and netbox-proxbox
 with the explicit packer-template contract. `proxbox-api 0.0.20` and
-`netbox-proxbox 0.0.25` are pre-capability releases; use reviewed revisions
+`netbox-proxbox 0.0.25.post1` are the reviewed capability releases; use reviewed revisions
 after those tags until release engineering records the exact validated inclusive
 version floors. Also required:
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`, a bake SSH key trusted by the target
