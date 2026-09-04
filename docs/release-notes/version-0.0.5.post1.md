@@ -10,4 +10,4 @@
   not depend on a migration introduced after that release.
 - Added immutable NetBox source and Docker image provenance to the GA evidence.
 - Documented the reviewed `proxbox-api 0.0.20` and
-  `netbox-proxbox 0.0.25.post1` capability releases for cloud-init builds.
+  `netbox-proxbox 0.0.25.post2` capability releases for cloud-init builds.

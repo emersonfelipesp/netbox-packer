@@ -48,3 +48,15 @@ def test_settings_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(RuntimeError, match="refusing to run the staleness check against the main schema"):
         module.branching_enabled_settings()
+
+
+def test_importable_branching_package_without_loaded_app_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_branch_lifecycle(monkeypatch)
+    django_apps = types.ModuleType("django.apps")
+    django_apps.apps = SimpleNamespace(is_installed=lambda _name: False)
+    monkeypatch.setitem(sys.modules, "django.apps", django_apps)
+    monkeypatch.setitem(sys.modules, "netbox_branching", types.ModuleType("netbox_branching"))
+
+    assert module.is_branching_available() is False

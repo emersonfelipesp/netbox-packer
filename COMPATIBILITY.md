@@ -109,7 +109,7 @@ designations without making them production support.
 | v0.0.2.post2 | 4.5.8 – 4.6.x | ≥3.12 | Optional | Required | ≥2.0.0 |
 | v0.0.2 | 4.5.x – 4.6.x | ≥3.12 | ≥0.0.16 | Required | ≥2.0.0 |
 
-`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post1` are the reviewed
+`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post2` are the reviewed
 capability releases;
 use reviewed revisions after those tags until release engineering records the
 exact validated inclusive version floors. This deliberately avoids a numeric

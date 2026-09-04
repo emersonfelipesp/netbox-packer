@@ -23,6 +23,10 @@ __all__ = (
 
 def is_branching_available() -> bool:
     try:
+        from django.apps import apps  # noqa: PLC0415
+
+        if not apps.is_installed("netbox_branching"):
+            return False
         import netbox_branching  # noqa: F401, PLC0415
     except Exception:
         return False

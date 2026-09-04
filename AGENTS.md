@@ -247,7 +247,7 @@ digest locally or allow request fields to drift between plan and execute.
 
 This requires capability-bearing revisions where the explicit packer-template
 capability is persisted, propagated, signed, and rechecked at the final
-execution boundary. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post1` are
+execution boundary. `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post2` are
 the reviewed capability releases; use reviewed revisions after those tags until
 release engineering records the exact validated inclusive version floors.
 Preflight unavailability or findings, `ready=false`, writes disabled, missing or

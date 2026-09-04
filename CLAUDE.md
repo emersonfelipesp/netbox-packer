@@ -190,7 +190,7 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   `allow_packer_template_builds=True`, and the chosen storage must allow
   `snippets,import,images` content types. A 404 from the preflight endpoint is
   deliberately incompatible and fails closed. `proxbox-api 0.0.20` and
-  `netbox-proxbox 0.0.25.post1` are the reviewed capability releases; use reviewed revisions
+  `netbox-proxbox 0.0.25.post2` are the reviewed capability releases; use reviewed revisions
   after those tags until release engineering records the exact validated
   inclusive version floors. Never fall back to the legacy one-step execute call.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):

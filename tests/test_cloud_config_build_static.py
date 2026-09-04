@@ -33,7 +33,7 @@ def _read(rel: str) -> str:
 
 def test_capability_version_floor_excludes_pre_feature_packages() -> None:
     operative_statement = (
-        "`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post1` are "
+        "`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post2` are "
         "the reviewed capability releases; use reviewed revisions after those tags until "
         "release engineering records the exact validated inclusive version floors."
     )

@@ -1159,6 +1159,31 @@ def test_staleness_job_dispatches_pin_only_drift_once(
         )
 
 
+def test_staleness_job_does_not_touch_main_when_branch_provisioning_fails(isolated_imports):
+    jobs = _import_jobs_module()
+    models_mod = types.ModuleType("netbox_packer.models")
+
+    class ForbiddenManager:
+        def __getattr__(self, name):
+            raise AssertionError(f"main-schema manager accessed: {name}")
+
+    models_mod.PackerBuild = type("PackerBuild", (), {"objects": ForbiddenManager()})
+    models_mod.PackerTemplate = type("PackerTemplate", (), {"objects": ForbiddenManager()})
+    sys.modules["netbox_packer.models"] = models_mod
+
+    branch_lifecycle = types.ModuleType("netbox_packer.services.branch_lifecycle")
+    branch_lifecycle.branching_enabled_settings = Mock(return_value={"prefix": "stale", "on_conflict": "fail"})
+    branch_lifecycle.activate_branch_context = Mock()
+    branch_lifecycle.create_and_provision_branch = Mock(side_effect=RuntimeError("provision failed"))
+    branch_lifecycle.merge_branch = Mock()
+    sys.modules["netbox_packer.services.branch_lifecycle"] = branch_lifecycle
+
+    with pytest.raises(RuntimeError, match="refusing to run the staleness check against the main schema"):
+        jobs.PackerStalenessCheckJob().run()
+
+    branch_lifecycle.create_and_provision_branch.assert_called_once()
+
+
 @pytest.mark.parametrize("recover_wedged_build", [False, True])
 def test_staleness_management_command_dispatches_pin_only_drift(
     isolated_imports,
