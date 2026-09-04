@@ -74,11 +74,11 @@ def test_plugin_config_fields() -> None:
     assert "max_version = PLUGIN_MAX_VERSION" in src
     compat_src = _read("netbox_packer/compat.py")
     assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
-    assert 'STABLE_MAX_NETBOX_VERSION = "4.6.99"' in compat_src
-    assert 'EXPERIMENTAL_MIN_NETBOX_VERSION = "4.7.0"' in compat_src
-    assert 'EXPERIMENTAL_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert 'STABLE_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert "EXPERIMENTAL_MIN_NETBOX_VERSION" not in compat_src
+    assert "EXPERIMENTAL_MAX_NETBOX_VERSION" not in compat_src
     assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src
-    assert "PLUGIN_MAX_VERSION = EXPERIMENTAL_MAX_NETBOX_VERSION" in compat_src
+    assert "PLUGIN_MAX_VERSION = STABLE_MAX_NETBOX_VERSION" in compat_src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 

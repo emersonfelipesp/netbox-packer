@@ -54,10 +54,7 @@ jobs:
 
   # ── NetBox compatibility matrix ────────────────────────────────────────────
   # Proves the plugin actually loads, migrates, and reports its support tier on
-  # each declared NetBox release, using a **source checkout of the tag** rather
-  # than a Docker image: upstream has published no 4.7 image
-  # (netboxcommunity/netbox:v4.7.0-beta1 -> 404 on Docker Hub), so the
-  # image-based e2e matrix cannot cover the experimental tier at all.
+  # each declared NetBox release, using a **source checkout of the tag**.
   #
   # netbox-packer is the only plugin in the Proxbox family with no
   # `required_plugins`, so it can be exercised standalone. The companions need a
@@ -78,7 +75,7 @@ jobs:
           # rather than a convenience. netbox_packer migration
           # 0004_packerpluginsettings_tags_and_more depends on
           # extras.0138_customfieldchoiceset_choice_colors, which first appears
-          # in NetBox v4.6.0-beta2. Django resolves external migration
+          # in the supported NetBox v4.6.x line. Django resolves external migration
           # dependencies before running anything, so a fresh install on 4.5.8
           # raises NodeNotFoundError and this plugin cannot be installed there
           # at all -- the declared 4.5.8 floor has never been true for a fresh
@@ -88,9 +85,9 @@ jobs:
           - netbox-version: "v4.6.4"
             netbox-ref: 3d73b2a1669ad03c9f0ccb1332fe201d60cbce9e
             tier: stable
-          - netbox-version: "v4.7.0-beta1"
-            netbox-ref: 9c163ba2ddfdeafa4bca5c5ca493e70e96ab53f4
-            tier: experimental
+          - netbox-version: "v4.7.0"
+            netbox-ref: 5f06007e4c9bacc93ce17c1e645fc1143d60df3d
+            tier: stable
     services:
       postgres:
         # NetBox 4.7 requires PostgreSQL 15+ and installs the ltree extension

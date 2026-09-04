@@ -12,23 +12,23 @@ whole Proxbox plugin stack (`netbox-proxbox`, `netbox-ceph`, `netbox-packer`,
 
 | Tier | NetBox range | Constant | Behaviour |
 |---|---|---|---|
-| **Stable** | `4.5.8` – `4.6.99` | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. Directly exercised in CI at v4.6.4; the rest of the band is admitted on the strength of those. |
-| **Experimental** | `4.7.0` – `4.7.99` | `EXPERIMENTAL_MIN_NETBOX_VERSION` / `EXPERIMENTAL_MAX_NETBOX_VERSION` | Loads and runs normally; warns once via system check `netbox_packer.W001`. |
+| **Stable** | `4.5.8` – `4.7.99` | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. CI exercises the established 4.5/4.6 cells and official v4.7.0 GA. |
+| **Experimental** | Pre-release builds within the declared `4.5.8`–`4.7.99` loader range | Derived by `compat.py` | Loads for evaluation and warns once via system check `netbox_packer.W001`; it is not production support. |
 
-`PluginConfig.min_version` is the stable floor; `PluginConfig.max_version` is the
-**experimental** ceiling (`4.7.99`). Admitting 4.7 without an opt-in is
-deliberate — an operator upgrading NetBox never has to touch plugin
-configuration. Experimental support needs no setting, no flag, and no extra
-install step.
+`PluginConfig.min_version` and `PluginConfig.max_version` are sourced from the
+shared v5 compatibility contract. Admitting the 4.7 GA line without an opt-in
+is deliberate — an operator upgrading NetBox never has to touch plugin
+configuration. Experimental pre-release support needs no setting, no flag,
+and no extra install step.
 
 On a 4.7 install you will see one warning per plugin, from `manage.py check` and
 in the startup log:
 
 ```
 WARNINGS:
-?: (netbox_packer.W001) NetBox Packer is running on NetBox 4.7.0-beta1, which is
+?: (netbox_packer.W001) NetBox Packer is running on NetBox 4.7.0, which is
    supported on an experimental basis only. Certified support covers NetBox
-   4.5.8 through 4.6.99.
+   4.5.8 through 4.7.99.
 ```
 
 It is a warning, never an error — it cannot block NetBox from starting.
@@ -52,10 +52,9 @@ That silences both the system check and the startup log line.
 NetBox below `4.5.8` and from `4.8` onward is still refused outright by NetBox's
 own plugin version gate.
 
-> **These tiers describe the *next* release, not the currently published
-> package.** Every artifact published before this change declares
-> `max_version = "4.6.99"` and will refuse NetBox 4.7 regardless of what this
-> table says. `pip install` of an older version therefore still caps at 4.6.99.
+> **These tiers describe the release on this branch.** Previously published
+> artifacts declare `max_version = "4.6.99"` and must be upgraded before NetBox
+> 4.7; the new release carries the shared v5 contract.
 
 ### Upgrading to NetBox 4.7 means upgrading the whole plugin stack
 
@@ -99,11 +98,10 @@ fail closed is tracked separately.
 
 Installations that do not use branching are unaffected.
 
-**Beta version strings.** NetBox's `release.yaml` at tag `v4.7.0-beta1` reads
-`version: "4.7.0"` with `designation: "beta1"`, and `netbox/settings.py` passes
-`RELEASE.version` — the bare `"4.7.0"` — to `PluginConfig.validate()`. The
-`4.7.99` ceiling is sized for that comparison string; `RELEASE.full_version`
-(`"4.7.0-beta1"`) is used only for display.
+**Pre-release version strings.** NetBox's stock loader passes the numeric
+`RELEASE.version` to `PluginConfig.validate()`. The shared compatibility module
+keeps the stable GA range in one place and emits an advisory for pre-release
+designations without making them production support.
 
 | netbox-packer | NetBox | Python | netbox-proxbox | proxbox-api | pydantic |
 |---|---|---|---|---|---|
@@ -111,7 +109,8 @@ Installations that do not use branching are unaffected.
 | v0.0.2.post2 | 4.5.8 – 4.6.x | ≥3.12 | Optional | Required | ≥2.0.0 |
 | v0.0.2 | 4.5.x – 4.6.x | ≥3.12 | ≥0.0.16 | Required | ≥2.0.0 |
 
-`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are pre-capability releases;
+`proxbox-api 0.0.20` and `netbox-proxbox 0.0.25.post1` are the reviewed
+capability releases;
 use reviewed revisions after those tags until release engineering records the
 exact validated inclusive version floors. This deliberately avoids a numeric
 `>` placeholder, whose PEP 440 semantics could exclude a valid `.postN` release.

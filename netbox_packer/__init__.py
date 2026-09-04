@@ -15,10 +15,8 @@ class NetBoxPackerConfig(PluginConfig):
     base_url = "packer"
     author = "Emerson Felipe"
     author_email = "emersonfelipe.2003@gmail.com"
-    # Sourced from .compat so the stable/experimental bands are declared in
-    # one place across the Proxbox plugin stack. max_version is the
-    # *experimental* ceiling: NetBox 4.7 loads without an opt-in, and
-    # .compat's system check warns that the line is not yet certified.
+    # Sourced from .compat so the backward-compatible stable GA contract is
+    # declared in one place across the Proxbox plugin stack.
     min_version = PLUGIN_MIN_VERSION
     max_version = PLUGIN_MAX_VERSION
     default_settings = {
