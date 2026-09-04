@@ -16,7 +16,7 @@ resolve image IDs from the HCP Packer registry via `proxbox-api`.
 
 ## Status
 
-`netbox-packer` v0.0.5 ships Packer template, build, installer-config,
+`netbox-packer` v0.0.5.post1 ships Packer template, build, installer-config,
 build-target, staleness, and HCP Packer registry sync support, plus a
 **cloud-init template image** path (see below).
 
@@ -272,11 +272,11 @@ metadata, GitHub Actions CI, release validation, docs publishing, screenshot
 capture, and page-coverage workflows for NetBox v4.6.4. Docker install smoke
 coverage spans NetBox v4.5.8, v4.5.9, and v4.6.0 through v4.6.4.
 
-NetBox `4.7.x` is additionally supported on an **experimental** basis: the plugin
-loads and runs with no configuration change and warns once at startup that the
-line is not yet certified. See [COMPATIBILITY.md](COMPATIBILITY.md) for the tier
-table, how to silence the notice, and why every Proxbox-family plugin must be
-upgraded together before moving an instance to 4.7.
+NetBox `4.7.0` GA is supported with no configuration change. Pre-release
+identities remain experimental and warn once at startup; later 4.7 patch
+releases require a separate compatibility certification. See
+[COMPATIBILITY.md](COMPATIBILITY.md) for the tier table and the coordinated
+upgrade requirements for the Emerson-owned Proxbox family.
 
 ## License
 

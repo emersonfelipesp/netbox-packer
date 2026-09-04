@@ -247,7 +247,7 @@ wheels = [
 
 [[package]]
 name = "netbox-packer"
-version = "0.0.5"
+version = "0.0.5.post1"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },

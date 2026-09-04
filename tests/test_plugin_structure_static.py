@@ -46,7 +46,7 @@ def test_pyproject_metadata() -> None:
     data = tomllib.loads(_read("pyproject.toml"))
     project = data["project"]
     assert project["name"] == "netbox-packer"
-    assert project["version"] == "0.0.5"
+    assert project["version"] == "0.0.5.post1"
     assert project["requires-python"] >= ">=3.12"
     assert "setuptools" in data["build-system"]["requires"][0]
     assert project["license"] == "Apache-2.0"
@@ -74,7 +74,7 @@ def test_plugin_config_fields() -> None:
     assert "max_version = PLUGIN_MAX_VERSION" in src
     compat_src = _read("netbox_packer/compat.py")
     assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
-    assert 'STABLE_MAX_NETBOX_VERSION = "4.7.99"' in compat_src
+    assert 'STABLE_MAX_NETBOX_VERSION = "4.7.0"' in compat_src
     assert "EXPERIMENTAL_MIN_NETBOX_VERSION" not in compat_src
     assert "EXPERIMENTAL_MAX_NETBOX_VERSION" not in compat_src
     assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src

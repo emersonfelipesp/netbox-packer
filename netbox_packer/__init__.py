@@ -11,7 +11,7 @@ class NetBoxPackerConfig(PluginConfig):
     name = "netbox_packer"
     verbose_name = "NetBox Packer"
     description = "Manage Packer VM template builds and catalog"
-    version = "0.0.5"
+    version = "0.0.5.post1"
     base_url = "packer"
     author = "Emerson Felipe"
     author_email = "emersonfelipe.2003@gmail.com"

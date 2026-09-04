@@ -1,7 +1,7 @@
 """Tests for the NetBox version-compatibility policy in ``netbox_packer.compat``.
 
-Covers the four support bands, the beta version-string handling that motivated
-raising the version cap, version detection, and the Django system check.
+Covers the four support bands, the beta version-string handling, version
+detection, and the Django system check.
 
 ``compat.py`` is loaded **by file path** rather than through
 ``netbox_packer/__init__.py``, matching the convention the rest of the mocked
@@ -189,13 +189,13 @@ def test_compat_imports_no_django_at_module_scope() -> None:
         ("4.6.4", "stable"),
         ("4.6.6", "stable"),
         ("4.6.99", "stable"),
-        # Official NetBox 4.7 GA is stable; prerelease displays remain
-        # experimental so operators receive an advisory.
+        # Official NetBox 4.7.0 GA is stable; later patch releases remain
+        # unsupported until separately certified.
         ("4.7.0", "stable"),
         ("4.7.0-beta1", "experimental"),
         ("4.7.0b1", "experimental"),
-        ("4.7.3", "stable"),
-        ("4.7.99", "stable"),
+        ("4.7.1", "unsupported-new"),
+        ("4.7.99", "unsupported-new"),
         ("4.8.0a1", "unsupported-new"),
         ("4.8.0", "unsupported-new"),
         ("5.0.0", "unsupported-new"),
@@ -250,7 +250,7 @@ def test_comparison_and_display_strings_preserve_ga_and_prerelease_identity() ->
 def test_declared_bounds_have_the_expected_literal_values() -> None:
     """Pins the shared contract so a silent band change fails here."""
     assert STABLE_MIN_NETBOX_VERSION == "4.5.8"
-    assert STABLE_MAX_NETBOX_VERSION == "4.7.99"
+    assert STABLE_MAX_NETBOX_VERSION == "4.7.0"
     assert PLUGIN_MIN_VERSION == STABLE_MIN_NETBOX_VERSION
     assert PLUGIN_MAX_VERSION == STABLE_MAX_NETBOX_VERSION
     assert CONTRACT_VERSION == "netbox-compat-v5"

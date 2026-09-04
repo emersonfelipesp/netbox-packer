@@ -11,7 +11,7 @@ cataloging.
 
 ## Scope
 
-v0.0.5 includes Packer template, build, installer-config, build-target,
+v0.0.5.post1 includes Packer template, build, installer-config, build-target,
 staleness, HCP Packer registry sync support, and cloud-init template image
 bakes through proxbox-api.
 
@@ -134,10 +134,11 @@ requests require the backend `ProxmoxEndpoint` primary key.
 
 | NetBox | netbox-packer | Python |
 | --- | --- | --- |
-| v4.5.8 | v0.0.5 | 3.12+ |
-| v4.5.9 | v0.0.5 | 3.12+ |
-| v4.6.0 | v0.0.5 | 3.12+ |
-| v4.6.1 | v0.0.5 | 3.12+ |
-| v4.6.2 | v0.0.5 | 3.12+ |
-| v4.6.3 | v0.0.5 | 3.12+ |
-| v4.6.4 | v0.0.5 | 3.12+ |
+| v4.5.8 | v0.0.5.post1 | 3.12+ |
+| v4.5.9 | v0.0.5.post1 | 3.12+ |
+| v4.6.0 | v0.0.5.post1 | 3.12+ |
+| v4.6.1 | v0.0.5.post1 | 3.12+ |
+| v4.6.2 | v0.0.5.post1 | 3.12+ |
+| v4.6.3 | v0.0.5.post1 | 3.12+ |
+| v4.6.4 | v0.0.5.post1 | 3.12+ |
+| v4.7.0 | v0.0.5.post1 | 3.12+ |

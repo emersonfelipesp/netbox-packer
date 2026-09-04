@@ -12,8 +12,8 @@ whole Proxbox plugin stack (`netbox-proxbox`, `netbox-ceph`, `netbox-packer`,
 
 | Tier | NetBox range | Constant | Behaviour |
 |---|---|---|---|
-| **Stable** | `4.5.8` – `4.7.99` | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. CI exercises the established 4.5/4.6 cells and official v4.7.0 GA. |
-| **Experimental** | Pre-release builds within the declared `4.5.8`–`4.7.99` loader range | Derived by `compat.py` | Loads for evaluation and warns once via system check `netbox_packer.W001`; it is not production support. |
+| **Stable** | `4.5.8` – `4.7.0` | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. CI exercises the established 4.5/4.6 cells and official v4.7.0 GA. |
+| **Experimental** | Pre-release builds within the declared `4.5.8`–`4.7.0` loader range | Derived by `compat.py` | Loads for evaluation and warns once via system check `netbox_packer.W001`; it is not production support. |
 
 `PluginConfig.min_version` and `PluginConfig.max_version` are sourced from the
 shared v5 compatibility contract. Admitting the 4.7 GA line without an opt-in
@@ -26,9 +26,8 @@ in the startup log:
 
 ```
 WARNINGS:
-?: (netbox_packer.W001) NetBox Packer is running on NetBox 4.7.0, which is
-   supported on an experimental basis only. Certified support covers NetBox
-   4.5.8 through 4.7.99.
+No warning is emitted for official NetBox 4.7.0 GA. A pre-release identity
+within the loader range emits one `netbox_packer.W001` evaluation warning.
 ```
 
 It is a warning, never an error — it cannot block NetBox from starting.
@@ -49,7 +48,7 @@ That silences both the system check and the startup log line.
 > It only applies through NetBox's `local_settings.py` hatch, which upstream
 > labels unsupported. Use the `PLUGINS_CONFIG` key above.
 
-NetBox below `4.5.8` and from `4.8` onward is still refused outright by NetBox's
+NetBox below `4.5.8`, later 4.7 patch releases, and from `4.8` onward is still refused outright by NetBox's
 own plugin version gate.
 
 > **These tiers describe the release on this branch.** Previously published
@@ -78,7 +77,8 @@ one is actually registered rather than trusting that NetBox started:
 python manage.py shell -c "from django.apps import apps; print([p for p in ('netbox_proxbox','netbox_pbs','netbox_pdm','netbox_ceph','netbox_packer') if apps.is_installed(p)])"
 ```
 
-On 4.5.8–4.6.x, mixed versions remain fine as before.
+On 4.5.8–4.6.x, mixed versions remain fine as before. NetBox 4.7.0 requires
+the current plugin release and its reviewed Proxbox capability peer.
 
 ### netbox-branching does not support NetBox 4.7 yet
 

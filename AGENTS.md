@@ -439,16 +439,12 @@ Zabbix Agent 2.
 supports, and `PluginConfig.min_version`/`max_version` are sourced from it rather
 than re-typed as literals:
 
-- **stable** `4.5.8` – `4.6.99` — admitted silently; specific versions in
-  this band are exercised in CI, the rest are admitted on their strength;
-- **experimental** `4.7.0` – `4.7.99` — loads and runs with no configuration
-  change, and emits system check `netbox_packer.W001` (a **Warning**, never an Error)
-  plus one `ready()` log line. A version that cannot be classified reports
-  `netbox_packer.W002` rather than passing silently. Operators silence the notice with the
-  `silence_netbox_compatibility_warning` key in this plugin's
-  `PLUGINS_CONFIG` entry. NetBox does **not** read
-  `SILENCED_SYSTEM_CHECKS` from `configuration.py`, so that route does
-  nothing.
+- **stable** `4.5.8` – `4.7.0` — admitted silently; specific 4.5/4.6 cells
+  and the official v4.7.0 GA source are exercised in CI;
+- **experimental** pre-release identities within that loader range emit
+  `netbox_packer.W001` (a **Warning**, never an Error) plus one `ready()` log line.
+  A version that cannot be classified reports `netbox_packer.W002` rather than
+  passing silently. Later 4.7 patch releases remain unsupported until tested.
 
 **`compat.py` is vendored byte-identically across `netbox-proxbox`,
 `netbox-ceph`, `netbox-packer`, `netbox-pbs`, and `netbox-pdm`.** Change it in

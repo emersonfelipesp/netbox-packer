@@ -2,9 +2,9 @@
 
 Used by the `netbox-compatibility` CI job, which checks out a NetBox tag from
 source and proves this plugin migrates, passes system checks, and reports the
-expected support tier on it. There is no NetBox 4.7 Docker image yet, so the
-image-based `e2e.yml` matrix cannot cover the experimental tier — a source
-checkout is the only way to exercise it.
+expected support tier on it. The NetBox 4.7 compatibility job uses an exact
+source checkout; the image-based `e2e.yml` matrix is retained for the
+established Docker targets.
 
 Host and port come from the environment so the same file works against CI
 service containers on the standard ports and against a local disposable stack
