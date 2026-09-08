@@ -111,8 +111,8 @@ remain alongside it as backward-compatibility evidence.
 
 | netbox-packer | NetBox | Python | netbox-proxbox | proxbox-api | pydantic |
 |---|---|---|---|---|---|
-| v0.0.5 | v4.5.8-v4.6.6 plus held v4.7.0-beta2 | ≥3.12 | capability-bearing revision after 0.0.25 for `cloud_config`; optional for local Packer | capability-bearing revision after 0.0.20 for `cloud_config` | ≥2.0.0 |
-| v0.0.2.post2 | 4.5.8 – 4.6.x | ≥3.12 | Optional | Required | ≥2.0.0 |
+| v0.0.5 | v4.5.8–v4.6.x plus official v4.7.0 GA | ≥3.12 | capability-bearing revision after 0.0.25 for `cloud_config`; optional for local Packer | capability-bearing revision after 0.0.20 for `cloud_config` | ≥2.0.0 |
+| v0.0.2.post2 | 4.5.8 – 4.6.x plus official 4.7.0 GA | ≥3.12 | Optional | Required | ≥2.0.0 |
 | v0.0.2 | 4.5.x – 4.6.x | ≥3.12 | ≥0.0.16 | Required | ≥2.0.0 |
 
 `proxbox-api 0.0.20` and `netbox-proxbox 0.0.25` are pre-capability releases;

@@ -7,7 +7,7 @@ NetBox plugin for Packer template cataloging and HCP Packer Registry sync.
 | --- | --- |
 | License | Apache-2.0 in the repository and package metadata |
 | Package | Published as `netbox-packer` on PyPI with source, docs, and issues URLs |
-| Compatibility | Stable NetBox `4.5.8`–`4.6.99`, matrix-tested at v4.5.8/v4.6.6; canonical beta2 metadata tested at exact revision `aa1d49d0f5021a28e6efc2d0364b84c5bcec7137` |
+| Compatibility | NetBox `4.5.8` through `4.6.x`, plus official `v4.7.0` GA; verified against `v4.5.8`, `v4.6.1`, and `v4.7.0` |
 | Tests | GitHub Actions run lint, static tests, NetBox source integration tests, Docker install smoke, page coverage, and release validation |
 | Docs | README plus MkDocs installation, roadmap, certification, and release-note pages |
 | Screenshots | `docs-screenshots.yml` captures NetBox v4.6.4 UI screenshots on release tags or manual dispatch |

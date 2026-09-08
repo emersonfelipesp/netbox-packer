@@ -44,16 +44,16 @@ jobs:
           git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git netbox-proxbox
           git -C netbox-proxbox checkout --detach "$NETBOX_PROXBOX_SHA"
           test "$(git -C netbox-proxbox rev-parse HEAD)" = "$NETBOX_PROXBOX_SHA"
-
       - name: Create isolated environment
         shell: bash
         run: |
           set -eo pipefail
           export PATH="$HOME/.local/bin:$PATH"
           uv venv --python 3.12
-          uv pip install -e ./netbox-proxbox
-          uv pip install -e . --no-deps
+          uv pip install --python .venv/bin/python -e ./netbox-proxbox
+          uv pip install --python .venv/bin/python -e . --no-deps
           uv pip install \
+            --python .venv/bin/python \
             "pytest>=8.0.0" \
             "pytest-django>=4.0.0" \
             "pyyaml>=6.0.0" \

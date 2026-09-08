@@ -201,13 +201,23 @@ jobs:
 
   # ── NetBox integration tests ──────────────────────────────────────────────
   test:
-    name: Test (NetBox v4.6.6 source)
+    name: Test (NetBox ${{ matrix.netbox-version }} source)
     runs-on: ubuntu-latest
     needs: [lint, static-tests, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - netbox-version: v4.5.8
+            netbox-ref: 75e1b86613792458b4d4c8d0cbbfc94df16cfaaf
+          - netbox-version: v4.6.1
+            netbox-ref: 64d3b114bc68e152869b964d54b220ecf1d50880
+          - netbox-version: v4.7.0
+            netbox-ref: 5f06007e4c9bacc93ce17c1e645fc1143d60df3d
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:075f7ba66bc9b3ce7d6b8b635208ff61cd7cf1a67d71ec530eec5d7ae0cbe571
         env:
           POSTGRES_DB: netbox
           POSTGRES_USER: netbox
@@ -221,7 +231,7 @@ jobs:
           --health-retries 5
 
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:1db42ccef14898aa29bae778452d567534b59c107129cbc1163fb552de184d3c
         ports:
           - "6379:6379"
         options: >-
@@ -242,9 +252,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev
 
-      - name: Run NetBox v4.6.6 source test suite
+      - name: Run NetBox ${{ matrix.netbox-version }} source test suite
         env:
-          NETBOX_REF: v4.6.6
+          NETBOX_REF: ${{ matrix.netbox-ref }}
           NETBOX_PLUGINS_JSON: '["netbox_packer"]'
           MIGRATION_APPS: "netbox_packer"
           TEST_LABELS: "netbox_packer"

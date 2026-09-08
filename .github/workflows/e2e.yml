@@ -6,12 +6,6 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
-    inputs:
-      netbox_image:
-        description: "NetBox Docker image to test against"
-        required: false
-        type: string
-        default: "netboxcommunity/netbox:v4.6.6"
 
 permissions:
   contents: read
@@ -32,14 +26,15 @@ jobs:
           - netboxcommunity/netbox:v4.6.3
           - netboxcommunity/netbox:v4.6.4
           - netboxcommunity/netbox:v4.6.6
+          - netboxcommunity/netbox:v4.7.0-5.1.0@sha256:73a54ff279461170032b59a57a1930929965e3ba15c195af59f4b5f6d39a84a9
     env:
-      NETBOX_IMAGE: ${{ inputs.netbox_image || matrix.netbox_image }}
+      NETBOX_IMAGE: ${{ matrix.netbox_image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
@@ -60,10 +55,3 @@ jobs:
               uv pip install --python /opt/netbox/venv/bin/python --no-deps /dist/*.whl &&
               /opt/netbox/venv/bin/python -c "import netbox_packer; print(netbox_packer.__name__)"
             '
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v7
-        with:
-          name: netbox-packer-wheel
-          path: dist/*.whl
-          if-no-files-found: error

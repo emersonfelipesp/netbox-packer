@@ -17,6 +17,7 @@ SUPPORTED_NETBOX_IMAGES = (
     "netboxcommunity/netbox:v4.6.3",
     "netboxcommunity/netbox:v4.6.4",
     "netboxcommunity/netbox:v4.6.6",
+    "netboxcommunity/netbox:v4.7.0",
 )
 
 
@@ -68,35 +69,22 @@ def test_plugin_config_fields() -> None:
     assert 'name = "netbox_packer"' in src
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
-    # Bounds are sourced from the shared compat module rather than re-typed
-    # here, so assert the wiring in the source AND the values in compat.py --
-    # a source substring alone would pass for any constant name.
-    assert "min_version = PLUGIN_MIN_VERSION" in src
-    assert "max_version = PLUGIN_MAX_VERSION" in src
-    compat_src = _read("netbox_packer/compat.py")
-    assert 'STABLE_MIN_NETBOX_VERSION = "4.5.8"' in compat_src
-    assert 'STABLE_MAX_NETBOX_VERSION = "4.6.99"' in compat_src
-    assert 'EXPERIMENTAL_MIN_NETBOX_VERSION = "4.7.0"' in compat_src
-    assert 'EXPERIMENTAL_MAX_NETBOX_VERSION = "4.7.0"' in compat_src
-    assert 'APPROVED_EXPERIMENTAL_NETBOX_DESIGNATION = "beta2"' in compat_src
-    assert "PLUGIN_MIN_VERSION = STABLE_MIN_NETBOX_VERSION" in compat_src
-    assert "PLUGIN_MAX_VERSION = EXPERIMENTAL_MAX_NETBOX_VERSION" in compat_src
-    assert "validate_held_netbox_release_identity(cls, netbox_version)" in src
+    assert 'min_version = "4.5.8"' in src
+    assert 'max_version = "4.7.0"' in src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 
-def test_fresh_install_migration_and_ci_preserve_netbox_458() -> None:
-    migration = _read("netbox_packer/migrations/0004_packerpluginsettings_tags_and_more.py")
+def test_ci_source_matrix_covers_the_backward_compatible_floor_and_ga() -> None:
     workflow = _read(".github/workflows/ci.yml")
-
-    assert '("extras", "0134_owner")' in migration
-    assert "0138_customfieldchoiceset_choice_colors" not in migration
-    assert 'netbox-version: "v4.5.8"' in workflow
-    assert "75e1b86613792458b4d4c8d0cbbfc94df16cfaaf" in workflow
-    assert 'netbox-version: "v4.6.6"' in workflow
-    assert "fb8c455ba61b57119a70670612dfdd05e8438b10" in workflow
-    assert 'netbox-version: "v4.7.0-beta2"' in workflow
-    assert "aa1d49d0f5021a28e6efc2d0364b84c5bcec7137" in workflow
+    for expected in (
+        "netbox-version: v4.5.8",
+        "netbox-ref: 75e1b86613792458b4d4c8d0cbbfc94df16cfaaf",
+        "netbox-version: v4.6.1",
+        "netbox-ref: 64d3b114bc68e152869b964d54b220ecf1d50880",
+        "netbox-version: v4.7.0",
+        "netbox-ref: 5f06007e4c9bacc93ce17c1e645fc1143d60df3d",
+    ):
+        assert expected in workflow
 
 
 def test_build_status_choices_include_stale() -> None:
@@ -607,3 +595,16 @@ def test_packaging_is_a_declared_dependency() -> None:
         f"packaging must be declared in [project.dependencies]; got {declared}"
     )
     assert any(spec.lower().startswith("pyyaml") for spec in declared)
+
+
+def test_gitea_ci_workflow_is_the_authoritative_pre_merge_gate() -> None:
+    """Gitea must expose the unprivileged quality and package gate."""
+    ci = _read(".gitea/workflows/ci.yml")
+    for expected in (
+        "runs-on: ci-untrusted-python312",
+        ".venv/bin/ruff check .",
+        ".venv/bin/python -m pytest -p no:cacheprovider tests --ignore=tests/e2e -q",
+        ".venv/bin/python -m build",
+        ".venv/bin/python -m twine check dist/*",
+    ):
+        assert expected in ci

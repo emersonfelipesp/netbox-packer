@@ -280,6 +280,9 @@ release metadata. See
 [COMPATIBILITY.md](COMPATIBILITY.md) for the tier table, how to silence the
 notice, and why every Proxbox-family plugin must be upgraded together before
 moving an instance to beta2.
+capture, and page-coverage workflows for NetBox v4.6.1 and official NetBox
+v4.7.0 GA. The plugin preserves its NetBox v4.5.8 backward-compatible floor
+while the integration matrix verifies the GA upgrade path.
 
 ## License
 

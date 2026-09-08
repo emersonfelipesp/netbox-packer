@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NETBOX_REF="${NETBOX_REF:-v4.6.0}"
+NETBOX_REF="${NETBOX_REF:-00791344e68213bde942218283dce03cc3941c30}"
 WORK_BASE="${RUNNER_TEMP:-/tmp}/netbox-source-${NETBOX_REF#v}"
 NETBOX_DIR="${NETBOX_SOURCE_DIR:-$WORK_BASE/netbox}"
 VENV_DIR="${NETBOX_VENV_DIR:-$WORK_BASE/venv}"
@@ -15,8 +15,11 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 if [ -z "${NETBOX_SOURCE_DIR:-}" ]; then
   if [ ! -d "$NETBOX_DIR/.git" ]; then
     rm -rf "$NETBOX_DIR"
-    git clone --depth=1 --branch "$NETBOX_REF" https://github.com/netbox-community/netbox.git "$NETBOX_DIR"
+    git clone --no-checkout https://github.com/netbox-community/netbox.git "$NETBOX_DIR"
   fi
+  git -C "$NETBOX_DIR" fetch --depth=1 origin "$NETBOX_REF"
+  git -C "$NETBOX_DIR" checkout --detach "$NETBOX_REF"
+  test "$(git -C "$NETBOX_DIR" rev-parse HEAD)" = "$NETBOX_REF"
 else
   echo "Using NetBox source from NETBOX_SOURCE_DIR=$NETBOX_SOURCE_DIR"
 fi
@@ -25,9 +28,9 @@ rm -rf "$VENV_DIR"
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 PY="$VENV_DIR/bin/python"
 
-"$PY" -m pip install --upgrade pip wheel setuptools hatchling
+"$PY" -m pip install "pip==25.2" "wheel==0.46.1" "setuptools==80.9.0" "hatchling==1.27.0"
 "$PY" -m pip install -r "$NETBOX_DIR/requirements.txt"
-"$PY" -m pip install --no-build-isolation -e "$ROOT_DIR"
+"$PY" -m pip install --no-build-isolation --no-deps -e "$ROOT_DIR"
 
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_DIR/configuration.py" <<'PY'
@@ -86,8 +89,15 @@ export NETBOX_CONFIGURATION=configuration
 export PYTHONPATH="$CONFIG_DIR:$NETBOX_DIR/netbox:$ROOT_DIR:${PYTHONPATH:-}"
 
 "$PY" "$NETBOX_DIR/netbox/manage.py" check
-"$PY" "$NETBOX_DIR/netbox/manage.py" makemigrations $MIGRATION_APPS --check
+"$PY" "$NETBOX_DIR/netbox/manage.py" migrate --no-input
+"$PY" "$NETBOX_DIR/netbox/manage.py" makemigrations $MIGRATION_APPS --check --dry-run
 
 if [ -n "${TEST_LABELS:-}" ]; then
-  "$PY" "$NETBOX_DIR/netbox/manage.py" test $TEST_LABELS -v 2
+  TEST_OUTPUT="$WORK_BASE/test-output.txt"
+  if ! "$PY" "$NETBOX_DIR/netbox/manage.py" test $TEST_LABELS -v 2 >"$TEST_OUTPUT" 2>&1; then
+    cat "$TEST_OUTPUT"
+    exit 1
+  fi
+  cat "$TEST_OUTPUT"
+  grep -Eq 'Ran [1-9][0-9]* test' "$TEST_OUTPUT"
 fi
