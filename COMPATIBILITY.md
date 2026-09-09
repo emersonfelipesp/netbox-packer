@@ -12,22 +12,21 @@ whole Proxbox plugin stack (`netbox-proxbox`, `netbox-ceph`, `netbox-packer`,
 
 | Tier | NetBox range | Constant | Behaviour |
 |---|---|---|---|
-| **Stable** | `4.5.8` – `4.6.99` | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. Directly exercised in CI at v4.5.8 and v4.6.6; the rest of the band is admitted on the strength of those. |
-| **Held beta** | canonical `4.7.0-beta2` metadata only | numeric 4.7 constants plus the release-identity guard | Loads and runs normally; warns once via `netbox_packer.W001`. Final 4.7.0 and every other 4.7 identity are rejected. |
+| **Stable** | `4.5.8` – `4.7.0` GA | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. Directly exercised in CI at v4.5.8, v4.6.1, and official v4.7.0 GA. |
+| **Experimental** | NetBox pre-releases within the supported numeric range | `NetBoxSupportLevel.EXPERIMENTAL` | Loads and runs with one advisory warning via `netbox_packer.W001`. |
 
 `PluginConfig.min_version` is the stable floor and `PluginConfig.max_version`
-is the held numeric ceiling (`4.7.0`). The shared v3 guard reads canonical
-release metadata and admits only designation `beta2`; local metadata may add a
-build label but cannot replace version or designation.
+is the stable GA ceiling (`4.7.0`). The retired release-identity hook remains a
+no-op for older callers; runtime support uses the numeric compatibility band.
 
-On a 4.7 install you will see one warning per plugin, from `manage.py check` and
-in the startup log:
+On a 4.7 pre-release install you will see one warning per plugin, from
+`manage.py check` and in the startup log:
 
 ```
 WARNINGS:
 ?: (netbox_packer.W001) NetBox Packer is running on NetBox 4.7.0-beta2, which is
    supported on an experimental basis only. Certified support covers NetBox
-   4.5.8 through 4.6.99.
+   4.5.8 through 4.7.0.
 ```
 
 It is a warning, never an error — it cannot block NetBox from starting.
@@ -48,8 +47,7 @@ That silences both the system check and the startup log line.
 > It only applies through NetBox's `local_settings.py` hatch, which upstream
 > labels unsupported. Use the `PLUGINS_CONFIG` key above.
 
-NetBox below `4.5.8`, final 4.7.0, other 4.7 identities, and 4.8+ are refused by
-the stock numeric gate plus the held-line identity guard.
+NetBox below `4.5.8` and 4.7.1+ are refused by the stock numeric gate.
 
 > **These tiers describe the *next* release, not the currently published
 > package.** Every artifact published before this change declares
@@ -70,7 +68,7 @@ normal production deployment, so the visible symptom is not an error but an
 background jobs are simply gone, and anything that depended on them fails later
 and further away. A health probe against NetBox itself still returns 200.
 
-So before moving an instance to beta2, upgrade **every** installed
+So before moving an instance to 4.7 GA, upgrade **every** installed
 Proxbox-family plugin to a release carrying compatibility contract v3, and
 afterwards verify each one is actually registered rather than trusting that
 NetBox started:
@@ -99,15 +97,13 @@ fail closed is tracked separately.
 
 Installations that do not use branching are unaffected.
 
-**Beta version strings.** NetBox's canonical `release.yaml` at beta2 reads
-`version: "4.7.0"` with `designation: "beta2"`, while the stock plugin gate
-receives only bare `RELEASE.version`. The numeric ceiling is therefore `4.7.0`;
-the separate metadata guard distinguishes beta2 from GA and other prereleases.
+**Pre-release version strings.** NetBox's numeric comparison version may remain
+within the supported range while its display version carries a pre-release
+designation. The compatibility module classifies that case as experimental;
+official `v4.7.0` GA is stable and produces no warning.
 
-**Current pre-release evidence.** The required source-checkout matrix runs
-against exact NetBox `v4.7.0-beta2` commit
-`aa1d49d0f5021a28e6efc2d0364b84c5bcec7137`; exact v4.5.8 and v4.6.6 cells
-remain alongside it as backward-compatibility evidence.
+**Compatibility evidence.** The required source-checkout matrix runs against
+exact NetBox v4.5.8, v4.6.1, and official v4.7.0 GA revisions.
 
 | netbox-packer | NetBox | Python | netbox-proxbox | proxbox-api | pydantic |
 |---|---|---|---|---|---|
