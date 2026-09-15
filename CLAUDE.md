@@ -152,7 +152,11 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
 - Auto-rebuild staleness scans follow the same dispatch invariant. They include pin
   drift when `max_age_days` is unset, recover queued rows left by the old
   create-without-dispatch path, set the template to `building`, and dispatch only
-  after an optional branching merge succeeds.
+  after an optional branching merge succeeds. `branching_enabled_settings()`
+  is three-state: `None` only when the operator disabled branching, a settings
+  dict when enabled and available, and `BranchingUnavailableError` when enabled
+  but unavailable. The job never wraps that call in a broad `except`; the error
+  must terminate the run before the first ORM write.
 - Local `packer init` / `packer build` subprocesses must honor
   `PACKER_BUILD_TIMEOUT_SECONDS` even when the process emits no stdout. The
   watchdog in `_run_subprocess()` is intentionally independent of output

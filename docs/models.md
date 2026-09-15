@@ -183,7 +183,7 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `singleton_key` | CharField(32) | `"default"` | Not editable; forced to `"default"` on every `save()` |
-| `branching_enabled` | BooleanField | `False` | When `True`, `PackerStalenessCheckJob` uses netbox-branching for stale updates |
+| `branching_enabled` | BooleanField | `False` | When `True`, `PackerStalenessCheckJob` uses netbox-branching for stale updates and fails closed (no writes) if the runtime is unavailable |
 | `branch_name_prefix` | CharField(64) | `"packer-stale"` | Prefix for auto-created branch names |
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
 | `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |

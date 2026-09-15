@@ -1162,12 +1162,8 @@ class PackerStalenessCheckJob(JobRunner):
             import uuid
 
             branch_name = f"{branch_config['prefix']}-{uuid.uuid4().hex[:8]}"
-            try:
-                branch = create_and_provision_branch(name=branch_name, user=None)
-                logger.info("Staleness check: using branch '%s'", branch_name)
-            except Exception:
-                logger.exception("Branch provision failed; running staleness check on main")
-                branch = None
+            branch = create_and_provision_branch(name=branch_name, user=None)
+            logger.info("Staleness check: using branch '%s'", branch_name)
 
         def _run_staleness(PackerBuild, PackerTemplate):
             checked = 0

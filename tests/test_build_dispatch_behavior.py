@@ -1159,6 +1159,58 @@ def test_staleness_job_dispatches_pin_only_drift_once(
         )
 
 
+def test_staleness_job_fails_closed_before_any_write_when_branching_unavailable(
+    isolated_imports,
+) -> None:
+    """A BranchingUnavailableError must terminate the job before the first ORM write."""
+
+    jobs = _import_jobs_module()
+    enqueue = Mock()
+    jobs.PackerBuildJob.enqueue = enqueue
+
+    template = SimpleNamespace(
+        pk=61,
+        name="isolated-template",
+        build_status="ready",
+        is_stale=True,
+        max_age_days=None,
+        auto_rebuild=True,
+    )
+    template_manager = StalenessTemplateManager([template])
+    template_manager.filter = Mock(side_effect=AssertionError("template write attempted"))
+    template_manager.exclude = Mock(side_effect=AssertionError("template scan attempted"))
+    build_manager = StalenessBuildManager(template)
+
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerTemplate = type("PackerTemplate", (), {"objects": template_manager})
+    models_mod.PackerBuild = type("PackerBuild", (), {"objects": build_manager})
+    sys.modules["netbox_packer.models"] = models_mod
+
+    class BranchingUnavailableError(RuntimeError):
+        pass
+
+    branch_lifecycle = types.ModuleType("netbox_packer.services.branch_lifecycle")
+    branch_lifecycle.BranchingUnavailableError = BranchingUnavailableError
+    branch_lifecycle.branching_enabled_settings = Mock(
+        side_effect=BranchingUnavailableError("Packer staleness check refused: runtime unavailable")
+    )
+    branch_lifecycle.create_and_provision_branch = Mock()
+    branch_lifecycle.activate_branch_context = Mock()
+    branch_lifecycle.merge_branch = Mock()
+    sys.modules["netbox_packer.services.branch_lifecycle"] = branch_lifecycle
+
+    with pytest.raises(BranchingUnavailableError, match="refused"):
+        jobs.PackerStalenessCheckJob().run()
+
+    template_manager.exclude.assert_not_called()
+    template_manager.filter.assert_not_called()
+    build_manager.create.assert_not_called()
+    branch_lifecycle.create_and_provision_branch.assert_not_called()
+    branch_lifecycle.merge_branch.assert_not_called()
+    enqueue.assert_not_called()
+    assert template.build_status == "ready"
+
+
 @pytest.mark.parametrize("recover_wedged_build", [False, True])
 def test_staleness_management_command_dispatches_pin_only_drift(
     isolated_imports,

@@ -36,7 +36,7 @@ see "Storing the key" below.
 | Proxbox API key | `proxbox_api_key_encrypted` | Set only via `set_proxbox_api_key()` / read via `get_proxbox_api_key()` — never stored or read as plaintext. See key management below. |
 | File Server package-read user | `fileserver_package_read_user` | Plaintext username for the dedicated non-human Gitea package reader. |
 | File Server package-read token | `fileserver_package_read_token_encrypted` | Set only via `set_fileserver_package_read_token()` / read via `get_fileserver_package_read_token()` — never stored or read as plaintext. |
-| Enable branching | `branching_enabled` | When `True`, staleness-check jobs run inside a netbox-branching branch. |
+| Enable branching | `branching_enabled` | When `True`, staleness-check jobs run inside a netbox-branching branch. If the branching runtime is unavailable, the job fails with `BranchingUnavailableError` before writing anything; set it to `False` to explicitly allow writes to `main`. |
 | Branch name prefix | `branch_name_prefix` | Prefix for auto-created branch names (default: `packer-stale`). |
 | Branch conflict behavior | `branch_on_conflict` | `fail` (leave branch open) or `acknowledge` (merge anyway). |
 

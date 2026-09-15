@@ -88,14 +88,34 @@ and schemas do not exist.
 
 If you use branch-isolated sync (`branching_enabled = True`), **do not move to
 NetBox 4.7 until a 4.7-capable netbox-branching release exists.** The
-availability detector here now requires the loaded app rather than an
-importable package, so a skipped branching app is correctly reported as
-unavailable; but a sync configured for branch isolation that finds branching
-unavailable currently proceeds against `main` rather than refusing, which
-silently drops the isolation boundary you configured. Tightening that to
-fail closed is tracked separately.
+availability detector here requires the loaded app rather than an importable
+package, so a skipped branching app is correctly reported as unavailable, and
+a staleness check configured for branch isolation that finds branching
+unavailable **fails closed**: `PackerStalenessCheckJob` raises
+`BranchingUnavailableError` before any write and the NetBox job fails with the
+reason. Nothing is written to `main` unless `branching_enabled` is explicitly
+`False`.
 
 Installations that do not use branching are unaffected.
+
+### Branch isolation fails closed on every supported netbox-proxbox
+
+`netbox_packer.services.branch_lifecycle.branching_enabled_settings()` has a
+three-state contract:
+
+| `PackerPluginSettings.branching_enabled` | netbox-branching runtime | Result |
+| --- | --- | --- |
+| `False` | any | `None` — the staleness check writes to `main` (explicit opt-out) |
+| `True` | available | `{"prefix", "on_conflict"}` — the check runs inside a branch |
+| `True` | unavailable, helpers missing, or settings unreadable | `BranchingUnavailableError` — the job fails before its first write |
+
+The wrapper prefers the typed `resolve_branching_decision()` contract that
+netbox-proxbox 0.0.27 introduces (`enabled` / `disabled` /
+`configured_but_unavailable`) and detects it at runtime. On the published
+0.0.25.post2–0.0.26.x helper surface, which has no decision resolver, it
+applies the same fail-closed rule through `is_branching_available()`. Both the
+two-value and the three-value `merge_branch()` result shapes are accepted, so
+the declared dependency floor does not move.
 
 **Pre-release version strings.** NetBox's numeric comparison version may remain
 within the supported range while its display version carries a pre-release

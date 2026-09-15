@@ -213,7 +213,10 @@ that the build was not queued.
 
 Automatic staleness remediation uses the same dispatcher, including pin-only drift
 with no age policy. It recovers queued rows left by the former create-only path and
-dispatches after any configured branch merge succeeds.
+dispatches after any configured branch merge succeeds. When
+`branching_enabled` is `True` but the netbox-branching runtime is unavailable,
+the staleness job fails closed before its first write instead of silently
+running against `main`; see `COMPATIBILITY.md` for the three-state contract.
 
 For local Packer builds, `PACKER_BUILD_TIMEOUT_SECONDS` is enforced by a
 watchdog that kills the subprocess even when `packer init` or `packer build`
