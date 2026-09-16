@@ -100,8 +100,7 @@ The `cloud_config` bake path requires:
   `images` content types enabled.
 
 For detailed host bootstrap steps (key provisioning, storage content types), see
-the `nmulticloud-context` deploy documentation at
-`deploy/docs/proxbox-api-cloud-image-bake.md`.
+the public proxbox-api cloud-image build documentation.
 
 ## Environment variables (proxbox-api side)
 

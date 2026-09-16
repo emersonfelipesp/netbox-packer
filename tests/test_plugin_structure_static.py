@@ -597,7 +597,7 @@ def test_gitea_ci_workflow_is_the_authoritative_pre_merge_gate() -> None:
         'authority_root="$(realpath -m "${RUNNER_TEMP:?}")"',
         '"$workspace/"*)',
         'authority_checkout="$authority_root/netbox-proxbox-authority"',
-        'git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git "$authority_checkout"',
+        'git clone --no-checkout https://github.com/emersonfelipesp/netbox-proxbox.git "$authority_checkout"',
         'authority_checkout="$(realpath -m "${RUNNER_TEMP:?}/netbox-proxbox-authority")"',
         'uv pip install --python .venv/bin/python -e "$authority_checkout"',
         ".venv/bin/ruff check .",
@@ -606,7 +606,7 @@ def test_gitea_ci_workflow_is_the_authoritative_pre_merge_gate() -> None:
         ".venv/bin/python -m twine check dist/*",
     ):
         assert expected in ci
-    authority_repository = "https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git"
+    authority_repository = "https://github.com/emersonfelipesp/netbox-proxbox.git"
     repository_local_clone = f"git clone --no-checkout {authority_repository} netbox-proxbox"
     assert repository_local_clone not in ci
     clone_step = ci.index(f'git clone --no-checkout {authority_repository} "$authority_checkout"')

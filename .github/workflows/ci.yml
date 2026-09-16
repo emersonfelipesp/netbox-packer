@@ -126,7 +126,7 @@ jobs:
           PACKER_BASE_SHA: b2feff929698ba50145312fcfa265b1f49004b6c
         run: |
           set -euo pipefail
-          git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-packer.git netbox-packer-base
+          git clone --no-checkout https://github.com/emersonfelipesp/netbox-packer.git netbox-packer-base
           git -C netbox-packer-base checkout --detach "$PACKER_BASE_SHA"
           test "$(git -C netbox-packer-base rev-parse HEAD)" = "$PACKER_BASE_SHA"
 
@@ -321,7 +321,7 @@ jobs:
           NETBOX_REF: ${{ matrix.netbox-ref }}
           NETBOX_PLUGINS_JSON: '["netbox_packer"]'
           MIGRATION_APPS: "netbox_packer"
-          TEST_LABELS: "netbox_packer"
+          TEST_LABELS: "netbox_packer.tests"
           DB_HOST: localhost
           DB_NAME: netbox
           DB_USER: netbox

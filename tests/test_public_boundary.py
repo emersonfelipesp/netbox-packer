@@ -67,10 +67,22 @@ def test_boundary_scanner_rejects_content_and_path_mutations() -> None:
     assert scan({split_path: b"clean"})
 
 
+def test_boundary_scanner_rejects_separator_split_long_signature() -> None:
+    scanner = _load_scanner()
+    token = b"qvzabcde"
+    violations = scanner.find_violations(
+        {"mutation.txt": token[:1] + b"-" + token[1:]},
+        forbidden_digest=hashlib.sha256(token).hexdigest(),
+        forbidden_length=len(token),
+        compact=True,
+    )
+    assert violations
+
+
 def test_boundary_scanner_reads_staged_blob_hidden_by_clean_worktree(tmp_path: Path, monkeypatch) -> None:
     scanner = _load_scanner()
     token = b"qvz"
-    monkeypatch.setattr(scanner, "_FORBIDDEN_DIGEST", hashlib.sha256(token).hexdigest())
+    monkeypatch.setattr(scanner, "_FORBIDDEN_SIGNATURES", ((len(token), hashlib.sha256(token).hexdigest(), False),))
     _git(tmp_path, "init", "-q")
     target = tmp_path / "boundary.txt"
     target.write_bytes(b"clean\n")
@@ -88,7 +100,7 @@ def test_boundary_scanner_reads_staged_blob_hidden_by_clean_worktree(tmp_path: P
 def test_boundary_scanner_scans_symlink_targets_without_following_them(tmp_path: Path, monkeypatch) -> None:
     scanner = _load_scanner()
     token = b"qvz"
-    monkeypatch.setattr(scanner, "_FORBIDDEN_DIGEST", hashlib.sha256(token).hexdigest())
+    monkeypatch.setattr(scanner, "_FORBIDDEN_SIGNATURES", ((len(token), hashlib.sha256(token).hexdigest(), False),))
     _git(tmp_path, "init", "-q")
     link = tmp_path / "published-link"
     os.symlink(os.fsdecode(b"private-" + token), link)
@@ -128,6 +140,8 @@ def test_historical_upgrade_probe_uses_typed_generic_sentinels() -> None:
 def test_github_ci_runs_base_upgrade_and_separate_fresh_database() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "b2feff929698ba50145312fcfa265b1f49004b6c" in workflow
+    assert "git clone --no-checkout https://github.com/emersonfelipesp/netbox-packer.git" in workflow
+    assert 'TEST_LABELS: "netbox_packer.tests"' in workflow
     assert "check_historical_upgrade.py capture-head" in workflow
     assert "check_historical_upgrade.py seed-base" in workflow
     assert "check_historical_upgrade.py assert-head" in workflow

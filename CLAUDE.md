@@ -1,11 +1,8 @@
 # CLAUDE.md — netbox-packer
 
-## Workspace Context
+## Repository Context
 
-This file lives at `/root/personal-context/nmulticloud-context/netbox-packer/CLAUDE.md` inside the `personal-context` workspace.
-Workspace guidance: `/root/personal-context/CLAUDE.md`.
-Per-repo deep-dive: `/root/personal-context/claude-reference/nmulticloud-context.md`.
-Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+This guide documents the public `netbox-packer` repository. Use repository-relative paths and public project documentation so the guidance remains portable.
 
 ---
 
@@ -196,7 +193,7 @@ plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
   after those tags until release engineering records the exact validated
   inclusive version floors. Never fall back to the legacy one-step execute call.
 - Host bootstrap (bake SSH key, storage content types, NetBox Packer settings):
-  `nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
+  the public proxbox-api cloud-image build documentation.
 
 ### Monitoring agent injection (applied at build time)
 
@@ -635,15 +632,7 @@ Pushes to `develop` deploy `netbox-packer` to
 - Verify production: `curl -fsS https://netbox.nmulti.cloud/api/`
 - Check service logs: `ssh nmc-prod-207 -- logs netbox`
 
-**Manual deployment trigger:**
-```bash
-# Deploy a specific tag or branch via workflow dispatch
-
-# Or SSH directly to production
-ssh nmc-prod-207 -- deploy-plugin netbox-packer v0.1.0
-```
-
-For comprehensive deploy infrastructure documentation, see `/root/personal-context/nmulticloud-context/CLAUDE.md` section "Automatic Plugin Deployment to Production".
+Keep deployment-specific infrastructure outside this public repository. Public release automation is documented in the repository workflows and release guide.
 
 ## NetBox compatibility: two tiers, one shared module
 

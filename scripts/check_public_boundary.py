@@ -15,8 +15,13 @@ from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_FORBIDDEN_DIGEST = "00e1e10b7f275ff455afed38eb08cb1bfcc007805f50e0d6e8573f503a63f4be"
-_FORBIDDEN_LENGTH = 3
+_FORBIDDEN_SIGNATURES = (
+    (3, "00e1e10b7f275ff455afed38eb08cb1bfcc007805f50e0d6e8573f503a63f4be", False),
+    (14, "4da4c03ebc7d67c400f58be2c1ef091bd5748a87309af2d6e9e8e0aa35431956", True),
+    (15, "938733f201571c52d7cb2528abc1603ce5cb392642a0d74e4d958eb2e99042fb", True),
+    (18, "eeab65e64fadd11de98f393abf9f6f112755d6f36d691483c47d8f6af2e3590a", True),
+    (7, "184ac6413ac89334b3313bd69e5cfb82d1f3f5c0a38865cf426976067fb39ef8", True),
+)
 _ESCAPED_CODEPOINT = re.compile(r"(?:\\x([0-9a-fA-F]{2})|\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|%([0-9a-fA-F]{2}))")
 _HTML_CODEPOINT = re.compile(r"&#(?:x([0-9a-fA-F]+)|([0-9]+));", re.IGNORECASE)
 _HEX_RUN = re.compile(r"[0-9a-f]+", re.IGNORECASE)
@@ -82,12 +87,14 @@ def _matches_forbidden_digest(value: str, forbidden_digest: str, forbidden_lengt
 def _contains_forbidden(
     value: bytes,
     *,
-    forbidden_digest: str | None = None,
-    forbidden_length: int = _FORBIDDEN_LENGTH,
+    forbidden_digest: str,
+    forbidden_length: int,
+    compact: bool = False,
 ) -> bool:
-    forbidden_digest = forbidden_digest or _FORBIDDEN_DIGEST
     decoded = value.decode("utf-8", errors="surrogateescape")
     normalized = unicodedata.normalize("NFKC", _decode_escapes(decoded)).casefold()
+    if compact:
+        normalized = re.sub(r"[^a-z0-9]+", "", normalized)
 
     if any(
         _matches_forbidden_digest(normalized[index : index + forbidden_length], forbidden_digest, forbidden_length)
@@ -121,16 +128,26 @@ def find_violations(
     *,
     origin: str = "input",
     forbidden_digest: str | None = None,
-    forbidden_length: int = _FORBIDDEN_LENGTH,
+    forbidden_length: int = 3,
+    compact: bool = False,
 ) -> list[str]:
     """Return matching paths while retaining malformed-byte and multiline coverage."""
 
     violations = []
     for name, content in sorted(files.items()):
         path_bytes = os.fsencode(name)
-        if _contains_forbidden(path_bytes, forbidden_digest=forbidden_digest, forbidden_length=forbidden_length):
+        signatures = (
+            ((forbidden_length, forbidden_digest, compact),) if forbidden_digest is not None else _FORBIDDEN_SIGNATURES
+        )
+        if any(
+            _contains_forbidden(path_bytes, forbidden_digest=digest, forbidden_length=length, compact=is_compact)
+            for length, digest, is_compact in signatures
+        ):
             violations.append(f"{origin}:{name!r}: forbidden reference in path")
-        if _contains_forbidden(content, forbidden_digest=forbidden_digest, forbidden_length=forbidden_length):
+        if any(
+            _contains_forbidden(content, forbidden_digest=digest, forbidden_length=length, compact=is_compact)
+            for length, digest, is_compact in signatures
+        ):
             violations.append(f"{origin}:{name!r}: forbidden reference in content")
     return violations
 
@@ -219,6 +236,16 @@ def run_mutation_tests() -> None:
     split_path = f"private-{chr(token[0])}-{token[1:].decode()}"
     if not scan({split_path: b"clean content"}):
         raise RuntimeError("Boundary mutation was accepted: split path")
+
+    long_token = b"qvzabcde"
+    long_digest = hashlib.sha256(long_token).hexdigest()
+    if not find_violations(
+        {"mutation.txt": long_token[:1] + b"-" + long_token[1:]},
+        forbidden_digest=long_digest,
+        forbidden_length=len(long_token),
+        compact=True,
+    ):
+        raise RuntimeError("Boundary mutation was accepted: long split signature")
 
 
 def main() -> None:

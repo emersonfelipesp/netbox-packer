@@ -50,7 +50,7 @@ jobs:
               ;;
           esac
           authority_checkout="$authority_root/netbox-proxbox-authority"
-          git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git "$authority_checkout"
+          git clone --no-checkout https://github.com/emersonfelipesp/netbox-proxbox.git "$authority_checkout"
           git -C "$authority_checkout" checkout --detach "$NETBOX_PROXBOX_SHA"
           test "$(git -C "$authority_checkout" rev-parse HEAD)" = "$NETBOX_PROXBOX_SHA"
       - name: Create isolated environment
