@@ -1,7 +1,7 @@
 #cloud-config
 # Akvorado 2.4.0 all-in-one flow-collection template for Ubuntu 24.04.
 # Kafka, Valkey, ClickHouse, and every Akvorado component use explicit image
-# tags. The host agents are added independently by the build-time injector.
+# tags. Monitoring is added independently by the build-time injector.
 # No integration identity or secret is stored in this image.
 package_update: true
 package_upgrade: false

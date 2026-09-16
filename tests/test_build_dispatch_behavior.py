@@ -650,19 +650,6 @@ def test_models_reject_credentialed_base_image_urls(
         build.clean()
 
 
-def test_template_serializer_rejects_plaintext_nms_agent_backend(isolated_imports) -> None:
-    serializers = _import_api_serializers_module()
-    serializer = serializers.PackerTemplateSerializer()
-
-    with pytest.raises(ValueError, match="HTTPS URL"):
-        serializer.validate_nms_agent_backend_url("http://backend.nms.nmulti.cloud")
-
-    assert (
-        serializer.validate_nms_agent_backend_url("https://backend.nms.nmulti.cloud")
-        == "https://backend.nms.nmulti.cloud"
-    )
-
-
 class ChainManager:
     def __init__(self):
         self.create = Mock()

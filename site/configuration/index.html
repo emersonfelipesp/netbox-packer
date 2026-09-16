@@ -16,14 +16,14 @@
         <link rel="prev" href="../installation/">
       
       
-        <link rel="next" href="../models/">
+        <link rel="next" href="../upgrading/">
       
       
         
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
     
     
       
@@ -486,6 +486,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../upgrading/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrading
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../models/" class="md-nav__link">
         
   
@@ -575,10 +602,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
             
   
   
@@ -596,8 +623,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -622,6 +649,34 @@
     
   
     Summary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-notes/version-0.0.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Version 0.0.5
   
 
     
@@ -854,62 +909,65 @@
 <span class="p">}</span>
 </code></pre></div>
 <h2 id="packerpluginsettings">PackerPluginSettings<a class="headerlink" href="#packerpluginsettings" title="Permanent link">&para;</a></h2>
-<p>After running migrations, the singleton settings row is available in NetBox under
-<strong>Plugins → Packer Plugin Settings</strong>. All fields can be edited through the UI or
-the REST API.</p>
+<p>After running migrations, the singleton settings row exists in the database
+(<code>PackerPluginSettings.get_solo()</code>), but <strong>there is currently no NetBox UI page
+and no REST API endpoint for it</strong> — there is no navigation menu entry, no
+registered model view, and the plugin's API router only registers
+<code>packer-templates</code>, <code>build-jobs</code>, <code>installer-configs</code>, and <code>build-targets</code> (not
+<code>plugin-settings</code>). The only supported way to read or write these fields today
+is the Django/NetBox Python shell (<code>manage.py nbshell</code> or <code>manage.py shell</code>);
+see "Storing the key" below.</p>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>UI label</th>
+<th>Model field</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>proxbox_api_url</code></td>
 <td>Proxbox API URL</td>
+<td><code>proxbox_api_url</code></td>
 <td>Base URL of the proxbox-api backend (e.g. <code>http://10.0.30.207:8000</code>). Required for <code>cloud_config</code> installer-type builds.</td>
 </tr>
 <tr>
-<td><code>proxbox_api_key</code></td>
 <td>Proxbox API key</td>
-<td>Plaintext key entry (stored Fernet-encrypted). See key management below.</td>
+<td><code>proxbox_api_key_encrypted</code></td>
+<td>Set only via <code>set_proxbox_api_key()</code> / read via <code>get_proxbox_api_key()</code> — never stored or read as plaintext. See key management below.</td>
 </tr>
 <tr>
-<td><code>branching_enabled</code></td>
 <td>Enable branching</td>
-<td>When <code>True</code>, staleness-check jobs run inside a netbox-branching branch.</td>
+<td><code>branching_enabled</code></td>
+<td>When <code>True</code>, staleness-check jobs run inside a netbox-branching branch. If the branching runtime is unavailable, the job fails with <code>BranchingUnavailableError</code> before writing anything; set it to <code>False</code> to explicitly allow writes to <code>main</code>.</td>
 </tr>
 <tr>
-<td><code>branch_name_prefix</code></td>
 <td>Branch name prefix</td>
+<td><code>branch_name_prefix</code></td>
 <td>Prefix for auto-created branch names (default: <code>packer-stale</code>).</td>
 </tr>
 <tr>
-<td><code>branch_on_conflict</code></td>
 <td>Branch conflict behavior</td>
+<td><code>branch_on_conflict</code></td>
 <td><code>fail</code> (leave branch open) or <code>acknowledge</code> (merge anyway).</td>
 </tr>
 </tbody>
 </table>
 <h2 id="proxbox-api-key-management">Proxbox API key management<a class="headerlink" href="#proxbox-api-key-management" title="Permanent link">&para;</a></h2>
-<p>The <code>proxbox_api_key</code> is <strong>not</strong> stored in plain text. It is encrypted with a
-Fernet cipher derived from <code>settings.SECRET_KEY</code> (SHA-256 → base64url). There
-is <strong>no dependency on <code>netbox-nms</code></strong> for this encryption.</p>
+<p>The proxbox-api key is <strong>not</strong> stored in plain text. It is encrypted with a
+Fernet cipher derived from <code>settings.SECRET_KEY</code> (SHA-256 → base64url).</p>
 <h3 id="storing-the-key">Storing the key<a class="headerlink" href="#storing-the-key" title="Permanent link">&para;</a></h3>
-<p><strong>Via the NetBox UI.</strong> Edit the Packer Plugin Settings object and enter the key
-in the <strong>Proxbox API key</strong> field. The plugin encrypts it on <code>save()</code>.</p>
-<p><strong>Via the Python shell.</strong> This is useful for automation or initial bootstrap:</p>
+<p><strong>Via the Python shell.</strong> This is currently the only supported way to set or
+rotate the key (there is no UI form or REST endpoint for <code>PackerPluginSettings</code>
+yet):</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">netbox_packer.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PackerPluginSettings</span>
 
 <span class="n">settings_row</span> <span class="o">=</span> <span class="n">PackerPluginSettings</span><span class="o">.</span><span class="n">get_solo</span><span class="p">()</span>
 <span class="n">settings_row</span><span class="o">.</span><span class="n">set_proxbox_api_key</span><span class="p">(</span><span class="s2">&quot;your-proxbox-api-key-here&quot;</span><span class="p">)</span>
 <span class="n">settings_row</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
-<p><strong>Via the REST API.</strong> <code>POST /api/plugins/packer/plugin-settings/</code> (or <code>PATCH</code> the
-existing row) with the <code>proxbox_api_key</code> field in the request body. The
-serializer handles encryption transparently.</p>
+<p><code>proxbox_api_url</code> can be set the same way (<code>settings_row.proxbox_api_url = "..."</code>)
+before calling <code>.save()</code>.</p>
 <h3 id="verifying-the-key">Verifying the key<a class="headerlink" href="#verifying-the-key" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">netbox_packer.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PackerPluginSettings</span>
 
@@ -920,14 +978,27 @@ serializer handles encryption transparently.</p>
 <h2 id="proxbox-api-prerequisites">proxbox-api prerequisites<a class="headerlink" href="#proxbox-api-prerequisites" title="Permanent link">&para;</a></h2>
 <p>The <code>cloud_config</code> bake path requires:</p>
 <ul>
-<li><strong><code>proxbox-api &gt;= 0.0.18</code></strong> — the <code>user_data_yaml</code> parameter and <code>cicustom</code>
-  snippet writing were introduced in this version. The runtime image includes
-  <code>openssh-client</code> starting from <code>0.0.18.post1</code>.</li>
+<li><strong>Capability-bearing proxbox-api and netbox-proxbox revisions</strong> — netbox-packer
+  requires the explicit packer-template capability in both services plus the signed preflight
+  contract: a non-executing build plan returns <code>recipe_digest</code>,
+  <code>/cloud/templates/images/preflight</code> returns an expiring <code>plan_token</code>, and the
+  execute request consumes that token. A 404 from the preflight endpoint is an
+  incompatible older service and fails closed; there is no legacy one-step
+  fallback. The runtime image includes <code>openssh-client</code> starting from
+  <code>0.0.18.post1</code>. <code>proxbox-api 0.0.20</code> and <code>netbox-proxbox 0.0.25</code> are
+  pre-capability releases; use reviewed revisions after those tags until release
+  engineering records the exact validated inclusive version floors.</li>
 <li><strong><code>PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true</code></strong> — set in the proxbox-api
   environment. Cloud image execution is disabled by default.</li>
 <li><strong><code>PROXBOX_SSH_KEY_DIR</code></strong> — directory on the proxbox-api host containing the
   SSH private key that trusts the target Proxmox host.</li>
 <li><strong><code>allow_writes=True</code></strong> on the target <code>ProxmoxEndpoint</code> row in netbox-proxbox.</li>
+<li><strong><code>allow_packer_template_builds=True</code></strong> on that same endpoint. This separate,
+  default-off capability authorizes only netbox-packer template-image creation;
+  it does not replace or imply <code>allow_writes</code>.</li>
+<li>A <code>PackerTemplate.proxmox_endpoint</code> or enabled <code>PackerBuildTarget.proxmox_endpoint</code>
+  URL that matches exactly one enabled netbox-proxbox endpoint by normalized
+  host and port. Numeric build overrides do not grant endpoint authorization.</li>
 <li>The selected Proxmox storage pool must have the <code>snippets</code>, <code>import</code>, and
   <code>images</code> content types enabled.</li>
 </ul>
@@ -1039,13 +1110,13 @@ the <code>nmulticloud-context</code> deploy documentation at
         
         
           
-          <a href="../models/" class="md-footer__link md-footer__link--next" aria-label="Next: Data Models">
+          <a href="../upgrading/" class="md-footer__link md-footer__link--next" aria-label="Next: Upgrading">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Data Models
+                Upgrading
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -2,7 +2,7 @@ import base64
 import hashlib
 
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator, URLValidator
+from django.core.validators import RegexValidator
 from django.db import models
 from netbox.models import NetBoxModel
 
@@ -16,11 +16,6 @@ from .choices import (
     OSFamilyChoices,
     StorageFormatChoices,
     StoragePoolTypeChoices,
-)
-
-NMS_AGENT_BACKEND_URL_VALIDATOR = URLValidator(
-    schemes=["https"],
-    message="Enter an HTTPS URL for the NMS agent backend.",
 )
 
 
@@ -146,18 +141,6 @@ class PackerTemplate(NetBoxModel):
             "Skipped entirely if the installer config already mentions zabbix-agent2."
         ),
     )
-    install_nms_agent = models.BooleanField(
-        default=False,
-        help_text=(
-            "Inject the pinned nms-agent bootstrap into the cloud-config at build time. "
-            "Disabled by default so existing templates are unchanged."
-        ),
-    )
-    nms_agent_backend_url = models.URLField(
-        default="https://backend.nms.nmulti.cloud",
-        validators=[NMS_AGENT_BACKEND_URL_VALIDATOR],
-        help_text=("HTTPS NMS backend used by the injected agent for bootstrap, heartbeats, and telemetry."),
-    )
     zabbix_server = models.CharField(
         max_length=255,
         default="zabbix.nmulti.cloud",
@@ -194,18 +177,6 @@ class PackerTemplate(NetBoxModel):
         related_name="templates",
     )
     installer_config_checksum_at_build = models.CharField(max_length=64, blank=True)
-
-    # Authorization boundary for the File Server package-index credential
-    # injection in package_index.py. editable=False keeps it out of
-    # PackerTemplateForm (explicit Meta.fields tuple) and out of the DRF
-    # serializer's writable fields (also an explicit Meta.fields tuple, and
-    # DRF marks a non-editable model field read_only even if listed) — it can
-    # only be set by a migration. Renaming the row leaves this True (the
-    # trusted template keeps its trust); deleting it and having another row
-    # reclaim the freed name leaves this False on the new row (fails closed).
-    # `unique=True` on `name` above prevents two rows sharing the name
-    # *simultaneously*; this flag is what prevents *reclaiming* the name.
-    is_fileserver_golden_template = models.BooleanField(default=False, editable=False)
 
     # Stable, migration-managed service identity for downstream provisioning
     # hooks. Created VMs already retain source_packer_template, so consumers can
@@ -504,18 +475,6 @@ class PackerPluginSettings(NetBoxModel):
         editable=False,
         help_text="Fernet-encrypted X-Proxbox-API-Key (set via set_proxbox_api_key()).",
     )
-    fileserver_package_read_user = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-    )
-    fileserver_package_read_token_encrypted = models.CharField(
-        max_length=512,
-        blank=True,
-        default="",
-        editable=False,
-        help_text=("Fernet-encrypted package-index read token (set via set_fileserver_package_read_token())."),
-    )
 
     class Meta:
         verbose_name = "Packer Plugin Settings"
@@ -547,20 +506,4 @@ class PackerPluginSettings(NetBoxModel):
         try:
             return _fernet().decrypt(self.proxbox_api_key_encrypted.encode()).decode()
         except Exception:  # noqa: BLE001 - treat any decrypt failure as "no key"
-            return ""
-
-    def set_fileserver_package_read_token(self, plain: str) -> None:
-        """Encrypt and store the package-index token (clears it when ``plain`` is empty)."""
-        if not plain:
-            self.fileserver_package_read_token_encrypted = ""
-            return
-        self.fileserver_package_read_token_encrypted = _fernet().encrypt(plain.encode()).decode()
-
-    def get_fileserver_package_read_token(self) -> str:
-        """Return the decrypted package-index token, or ``""`` when unset/undecryptable."""
-        if not self.fileserver_package_read_token_encrypted:
-            return ""
-        try:
-            return _fernet().decrypt(self.fileserver_package_read_token_encrypted.encode()).decode()
-        except Exception:  # noqa: BLE001 - treat any decrypt failure as "no token"
             return ""

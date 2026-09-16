@@ -7,7 +7,7 @@ PASSBOLT_CLOUD_CONFIG = r"""#cloud-config
 # Runs at first boot of a VM cloned from this template (Proxmox cicustom
 # user-data). Installs the Passbolt CE server (nginx + php-fpm + local MariaDB)
 # for https://credential.nmulti.cloud with JWT authentication enabled. TLS is
-# terminated upstream by nginx-nms, so Passbolt serves plain HTTP on :80.
+# terminated upstream by upstream reverse proxy, so Passbolt serves plain HTTP on :80.
 #
 # The QEMU guest agent and Zabbix Agent 2 (pointed at zabbix.nmulti.cloud) are
 # injected at bake time by netbox-packer (_inject_monitoring_agents); they are
@@ -74,7 +74,7 @@ write_files:
 
       # 4. Non-interactive install: the package creates the local MariaDB
       #    database + user and an nginx vhost WITHOUT SSL (three-choices=none),
-      #    since nginx-nms terminates TLS upstream. Passbolt derives its
+      #    since upstream reverse proxy terminates TLS upstream. Passbolt derives its
       #    fullBaseUrl from the configured domain.
       {
         echo "passbolt-ce-server passbolt/mysql-configuration boolean true"
@@ -92,7 +92,7 @@ write_files:
       #    Passbolt reads process env vars, but php-fpm pools default to
       #    clear_env=on, so a shell/environment drop-in would be inert. Inject
       #    the values as pool-level env[] entries (the reliable native path) so
-      #    the Passbolt workers actually see them. The nms-backend Passbolt
+      #    the Passbolt workers actually see them. The external provisioning service Passbolt
       #    bridge requires JWT. SMTP is intentionally unconfigured for now (wire
       #    a relay later via EMAIL_TRANSPORT_DEFAULT_HOST / _PORT / _USERNAME /
       #    _PASSWORD / EMAIL_DEFAULT_FROM).

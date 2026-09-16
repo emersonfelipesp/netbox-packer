@@ -64,7 +64,7 @@ from django.db import migrations
 # customised row is never overwritten.
 LEGACY_OSS2_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB OSS 2.9.1 for Proxmox metrics/Flux workloads.
-# Credentials and initial setup are intentionally deferred to typed NMS RPC.
+# Credentials and initial setup are intentionally deferred to post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -72,7 +72,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb-install.sh
+  - path: /opt/netbox-packer-influxdb-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -80,7 +80,7 @@ write_files:
       set -euo pipefail
       export DEBIAN_FRONTEND=noninteractive
       readonly PRODUCT_VERSION='2.9.1'
-      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
+      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/netbox-packer-managed
       curl --fail --silent --show-error --location \
         --output /tmp/influxdata-archive.key \
         https://repos.influxdata.com/influxdata-archive.key
@@ -116,13 +116,13 @@ write_files:
       echo 'InfluxDB OSS health endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb-install.sh]
-  - [rm, -f, /opt/nms-influxdb-install.sh]
+  - [bash, /opt/netbox-packer-influxdb-install.sh]
+  - [rm, -f, /opt/netbox-packer-influxdb-install.sh]
 """
 
 LEGACY_CORE3_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB 3 Core 3.11.0 for general-purpose SQL/InfluxQL workloads.
-# The first operator token is intentionally created and vaulted by typed NMS RPC.
+# The first operator token is intentionally created and vaulted by post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -130,7 +130,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb3-install.sh
+  - path: /opt/netbox-packer-influxdb3-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -140,7 +140,7 @@ write_files:
       readonly PRODUCT_VERSION='3.11.0'
       install -d -m 0755 \
         /etc/apt/keyrings \
-        /etc/influxdb3/nms-managed \
+        /etc/influxdb3/netbox-packer-managed \
         /var/lib/influxdb3/plugins
       curl --fail --silent --show-error --location \
         --output /tmp/influxdata-archive.key \
@@ -177,13 +177,13 @@ write_files:
       echo 'InfluxDB 3 Core readiness endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb3-install.sh]
-  - [rm, -f, /opt/nms-influxdb3-install.sh]
+  - [bash, /opt/netbox-packer-influxdb3-install.sh]
+  - [rm, -f, /opt/netbox-packer-influxdb3-install.sh]
 """
 
 HARDENED_OSS2_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB OSS 2.9.1 for Proxmox metrics/Flux workloads.
-# Credentials and initial setup are intentionally deferred to typed NMS RPC.
+# Credentials and initial setup are intentionally deferred to post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -191,7 +191,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb-install.sh
+  - path: /opt/netbox-packer-influxdb-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -209,7 +209,7 @@ write_files:
       # versions, and readiness timeouts with exactly that. An EXIT handler covers every
       # termination path, so no failure mode goes unrecorded. It also owns the temporary
       # keyring cleanup, since a script may install only one EXIT trap.
-      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      readonly PACKER_FAILURE_MARKER='/var/lib/netbox-packer/influxdb-install-failed'
       keyring_workdir=''
       on_install_exit() {
         local exit_code=$?
@@ -217,12 +217,12 @@ write_files:
           rm -rf "${keyring_workdir}" || true
         fi
         if [ "${exit_code}" -ne 0 ]; then
-          install -d -m 0755 /var/lib/nms || true
+          install -d -m 0755 /var/lib/netbox-packer || true
           {
             printf 'installer: %s\n' "$0"
             printf 'exit_code: %s\n' "${exit_code}"
             printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > "${NMS_FAILURE_MARKER}" || true
+          } > "${PACKER_FAILURE_MARKER}" || true
         fi
         return "${exit_code}"
       }
@@ -236,7 +236,7 @@ write_files:
       trap 'exit 129' HUP
       trap on_install_exit EXIT
       readonly PRODUCT_VERSION='2.9.1'
-      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
+      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/netbox-packer-managed
       # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
       # fingerprint and then dearmoring the whole file would also trust any extra
       # key bundled alongside it: a substituted file carrying the genuine key plus
@@ -314,12 +314,12 @@ write_files:
       echo 'InfluxDB OSS health endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb-install.sh]
+  - [bash, /opt/netbox-packer-influxdb-install.sh]
 """
 
 HARDENED_CORE3_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB 3 Core 3.11.0 for general-purpose SQL/InfluxQL workloads.
-# The first operator token is intentionally created and vaulted by typed NMS RPC.
+# The first operator token is intentionally created and vaulted by post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -327,7 +327,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb3-install.sh
+  - path: /opt/netbox-packer-influxdb3-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -345,7 +345,7 @@ write_files:
       # versions, and readiness timeouts with exactly that. An EXIT handler covers every
       # termination path, so no failure mode goes unrecorded. It also owns the temporary
       # keyring cleanup, since a script may install only one EXIT trap.
-      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      readonly PACKER_FAILURE_MARKER='/var/lib/netbox-packer/influxdb-install-failed'
       keyring_workdir=''
       on_install_exit() {
         local exit_code=$?
@@ -353,12 +353,12 @@ write_files:
           rm -rf "${keyring_workdir}" || true
         fi
         if [ "${exit_code}" -ne 0 ]; then
-          install -d -m 0755 /var/lib/nms || true
+          install -d -m 0755 /var/lib/netbox-packer || true
           {
             printf 'installer: %s\n' "$0"
             printf 'exit_code: %s\n' "${exit_code}"
             printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > "${NMS_FAILURE_MARKER}" || true
+          } > "${PACKER_FAILURE_MARKER}" || true
         fi
         return "${exit_code}"
       }
@@ -374,7 +374,7 @@ write_files:
       readonly PRODUCT_VERSION='3.11.0'
       install -d -m 0755 \
         /etc/apt/keyrings \
-        /etc/influxdb3/nms-managed \
+        /etc/influxdb3/netbox-packer-managed \
         /var/lib/influxdb3/plugins
       # Trust EXACTLY ONE key. Proving the downloaded file *contains* the expected
       # fingerprint and then dearmoring the whole file would also trust any extra
@@ -453,7 +453,7 @@ write_files:
       echo 'InfluxDB 3 Core readiness endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb3-install.sh]
+  - [bash, /opt/netbox-packer-influxdb3-install.sh]
 """
 
 # (installer-config name, version, hardened content, legacy content, template names)

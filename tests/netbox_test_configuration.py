@@ -27,6 +27,7 @@ PLUGINS = [*BASE_PLUGINS, "netbox_packer"]
 
 DATABASES["default"]["HOST"] = os.environ.get("NETBOX_TEST_DB_HOST", "127.0.0.1")  # noqa: F405
 DATABASES["default"]["PORT"] = int(os.environ.get("NETBOX_TEST_DB_PORT", "5432"))  # noqa: F405
+DATABASES["default"]["NAME"] = os.environ.get("NETBOX_TEST_DB_NAME", DATABASES["default"]["NAME"])  # noqa: F405
 for redis_config in REDIS.values():  # noqa: F405
     redis_config["HOST"] = os.environ.get("NETBOX_TEST_REDIS_HOST", "127.0.0.1")
     redis_config["PORT"] = int(os.environ.get("NETBOX_TEST_REDIS_PORT", "6379"))

@@ -26,6 +26,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Enforce public repository boundary
+        run: |
+          python scripts/check_public_boundary.py --self-test
+          python scripts/check_public_boundary.py
+
       - name: Install ruff
         run: pip install ruff
 
@@ -116,6 +121,15 @@ jobs:
           path: netbox-packer
           persist-credentials: false
 
+      - name: Checkout the exact historical base
+        env:
+          PACKER_BASE_SHA: b2feff929698ba50145312fcfa265b1f49004b6c
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-packer.git netbox-packer-base
+          git -C netbox-packer-base checkout --detach "$PACKER_BASE_SHA"
+          test "$(git -C netbox-packer-base rev-parse HEAD)" = "$PACKER_BASE_SHA"
+
       - name: Checkout NetBox ${{ matrix.netbox-version }}
         uses: actions/checkout@v4
         with:
@@ -129,13 +143,38 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install NetBox and the plugin
+      - name: Install NetBox and capture the head model state
+        env:
+          DJANGO_SETTINGS_MODULE: netbox.settings
+          NETBOX_CONFIGURATION: tests.netbox_test_configuration
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r netbox/requirements.txt
           python -m pip install -e "./netbox-packer[test]"
+          python netbox-packer/scripts/check_historical_upgrade.py capture-head \
+            --head-schema "$RUNNER_TEMP/netbox-packer-head-schema.json"
+          python -m pip install --no-deps -e ./netbox-packer-base
 
-      - name: Migrate, check, and assert the reported support tier
+      - name: Migrate the historical base and seed generic sentinels
+        working-directory: netbox-packer-base
+        env:
+          DJANGO_SETTINGS_MODULE: netbox.settings
+          NETBOX_CONFIGURATION: tests.netbox_test_configuration
+          NETBOX_TEST_DB_HOST: 127.0.0.1
+          NETBOX_TEST_DB_PORT: 5432
+          NETBOX_TEST_REDIS_HOST: 127.0.0.1
+          NETBOX_TEST_REDIS_PORT: 6379
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer-base
+        run: |
+          set -euo pipefail
+          python ../netbox/netbox/manage.py migrate --no-input
+          python ../netbox-packer/scripts/check_historical_upgrade.py seed-base \
+            --head-schema "$RUNNER_TEMP/netbox-packer-head-schema.json" \
+            --sentinels "$RUNNER_TEMP/netbox-packer-upgrade-sentinels.json"
+
+      - name: Upgrade the historical database to head without data loss
         working-directory: netbox-packer
         env:
           DJANGO_SETTINGS_MODULE: netbox.settings
@@ -144,11 +183,36 @@ jobs:
           NETBOX_TEST_DB_PORT: 5432
           NETBOX_TEST_REDIS_HOST: 127.0.0.1
           NETBOX_TEST_REDIS_PORT: 6379
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps -e .
+          python ../netbox/netbox/manage.py migrate --no-input
+          python scripts/check_historical_upgrade.py assert-head \
+            --sentinels "$RUNNER_TEMP/netbox-packer-upgrade-sentinels.json"
+
+      - name: Create a clean database for the fresh-install and reversal gate
+        env:
+          PGPASSWORD: netbox
+        run: createdb -h 127.0.0.1 -p 5432 -U netbox netbox_fresh
+
+      - name: Fresh migrate, reverse, reapply, and assert the support tier
+        working-directory: netbox-packer
+        env:
+          DJANGO_SETTINGS_MODULE: netbox.settings
+          NETBOX_CONFIGURATION: tests.netbox_test_configuration
+          NETBOX_TEST_DB_HOST: 127.0.0.1
+          NETBOX_TEST_DB_PORT: 5432
+          NETBOX_TEST_DB_NAME: netbox_fresh
+          NETBOX_TEST_REDIS_HOST: 127.0.0.1
+          NETBOX_TEST_REDIS_PORT: 6379
           EXPECTED_TIER: ${{ matrix.tier }}
           PYTHONPATH: ${{ github.workspace }}/netbox/netbox:${{ github.workspace }}/netbox-packer
         run: |
           set -euo pipefail
           python ../netbox/netbox/manage.py migrate --no-input
+          python ../netbox/netbox/manage.py migrate netbox_packer 0032 --no-input
+          python ../netbox/netbox/manage.py migrate netbox_packer 0033 --no-input
           python ../netbox/netbox/manage.py makemigrations netbox_packer --check --dry-run
           # `check` must succeed on every tier. On the experimental tier it also
           # has to emit exactly one netbox_packer.W001 and no errors; on a stable

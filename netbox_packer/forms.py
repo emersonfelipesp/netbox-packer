@@ -15,7 +15,6 @@ from .choices import (
     os_version_known_values,
 )
 from .models import (
-    NMS_AGENT_BACKEND_URL_VALIDATOR,
     PackerBuild,
     PackerBuildTarget,
     PackerInstallerConfig,
@@ -115,8 +114,6 @@ class PackerTemplateForm(NetBoxModelForm):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
-            "install_nms_agent",
-            "nms_agent_backend_url",
             "base_image_url",
             "base_image_sha256",
             "tags",
@@ -148,8 +145,6 @@ class PackerTemplateForm(NetBoxModelForm):
                 "install_qemu_guest_agent",
                 "install_zabbix_agent2",
                 "zabbix_server",
-                "install_nms_agent",
-                "nms_agent_backend_url",
                 name="Monitoring Agents",
             ),
             FieldSet(
@@ -242,13 +237,6 @@ class PackerTemplateForm(NetBoxModelForm):
             )
 
         return cleaned_data
-
-    def clean_nms_agent_backend_url(self):
-        """Reject plaintext agent backends at the UI validation boundary."""
-
-        value = self.cleaned_data["nms_agent_backend_url"]
-        NMS_AGENT_BACKEND_URL_VALIDATOR(value)
-        return value
 
 
 class PackerTemplateFilterForm(NetBoxModelFilterSetForm):

@@ -1,6 +1,5 @@
 """RQ background jobs for netbox-packer."""
 
-import json
 import logging
 import posixpath
 import re
@@ -16,21 +15,12 @@ from .base_image import (
     redact_base_image_url,
     validate_base_image_url,
 )
-from .package_index import (
-    redact_fileserver_package_token,
-    render_fileserver_package_index,
-    sanitized_fileserver_package_error,
-)
 
 logger = logging.getLogger("netbox_packer.jobs")
 
 # Zabbix ServerActive= value: hostname/IP (optional IPv6 brackets) with optional :port,
 # comma-separated for multiple servers.  No spaces, newlines, or shell metacharacters.
 _ZABBIX_SERVER_RE = re.compile(r"^[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?(,[A-Za-z0-9.\-\[\]]+(:[0-9]{1,5})?)*$")
-
-_NMS_AGENT_COMMIT = "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb"
-_NMS_AGENT_GO_VERSION = "1.24.13"
-_NMS_AGENT_GO_LINUX_AMD64_SHA256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
 
 # Minimum CPU arch requirements known to require non-default cpu_type
 MIN_CPU_KNOWN_REQUIREMENTS = {
@@ -367,163 +357,14 @@ systemctl enable --now zabbix-agent2
 """
 
 
-def _normalize_nms_agent_backend_url(value: str) -> str:
-    """Return a safe HTTPS agent backend URL suitable for rendered YAML."""
-
-    from urllib.parse import urlsplit, urlunsplit
-
-    backend_url = (value or "").strip() or "https://backend.nms.nmulti.cloud"
-    try:
-        parts = urlsplit(backend_url)
-        # Accessing port also rejects malformed/out-of-range values.
-        _ = parts.port
-    except ValueError as exc:
-        raise ValueError(f"Invalid nms_agent_backend_url: {backend_url!r}") from exc
-    if (
-        parts.scheme != "https"
-        or not parts.hostname
-        or parts.username is not None
-        or parts.password is not None
-        or parts.query
-        or parts.fragment
-    ):
-        raise ValueError("nms_agent_backend_url must be an HTTPS URL without credentials, query, or fragment")
-    normalized = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
-    return normalized
-
-
-def _nms_agent_allowed_units(template) -> list[str]:
-    """Map durable template service markers to the agent's local allowlist."""
-
-    if getattr(template, "provisions_service", "") == "akvorado":
-        return ["akvorado.service"]
-    return []
-
-
-def _nms_agent_config(backend_url: str, allowed_units: list[str]) -> str:
-    """Render the credential-free nms-agent configuration."""
-
-    allowed = "[]" if not allowed_units else "\n" + "\n".join(f"    - {unit}" for unit in allowed_units)
-    return f"""\
-backend_url: {json.dumps(_normalize_nms_agent_backend_url(backend_url))}
-identity_path: /etc/nms-agent/identity.json
-token_path: /etc/nms-agent/token
-signing_key_path: /etc/nms-agent/backend_signing.pub
-log_level: info
-otlp:
-  enabled: true
-  endpoint: {json.dumps(_normalize_nms_agent_backend_url(backend_url))}
-  insecure: false
-  headers: {{}}
-zabbix:
-  enabled: false
-  manage_agent2: false
-  server: zabbix.nmulti.cloud
-  host_metadata: ""
-intervals:
-  poll_s: 15
-  heartbeat_s: 60
-  metrics_s: 30
-  enroll_s: 30
-rpc:
-  enabled: true
-  allowed_units: {allowed}
-"""
-
-
-def _nms_agent_systemd_unit() -> str:
-    """Return the upstream-compatible nms-agent systemd service definition."""
-
-    return """\
-[Unit]
-Description=NMS Agent - telemetry and RPC agent for the NMS platform
-Documentation=https://git.nmulti.cloud/N-MultiCloud/nms-agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/nms-agent run --config /etc/nms-agent/config.yaml
-Restart=on-failure
-RestartSec=5
-User=root
-UMask=0077
-NoNewPrivileges=false
-ProtectHome=true
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-
-def _nms_agent_bootstrap() -> str:
-    """Build and install nms-agent from its pinned source commit.
-
-    nms-agent currently publishes neither release binaries nor repository
-    packages. The build therefore fetches one exact public Git commit and uses
-    a SHA256-verified Go toolchain to produce its documented static binary.
-    """
-
-    return f"""\
-#!/usr/bin/env bash
-set -euxo pipefail
-export DEBIAN_FRONTEND=noninteractive
-readonly NMS_AGENT_COMMIT='{_NMS_AGENT_COMMIT}'
-readonly GO_VERSION='{_NMS_AGENT_GO_VERSION}'
-readonly GO_SHA256='{_NMS_AGENT_GO_LINUX_AMD64_SHA256}'
-readonly NMS_AGENT_REPOSITORY='https://git.nmulti.cloud/N-MultiCloud/nms-agent.git'
-
-test "$(dpkg --print-architecture)" = 'amd64'
-apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates curl git
-
-workdir="$(mktemp -d)"
-trap 'rm -rf "${{workdir}}"' EXIT
-curl --fail --silent --show-error --location --retry 3 \
-  --output "${{workdir}}/go.tar.gz" \
-  "https://go.dev/dl/go${{GO_VERSION}}.linux-amd64.tar.gz"
-printf '%s  %s\n' "${{GO_SHA256}}" "${{workdir}}/go.tar.gz" | sha256sum --check --strict -
-tar -C "${{workdir}}" -xzf "${{workdir}}/go.tar.gz"
-
-git init --quiet "${{workdir}}/nms-agent"
-git -C "${{workdir}}/nms-agent" remote add origin "${{NMS_AGENT_REPOSITORY}}"
-git -C "${{workdir}}/nms-agent" fetch --quiet --depth 1 origin "${{NMS_AGENT_COMMIT}}"
-git -C "${{workdir}}/nms-agent" checkout --quiet --detach FETCH_HEAD
-test "$(git -C "${{workdir}}/nms-agent" rev-parse HEAD)" = "${{NMS_AGENT_COMMIT}}"
-
-cd "${{workdir}}/nms-agent"
-"${{workdir}}/go/bin/go" mod download
-ldflags=(
-  '-s'
-  '-w'
-  '-X'
-  "git.nmulti.cloud/N-MultiCloud/nms-agent/internal/version.Version=${{NMS_AGENT_COMMIT}}"
-  '-X'
-  "git.nmulti.cloud/N-MultiCloud/nms-agent/internal/version.Commit=${{NMS_AGENT_COMMIT}}"
-)
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "${{workdir}}/go/bin/go" build \
-  -trimpath \
-  -ldflags "${{ldflags[*]}}" \
-  -o "${{workdir}}/nms-agent-bin" ./cmd/nms-agent
-install -o root -g root -m 0755 "${{workdir}}/nms-agent-bin" /usr/bin/nms-agent
-/usr/bin/nms-agent version | grep -F "${{NMS_AGENT_COMMIT}}"
-
-install -d -o root -g root -m 0700 /etc/nms-agent
-systemctl daemon-reload
-systemctl enable --now nms-agent.service
-"""
-
-
 def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
-    """Inject QEMU Guest Agent, Zabbix Agent 2, and/or nms-agent into cloud-config.
+    """Inject QEMU Guest Agent and/or Zabbix Agent 2 into cloud-config.
 
     Deduplication rules:
     - QEMU Guest Agent: skip package add if 'qemu-guest-agent' already in packages list;
       always add the systemctl enable runcmd entry if not already present.
     - Zabbix Agent 2: skip all injection if 'zabbix-agent2' appears anywhere in the YAML
       (handles templates that already manage Zabbix themselves, e.g. the Zabbix server seed).
-    - nms-agent: disabled by default; skip injection only when all three managed files and
-      the exact bootstrap command are already present. Partial state is completed.
     """
     import yaml  # stdlib-adjacent; always available in NetBox's Django env via PyYAML
 
@@ -566,41 +407,6 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
         if not any(script_path in str(r) for r in runcmds):
             runcmds.append(["bash", script_path])
 
-    # --- NMS Agent ---
-    nms_agent_enabled = getattr(template, "install_nms_agent", False)
-    injection_complete = False
-    if nms_agent_enabled:
-        bootstrap_path = "/opt/nmulticloud-nms-agent-bootstrap.sh"
-        expected_paths = {
-            "/etc/nms-agent/config.yaml",
-            "/etc/systemd/system/nms-agent.service",
-            bootstrap_path,
-        }
-        existing_paths = {f.get("path") for f in write_files if isinstance(f, dict) and f.get("path")}
-        bootstrap_command = ["bash", bootstrap_path]
-        injection_complete = expected_paths.issubset(existing_paths) and (bootstrap_command in runcmds)
-
-    if nms_agent_enabled and not injection_complete:
-        backend_url = getattr(template, "nms_agent_backend_url", "")
-        allowed_units = _nms_agent_allowed_units(template)
-        nms_files = (
-            ("/etc/nms-agent/config.yaml", "0600", _nms_agent_config(backend_url, allowed_units)),
-            ("/etc/systemd/system/nms-agent.service", "0644", _nms_agent_systemd_unit()),
-            (bootstrap_path, "0750", _nms_agent_bootstrap()),
-        )
-        for path, permissions, content in nms_files:
-            if path not in existing_paths:
-                write_files.append(
-                    {
-                        "path": path,
-                        "permissions": permissions,
-                        "owner": "root:root",
-                        "content": content,
-                    }
-                )
-        if bootstrap_command not in runcmds:
-            runcmds.append(bootstrap_command)
-
     # --- Password SSH auth ---
     # Every cloud-init template must support username+password SSH (key-based
     # stays the default). This only *permits* password auth in the guest sshd;
@@ -642,7 +448,6 @@ _EXPLORER_ALLOWED_WRITE_PATHS = frozenset(
 # Keys a write_files entry may carry. An unknown key is refused rather than ignored,
 # so a future cloud-init feature cannot smuggle content past the content scan.
 _EXPLORER_ALLOWED_WRITE_KEYS = frozenset({"path", "content", "owner", "permissions"})
-_EXPLORER_PLACEHOLDER_SECRET_REF = "nms-secret:<opaque-id>"
 _EXPLORER_ALLOWED_URLS = frozenset({"http://127.0.0.1:8080/"})
 _EXPLORER_CREDENTIAL_KEY_PARTS = (
     "password",
@@ -672,7 +477,6 @@ _EXPLORER_CORE_SETTING_RE = re.compile(
 _EXPLORER_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", re.IGNORECASE)
 _EXPLORER_AUTHORIZATION_RE = re.compile(r"\b(?:authorization|bearer)\s*[:=]\s*\S+", re.IGNORECASE)
 _EXPLORER_USERINFO_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@", re.IGNORECASE)
-_EXPLORER_SECRET_REF_RE = re.compile(r"nms-secret:[^\s\"']+", re.IGNORECASE)
 _EXPLORER_HTTP_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
@@ -682,6 +486,52 @@ def _explorer_payload_error(reason: str) -> RuntimeError:
         f"violates the credential-free boundary ({reason}). Remove Core connection "
         "and credential material; provision config.json only after cloning."
     )
+
+
+def _validate_explorer_write_entry(entry: object) -> None:
+    if not isinstance(entry, dict):
+        raise _explorer_payload_error("write_files contains a non-mapping entry")
+    if entry.get("encoding"):
+        raise _explorer_payload_error("encoded write_files content cannot be inspected safely")
+    unknown_keys = sorted(set(map(str, entry)) - _EXPLORER_ALLOWED_WRITE_KEYS)
+    if unknown_keys:
+        raise _explorer_payload_error(f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}")
+    raw_path = entry.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise _explorer_payload_error("write_files entry has no string path")
+    if not isinstance(entry.get("content"), str):
+        raise _explorer_payload_error(
+            f"write_files entry {raw_path!r} has non-text content, which cannot be inspected for credentials"
+        )
+    if raw_path == _EXPLORER_CONFIG_PATH:
+        raise _explorer_payload_error("the golden image writes Explorer config.json")
+
+
+def _validate_explorer_string(item: str) -> None:
+    if _EXPLORER_PRIVATE_KEY_RE.search(item):
+        raise _explorer_payload_error("private key material is present")
+    if _EXPLORER_CREDENTIAL_ASSIGNMENT_RE.search(item) or _EXPLORER_AUTHORIZATION_RE.search(item):
+        raise _explorer_payload_error("a credential-bearing value is present")
+    if _EXPLORER_USERINFO_URL_RE.search(item):
+        raise _explorer_payload_error("URL userinfo is present")
+    if "8181" in item or _EXPLORER_CORE_SETTING_RE.search(item):
+        raise _explorer_payload_error("an InfluxDB Core endpoint setting is present")
+    for match in _EXPLORER_HTTP_URL_RE.finditer(item):
+        if match.group(0).rstrip(".,;)]}") not in _EXPLORER_ALLOWED_URLS:
+            raise _explorer_payload_error("an unapproved connection URL is present")
+
+
+def _validate_explorer_write_paths(write_files: list[dict]) -> None:
+    for entry in write_files:
+        raw_path = entry["path"]
+        canonical_path = posixpath.normpath(raw_path)
+        if not posixpath.isabs(canonical_path):
+            raise _explorer_payload_error(f"write_files path {raw_path!r} is not absolute")
+        if canonical_path not in _EXPLORER_ALLOWED_WRITE_PATHS:
+            raise _explorer_payload_error(
+                f"write_files writes unexpected path {canonical_path!r}; the Explorer image "
+                "may only write its own unit, launcher, installer, defaults, and docs"
+            )
 
 
 def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
@@ -700,32 +550,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
     if not isinstance(write_files, list):
         raise _explorer_payload_error("write_files is not a list")
     for entry in write_files:
-        if not isinstance(entry, dict):
-            raise _explorer_payload_error("write_files contains a non-mapping entry")
-
-        if entry.get("encoding"):
-            raise _explorer_payload_error("encoded write_files content cannot be inspected safely")
-
-        unknown_keys = sorted(set(map(str, entry)) - _EXPLORER_ALLOWED_WRITE_KEYS)
-        if unknown_keys:
-            # Refusing any unknown key, rather than only the `encoding` name above, means a
-            # future cloud-init key cannot reopen the same hole without being noticed.
-            raise _explorer_payload_error(f"write_files entry carries unsupported key(s): {', '.join(unknown_keys)}")
-
-        raw_path = entry.get("path")
-        if not isinstance(raw_path, str) or not raw_path:
-            raise _explorer_payload_error("write_files entry has no string path")
-
-        # `content: !!binary` loads as `bytes`, which the credential scan skips as a
-        # non-string scalar — so unscanned base64 could carry a Core URL or token straight
-        # into the baked image. Require plain text so everything is actually scanned.
-        if not isinstance(entry.get("content"), str):
-            raise _explorer_payload_error(
-                f"write_files entry {raw_path!r} has non-text content, which cannot be inspected for credentials"
-            )
-
-        if entry.get("path") == _EXPLORER_CONFIG_PATH:
-            raise _explorer_payload_error("the golden image writes Explorer config.json")
+        _validate_explorer_write_entry(entry)
 
     pending = [config]
     while pending:
@@ -752,25 +577,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         if not isinstance(item, str):
             continue
 
-        for match in _EXPLORER_SECRET_REF_RE.finditer(item):
-            secret_ref = match.group(0).rstrip(".,;)]}")
-            if secret_ref != _EXPLORER_PLACEHOLDER_SECRET_REF:
-                raise _explorer_payload_error("a non-placeholder nms-secret reference is present")
-        credential_scan_value = item.replace(_EXPLORER_PLACEHOLDER_SECRET_REF, "")
-        if _EXPLORER_PRIVATE_KEY_RE.search(item):
-            raise _explorer_payload_error("private key material is present")
-        if _EXPLORER_CREDENTIAL_ASSIGNMENT_RE.search(credential_scan_value) or _EXPLORER_AUTHORIZATION_RE.search(
-            credential_scan_value
-        ):
-            raise _explorer_payload_error("a credential-bearing value is present")
-        if _EXPLORER_USERINFO_URL_RE.search(item):
-            raise _explorer_payload_error("URL userinfo is present")
-        if "8181" in item or _EXPLORER_CORE_SETTING_RE.search(item):
-            raise _explorer_payload_error("an InfluxDB Core endpoint setting is present")
-        for match in _EXPLORER_HTTP_URL_RE.finditer(item):
-            url = match.group(0).rstrip(".,;)]}")
-            if url not in _EXPLORER_ALLOWED_URLS:
-                raise _explorer_payload_error("an unapproved connection URL is present")
+        _validate_explorer_string(item)
 
     # Final catch-all, deliberately last so the specific diagnostics above win when they
     # apply. Everything before this is a denylist, and a denylist over operator-editable
@@ -778,19 +585,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
     # path-alias bypasses found in review were both of that kind. This allowlist instead
     # refuses any file the image is not supposed to write at all, so a newly invented
     # carrier fails closed rather than waiting to be enumerated.
-    for entry in write_files:
-        raw_path = entry.get("path")
-        # Canonicalise before comparing: `/etc/influxdb3-explorer/./config.json` and
-        # `/x/../etc/…` name the same file, so an exact string comparison is bypassable by
-        # spelling the path differently.
-        canonical_path = posixpath.normpath(raw_path)
-        if not posixpath.isabs(canonical_path):
-            raise _explorer_payload_error(f"write_files path {raw_path!r} is not absolute")
-        if canonical_path not in _EXPLORER_ALLOWED_WRITE_PATHS:
-            raise _explorer_payload_error(
-                f"write_files writes unexpected path {canonical_path!r}; the Explorer image "
-                "may only write its own unit, launcher, installer, defaults, and docs"
-            )
+    _validate_explorer_write_paths(write_files)
 
 
 class PackerBuildJob(JobRunner):
@@ -869,7 +664,6 @@ class PackerBuildJob(JobRunner):
         from .proxbox_client import ProxboxApiError, call_proxbox_build
 
         settings_row = PackerPluginSettings.get_solo()
-        fileserver_package_read_token = settings_row.get_fileserver_package_read_token()
         api_url = (settings_row.proxbox_api_url or "").strip()
         installer = template.installer_config
         storage = _resolve_storage(template, build.variable_overrides)
@@ -901,24 +695,12 @@ class PackerBuildJob(JobRunner):
             )
 
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
-        user_data_yaml = render_fileserver_package_index(
-            user_data_yaml,
-            settings_row=settings_row,
-            template_name=template.name,
-            is_fileserver_golden_template=template.is_fileserver_golden_template,
-        )
         zabbix_status = "disabled"
         if template.install_zabbix_agent2:
             zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"
         log_lines += [
             f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
             f"[INFO] Zabbix Agent 2 injection: {zabbix_status}",
-            "[INFO] NMS Agent injection: "
-            + (
-                f"enabled (backend={_normalize_nms_agent_backend_url(template.nms_agent_backend_url)})"
-                if getattr(template, "install_nms_agent", False)
-                else "disabled"
-            ),
             "[INFO] proxbox-api signed handshake: plan -> preflight -> execute",
         ]
 
@@ -955,12 +737,11 @@ class PackerBuildJob(JobRunner):
                 timeout=int(timeout) + 300,
             )
         except ProxboxApiError as exc:
-            safe_error = redact_fileserver_package_token(str(exc), fileserver_package_read_token)
-            safe_error = safe_error.replace(image_url, safe_image_url)
+            safe_error = str(exc).replace(image_url, safe_image_url)
             log_lines.append(f"[ERROR] {safe_error}")
             build.log = "\n".join(log_lines)
             build.save(update_fields=["log"])
-            raise sanitized_fileserver_package_error(exc, fileserver_package_read_token) from None
+            raise RuntimeError(safe_error) from None
 
         status = str(response.get("status", "")).lower()
         result_vmid = response.get("vmid") or response.get("template_vmid")
@@ -968,8 +749,7 @@ class PackerBuildJob(JobRunner):
         for key in ("build_script", "stdout", "stderr"):
             value = response.get(key)
             if value:
-                safe_value = redact_fileserver_package_token(str(value), fileserver_package_read_token)
-                safe_value = safe_value.replace(image_url, safe_image_url)
+                safe_value = str(value).replace(image_url, safe_image_url)
                 log_lines.append(f"[{key.upper()}]\n{safe_value}")
 
         build.finished_at = timezone.now()

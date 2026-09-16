@@ -7,7 +7,7 @@ from django.db import migrations
 AKVORADO_CLOUD_CONFIG = r"""#cloud-config
 # Akvorado 2.4.0 all-in-one flow-collection template for Ubuntu 24.04.
 # Kafka, Valkey, ClickHouse, and every Akvorado component use explicit image
-# tags. The host agents are added independently by the build-time injector.
+# tags. Monitoring is added independently by the build-time injector.
 # No integration identity or secret is stored in this image.
 package_update: true
 package_upgrade: false
@@ -434,14 +434,11 @@ def seed_akvorado(apps, schema_editor):
         "install_qemu_guest_agent": True,
         "install_zabbix_agent2": True,
         "zabbix_server": "zabbix.nmulti.cloud",
-        "install_nms_agent": True,
-        "nms_agent_backend_url": "https://backend.nms.nmulti.cloud",
-        "provisions_service": "akvorado",
         "installer_config": config,
         "description": (
             "Akvorado 2.4.0 golden cloud-init template (VMID 9070) on "
             "CLUSTER01-DC01. First boot starts the complete pinned Compose "
-            "stack and self-registers the injected NMS host agent."
+            "stack."
         ),
     }
     template, template_created = PackerTemplate.objects.get_or_create(
@@ -473,7 +470,7 @@ def unseed_akvorado(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("netbox_packer", "0023_packertemplate_nms_agent_and_service_marker"),
+        ("netbox_packer", "0022_update_fileserver_package_settings_comment"),
     ]
 
     operations = [

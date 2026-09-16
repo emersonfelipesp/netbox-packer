@@ -14,7 +14,7 @@ K8S_CONTROL_PLANE_CONFIG = """#cloud-config
 # Installs the container runtime and Kubernetes binaries, then pre-pulls
 # control-plane component images (etcd, apiserver, controller-manager,
 # scheduler, coredns, pause) so that kubeadm init runs fast after boot.
-# Does NOT run kubeadm init — the nms-backend provisioning engine does
+# Does NOT run kubeadm init — the external provisioning service provisioning engine does
 # that step over SSH after the VM starts.
 package_update: true
 package_upgrade: true
@@ -117,7 +117,7 @@ K8S_WORKER_NODE_CONFIG = """#cloud-config
 # Applied to cloned VMs via Proxmox cicustom user-data at first boot.
 # Installs the container runtime and Kubernetes binaries.
 # Does NOT pre-pull control-plane images (only needed on the CP).
-# Does NOT run kubeadm join — the nms-backend provisioning engine does
+# Does NOT run kubeadm join — the external provisioning service provisioning engine does
 # that step over SSH after the VM starts.
 package_update: true
 package_upgrade: true
@@ -237,7 +237,7 @@ def seed_k8s_role_templates(apps, schema_editor):
                 "Installs containerd, kubelet, kubeadm, kubectl, and pre-pulls "
                 "all control-plane images (etcd, apiserver, controller-manager, "
                 "scheduler, coredns, pause) via 'kubeadm config images pull'. "
-                "Does not run kubeadm init — that is handled by nms-backend "
+                "Does not run kubeadm init — that is handled by external provisioning service "
                 "provisioning over SSH after the VM starts."
             ),
         },
@@ -260,7 +260,7 @@ def seed_k8s_role_templates(apps, schema_editor):
                 "Kubernetes 1.31 Control Plane template (Ubuntu 24.04, VMID 9013). "
                 "Baked via proxbox-api on ProxmoxEndpoint 10.0.30.71 using storage "
                 "'local'. Clone this template for CP VMs; kubeadm init is run by "
-                "the nms-backend K8s provisioning engine after first boot."
+                "the external provisioning service K8s provisioning engine after first boot."
             ),
         },
     )
@@ -278,7 +278,7 @@ def seed_k8s_role_templates(apps, schema_editor):
                 "Kubernetes 1.31 Worker Node cloud-config on Ubuntu 24.04. "
                 "Installs containerd, kubelet, kubeadm, and kubectl. Does not "
                 "pre-pull control-plane images (not needed on workers). Does not "
-                "run kubeadm join — that is handled by nms-backend provisioning "
+                "run kubeadm join — that is handled by external provisioning service provisioning "
                 "over SSH after the VM starts."
             ),
         },
@@ -301,7 +301,7 @@ def seed_k8s_role_templates(apps, schema_editor):
                 "Kubernetes 1.31 Worker Node template (Ubuntu 24.04, VMID 9014). "
                 "Baked via proxbox-api on ProxmoxEndpoint 10.0.30.71 using storage "
                 "'local'. Clone this template for worker VMs; kubeadm join is run "
-                "by the nms-backend K8s provisioning engine after first boot."
+                "by the external provisioning service K8s provisioning engine after first boot."
             ),
         },
     )

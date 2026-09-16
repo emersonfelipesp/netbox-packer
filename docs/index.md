@@ -33,8 +33,7 @@ The Akvorado seed is `akvorado-2.4.0-ubuntu-2404`, VMID `9070`, on
 CLUSTER01-DC01 (`https://10.0.30.71:8006` / `10.0.30.71`). Its first-boot
 cloud-config installs Docker and starts the pinned Kafka `4.2.0`, Valkey `9.0`,
 ClickHouse `26.3`, and Akvorado `2.4.0` stack under `akvorado.service`. It ships
-a working credential-free default configuration and opts into NMS host-agent
-self-registration; the agent stays opt-in for every other template. The console
+a working credential-free default configuration. The console
 binds only to `127.0.0.1:8081` and requires an SSH tunnel or a separately
 provisioned authenticating reverse proxy.
 
@@ -49,22 +48,20 @@ enabled, telemetry upload off, Processing Engine off, an `influxdb3-core.service
 drop-in, a held package, and a `node-id` derived from the per-VM SMBIOS UUID
 rather than the shared clone hostname — and refuses to install on any other Debian
 release. Its build resolves the Trixie Debian 13 base image, and the Ubuntu/amd64-only
-Zabbix and NMS agent injections are disabled for it. Its administrative token still comes only from
-`service.influxdb.1.bootstrap`. Build dispatch selects an enabled
+Zabbix injection is disabled for it. Its administrative token is supplied only
+after cloning. Build dispatch selects an enabled
 `PackerBuildTarget` URL plus `target_node`, verifies both endpoint write gates,
 and resolves the exact proxbox-api `endpoint_id`; a numeric caller override is
 not authorization. Cloud-init contains no credentials or
-product setup call; typed NMS RPC owns onboarding and netbox-nms owns encrypted
-secret material exposed only as `nms-secret:` references. The legacy VMID
+product setup call; credentials are supplied only after cloning. The legacy VMID
 `9011` profile remains development-only and is
 hardened/marked pending by migration `0020`.
 
 Explorer uses Debian's `docker.io` package and the immutable image reference
 `influxdata/influxdb3-ui@sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc`.
 `influxdb3-explorer.service` publishes port `8080` on loopback by default. Its
-golden image has no Core URL or credential: `service.influxdb.1.token_create`
-returns an `nms-secret:<opaque-id>` reference, which provision-time automation
-resolves only when writing the cloned guest's root-owned `root:1500` Explorer
+golden image has no Core URL or credential. Provision-time automation supplies
+the credential only when writing the cloned guest's root-owned `root:1500` Explorer
 connection configuration.
 
 The Kubernetes 1.31 seeds target CLUSTER01-DC01 at `https://10.0.30.71:8006` /
@@ -87,26 +84,10 @@ CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. Its installer
 config `passbolt-ce-ubuntu-2404` installs the native `passbolt-ce-server` package
 (nginx + php-fpm + local MariaDB) for `credential.nmulti.cloud` with
 `PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true`. TLS terminates upstream at
-nginx-nms so the guest serves plain HTTP on `:80`. QEMU guest agent and Zabbix
+upstream reverse proxy so the guest serves plain HTTP on `:80`. QEMU guest agent and Zabbix
 Agent 2 are injected at bake time; the DB password is generated on first boot and
 the server key/JWT/database come from the data migration.
 
-The File Server all-in-one seed is `tpl-fileserver-allinone-ubuntu-2404`, VMID
-`9300`, targeting CLUSTER01-DC01 at `https://10.0.30.71:8006` / node
-`10.0.30.71`. Its installer config `fileserver-allinone-cloud-config` v1.0.1 installs
-Samba AD/DC packages, Nextcloud web/PHP prerequisites, `python3-venv`, and
-monitoring agents. `nms-fileserver-agent` is installed from
-`NMS_FILESERVER_AGENT_PIP_SPEC`, not apt. The singleton `PackerPluginSettings`
-row holds the plaintext `fileserver_package_read_user` and the
-Fernet-encrypted token, set through `set_fileserver_package_read_token()`, for a
-dedicated non-human Gitea identity with package-Read permission only. Dispatch
-fails closed without either value and bakes the sole authenticated index into
-root-only `/etc/nms-fileserver-agent/pip.conf`; operators rotate the settings
-token and rebake VMID `9300`. The image installs
-`nms-fileserver-agent-enroll.service` and
-`nms-fileserver-agent-heartbeat.timer`. The baked agent config uses
-`https://backend.nms.nmulti.cloud` and `https://netbox.nmulti.cloud`;
-clone-time user-data supplies the per-instance enrollment token.
 
 The base Ubuntu LTS cloud-init seeds — `ubuntu-2204-cloudinit-base` (VMID
 `9040`), `ubuntu-2404-cloudinit-base` (VMID `9041`), and

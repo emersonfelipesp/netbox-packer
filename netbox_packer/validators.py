@@ -89,7 +89,7 @@ class NodeAffinityValidator:
         Run all affinity checks. Returns (is_valid, errors, warnings).
 
         Args:
-            proxmox_endpoint: NMSBackend instance (falls back to template.proxmox_endpoint)
+            proxmox_endpoint: Endpoint instance (falls back to template.proxmox_endpoint)
             proxmox_node: str node name (falls back to template.proxmox_node)
         """
         endpoint = proxmox_endpoint or self.template.proxmox_endpoint

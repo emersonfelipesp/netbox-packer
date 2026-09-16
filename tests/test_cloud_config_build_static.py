@@ -14,7 +14,6 @@ import posixpath
 import re
 import subprocess
 import sys
-import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -176,11 +175,6 @@ def _load_jobs_isolated(monkeypatch):
     netbox_jobs.JobRunner = type("JobRunner", (), {})
     package = ModuleType("netbox_packer")
     package.__path__ = [str(PKG)]
-    package_index = ModuleType("netbox_packer.package_index")
-    package_index.redact_fileserver_package_token = lambda value, _token: value
-    package_index.render_fileserver_package_index = lambda value, **_kwargs: value
-    package_index.sanitized_fileserver_package_error = lambda error, _token: error
-
     for name, module in {
         "django": django,
         "django.conf": django_conf,
@@ -188,7 +182,6 @@ def _load_jobs_isolated(monkeypatch):
         "netbox": netbox,
         "netbox.jobs": netbox_jobs,
         "netbox_packer": package,
-        "netbox_packer.package_index": package_index,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
 
@@ -223,20 +216,6 @@ def test_plugin_settings_has_proxbox_api_fields() -> None:
     assert "def _fernet():" in src
 
 
-def test_plugin_settings_has_fileserver_package_credentials() -> None:
-    src = _read("netbox_packer/models.py")
-    assert "fileserver_package_read_user = models.CharField(" in src
-    assert "fileserver_package_read_token_encrypted = models.CharField(" in src
-    assert "def set_fileserver_package_read_token(self, plain: str) -> None:" in src
-    assert "def get_fileserver_package_read_token(self) -> str:" in src
-
-    migration_src = _read("netbox_packer/migrations/0021_packerpluginsettings_fileserver_package_credentials.py")
-    assert '("netbox_packer", "0020_seed_influxdb_profiles")' in migration_src
-    assert 'name="fileserver_package_read_user"' in migration_src
-    assert 'name="fileserver_package_read_token_encrypted"' in migration_src
-    assert "editable=False" in migration_src
-
-
 def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     src = _read("netbox_packer/jobs.py")
     assert 'installer.installer_type == "cloud_config"' in src
@@ -244,13 +223,6 @@ def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
     assert "_inject_monitoring_agents(installer.content, template)" in src
-    assert "fileserver_package_read_token = settings_row.get_fileserver_package_read_token()" in src
-    assert "user_data_yaml = render_fileserver_package_index(" in src
-    assert "settings_row=settings_row," in src
-    assert "template_name=template.name," in src
-    assert "is_fileserver_golden_template=template.is_fileserver_golden_template," in src
-    assert "redact_fileserver_package_token(str(value), fileserver_package_read_token)" in src
-    assert "raise sanitized_fileserver_package_error(exc, fileserver_package_read_token) from None" in src
     assert "user_data_yaml=user_data_yaml" in src
     assert "proxbox-api signed handshake: plan -> preflight -> execute" in src
     # Gap 1: PackerBuild creation must enqueue the job.
@@ -379,7 +351,7 @@ def test_influxdb_cloud_config_bootstrap_contract() -> None:
     assert "apt-mark hold influxdb3-core" in migration
     assert "systemctl enable --now influxdb.service" in migration
     assert "systemctl enable --now influxdb3-core.service" in migration
-    assert "Credentials and initial setup are intentionally deferred to typed NMS RPC" in migration
+    assert "Credentials and initial setup are intentionally deferred to post-clone operator automation" in migration
     for forbidden in (
         "/api/v2/setup",
         "password:",
@@ -424,7 +396,6 @@ def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
         "9051",
         "endpoint_id",
         "target_node",
-        "nms-secret",
     )
     for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)
@@ -508,205 +479,8 @@ def test_powerdns_auth_recursor_process_is_documented_for_operators_and_agents()
             assert text in doc, f"{rel} must document {text}"
 
 
-def test_fileserver_allinone_seed_contract() -> None:
-    rel = "netbox_packer/migrations/0014_seed_fileserver_allinone_cloud_init.py"
-    seed_rel = "netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml"
-    src = _read(rel)
-    seed = _read(seed_rel)
-    constants = _literal_assignments(rel)
-    name, defaults = _packer_template_seed_defaults(rel)
-
-    assert yaml.safe_load(seed)["package_update"] is True
-    assert seed.startswith("#cloud-config\n")
-
-    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
-    assert constants["CONFIG_VERSION"] == "1.0.0"
-    assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
-    assert constants["PROXMOX_ENDPOINT"] == "https://10.0.30.71:8006"
-    assert constants["PROXMOX_NODE"] == "10.0.30.71"
-    assert name == constants["TEMPLATE_NAME"]
-
-    assert defaults["os_family"] == "ubuntu"
-    assert defaults["os_version"] == "24.04"
-    assert defaults["proxmox_endpoint"] == "https://10.0.30.71:8006"
-    assert defaults["proxmox_node"] == "10.0.30.71"
-    assert defaults["storage_pool"] == "local"
-    assert defaults["cloud_init_ready"] is True
-    assert defaults["build_status"] == "pending"
-    assert defaults["install_qemu_guest_agent"] is True
-    assert defaults["install_zabbix_agent2"] is True
-    assert defaults["zabbix_server"] == "zabbix.nmulti.cloud"
-
-    assert '"installer_type": "cloud_config"' in src
-    for package in (
-        "samba",
-        "samba-dsdb-modules",
-        "samba-vfs-modules",
-        "winbind",
-        "libnss-winbind",
-        "libpam-winbind",
-        "krb5-user",
-        "acl",
-        "attr",
-        "chrony",
-        "nginx",
-        "php-fpm",
-        "php-ldap",
-        "php-smbclient",
-        "php-pgsql",
-        "php-gd",
-        "php-curl",
-        "php-zip",
-        "php-xml",
-        "php-mbstring",
-        "php-intl",
-        "php-bcmath",
-        "php-gmp",
-        "php-imagick",
-        "smbclient",
-        "cifs-utils",
-        "postgresql-client",
-        "python3-venv",
-        "qemu-guest-agent",
-        "zabbix-agent2",
-    ):
-        assert package in seed
-
-    assert "apt-get install -y zabbix-agent2" in seed
-    assert "apt-get install -y zabbix-agent2 nms-fileserver-agent" not in seed
-    assert 'python3 -m venv "${NMS_FILESERVER_AGENT_VENV_DIR}"' in seed
-    assert "pip install --no-deps" in seed
-    assert '"${NMS_FILESERVER_AGENT_PIP_SPEC}"' in seed
-    assert 'NMS_FILESERVER_AGENT_PIP_SPEC="${NMS_FILESERVER_AGENT_PIP_SPEC:-nms-fileserver-agent==0.1.0}"' in seed
-    config = yaml.safe_load(seed)
-    pip_config = next(item for item in config["write_files"] if item["path"] == "/etc/nms-fileserver-agent/pip.conf")
-    assert pip_config["permissions"] == "0600"
-    assert (
-        "https://__NMS_FILESERVER_PACKAGE_READ_USER__:__NMS_FILESERVER_PACKAGE_READ_TOKEN__@" in pip_config["content"]
-    )
-    assert "git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/" in pip_config["content"]
-    assert "extra-index-url =" in pip_config["content"]
-    assert "NMS_FILESERVER_PACKAGE_READ_TOKEN" in pip_config["content"]
-    assert "service environment" not in pip_config["content"]
-    assert "Operators rotate NMS_FILESERVER_PACKAGE_READ_TOKEN" not in pip_config["content"]
-    assert "PackerPluginSettings" in pip_config["content"]
-    assert "set_fileserver_package_read_token()" in pip_config["content"]
-    assert "dedicated non-human Gitea package-Read token" in pip_config["content"]
-    assert 'PIP_INDEX_URL="https://pypi.org/simple" PIP_EXTRA_INDEX_URL=""' in seed
-    assert 'pip install "httpx>=0.27"' in seed
-    assert 'PIP_CONFIG_FILE="${NMS_FILESERVER_AGENT_DIR}/pip.conf"' in seed
-    assert 'env -u PIP_INDEX_URL PIP_EXTRA_INDEX_URL=""' in seed
-    assert "--extra-index-url" not in seed
-    assert "systemctl enable nms-fileserver-agent-enroll.service" in seed
-    assert "systemctl enable --now nms-fileserver-agent-heartbeat.timer" in seed
-    assert "systemctl disable --now nms-fileserver-agent-enroll.service || true" in seed
-    assert "systemctl disable --now nms-fileserver-agent-heartbeat.timer || true" in seed
-    assert "systemctl disable --now nms-fileserver-agent-heartbeat.service || true" in seed
-    assert "systemctl disable --now nms-fileserver-agent || true" not in seed
-    assert "NMS_BACKEND_URL=https://backend.nms.nmulti.cloud" in seed
-    assert "NETBOX_URL=https://netbox.nmulti.cloud" in seed
-    assert "NMS_FILESERVER_ENROLLMENT_TOKEN=" not in seed
-    assert "Server=zabbix.nmulti.cloud" in seed
-    assert "systemctl disable --now nginx || true" in seed
-    assert "systemctl mask smbd nmbd winbind || true" in seed
-    assert "samba-tool domain provision" not in seed
-    assert "occ maintenance:install" not in seed
-    assert "PackerTemplate.objects.filter(name=TEMPLATE_NAME).delete()" in src
-    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
-    assert '"netbox_packer", "0013_seed_powerdns_auth_recursor_cloud_init"' in src
-
-
-def test_fileserver_allinone_process_is_documented_for_operators_and_agents() -> None:
-    required = (
-        "tpl-fileserver-allinone-ubuntu-2404",
-        "fileserver-allinone-cloud-config",
-        "9300",
-        "https://10.0.30.71:8006",
-        "10.0.30.71",
-        "nms-fileserver-agent",
-        "NMS_FILESERVER_AGENT_PIP_SPEC",
-        "PackerPluginSettings",
-        "fileserver_package_read_user",
-        "set_fileserver_package_read_token",
-        "package-Read",
-        "python3-venv",
-        "nms-fileserver-agent-enroll.service",
-        "nms-fileserver-agent-heartbeat.timer",
-        "https://backend.nms.nmulti.cloud",
-        "https://netbox.nmulti.cloud",
-    )
-    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
-        doc = _read(rel)
-        for text in required:
-            assert text in doc, f"{rel} must document {text}"
-        assert "NMS_FILESERVER_PACKAGE_READ_USER" not in doc
-        assert "NMS_FILESERVER_PACKAGE_READ_TOKEN" not in doc
-
-
-def test_fileserver_package_index_upgrade_migration_contract() -> None:
-    rel = "netbox_packer/migrations/0017_update_fileserver_agent_package_index.py"
-    src = _read(rel)
-    constants = _literal_assignments(rel)
-
-    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
-    assert constants["PREVIOUS_CONFIG_VERSION"] == "1.0.0"
-    assert constants["CONFIG_VERSION"] == "1.0.1"
-    assert constants["TEMPLATE_NAME"] == "tpl-fileserver-allinone-ubuntu-2404"
-    assert constants["TEMPLATE_VMID"] == 9300
-    assert "service environment" in constants["FILESERVER_ALLINONE_CLOUD_CONFIG"]
-    assert "Operators rotate NMS_FILESERVER_PACKAGE_READ_TOKEN" in constants["FILESERVER_ALLINONE_CLOUD_CONFIG"]
-    assert "PackerInstallerConfig.objects.update_or_create(" in src
-    assert "proxmox_template_id=TEMPLATE_VMID" in src
-    # The template's own description must be corrected alongside proxmox_template_id —
-    # otherwise it keeps advertising the superseded VMID 9032 after this migration runs.
-    assert "VMID 9300" in src
-    assert "VMID 9032" not in src.split("def update_fileserver_package_index", 1)[1].split("def ", 1)[0]
-    assert 'update(installer_config=previous, build_status="pending")' in src
-    assert "PackerInstallerConfig.objects.filter(name=CONFIG_NAME, version=CONFIG_VERSION).delete()" in src
-    assert '("netbox_packer", "0016_seed_ubuntu_lts_base_cloud_init")' in src
-
-
-def test_fileserver_package_settings_comment_migration_contract() -> None:
-    rel = "netbox_packer/migrations/0022_update_fileserver_package_settings_comment.py"
-    src = _read(rel)
-    constants = _literal_assignments(rel)
-    seed = _read("netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml")
-
-    assert constants["CONFIG_NAME"] == "fileserver-allinone-cloud-config"
-    assert constants["CONFIG_VERSION"] == "1.0.1"
-    historical_content = _literal_assignments("netbox_packer/migrations/0017_update_fileserver_agent_package_index.py")[
-        "FILESERVER_ALLINONE_CLOUD_CONFIG"
-    ]
-    assert constants["STALE_PIP_CONF_COMMENT"] in historical_content
-    assert constants["STALE_PIP_CONF_COMMENT"] not in seed
-    assert constants["SETTINGS_PIP_CONF_COMMENT"] in seed
-    assert (
-        historical_content.replace(
-            constants["STALE_PIP_CONF_COMMENT"],
-            constants["SETTINGS_PIP_CONF_COMMENT"],
-            1,
-        )
-        == seed
-    )
-    assert "updated_content = config.content.replace(" in src
-    assert "checksum=hashlib.sha256(updated_content.encode()).hexdigest()" in src
-    assert 'update(build_status="pending")' in src
-    assert '"0021_packerpluginsettings_fileserver_package_credentials"' in src
-    assert "migrations.RunPython(update_fileserver_package_settings_comment, migrations.RunPython.noop)" in src
-
-
 def test_packertemplate_name_is_unique_at_the_db_level() -> None:
-    """Historical/defense-in-depth: `name` uniqueness, not the current credential boundary.
-
-    At the time migration 0018 landed, the File Server credential guard
-    trusted `PackerTemplate.name` alone, so without a DB-level uniqueness
-    constraint a differently-owned template could be renamed to
-    `FILESERVER_TEMPLATE_NAME` and pass `render_fileserver_package_index`'s
-    identity check, exfiltrating the package-read credential. Migration 0019
-    replaced `name` with the immutable `is_fileserver_golden_template` flag as
-    the actual trust boundary; this constraint remains as defense in depth
-    against two rows sharing the trusted name simultaneously.
-    """
+    """Template names remain unique at the database boundary."""
     models_src = _read("netbox_packer/models.py")
     tree = ast.parse(models_src)
     packer_template = next(
@@ -729,239 +503,6 @@ def test_packertemplate_name_is_unique_at_the_db_level() -> None:
     assert 'model_name="packertemplate"' in migration_src
     assert 'name="name"' in migration_src
     assert "unique=True" in migration_src
-
-
-def test_packertemplate_has_immutable_golden_template_flag() -> None:
-    """`unique=True` on `name` (migration 0018) stops two rows sharing the trusted
-    name *simultaneously*, but not the trusted row being renamed away and a
-    different row later reclaiming the freed name. `is_fileserver_golden_template`
-    must be `editable=False` so it can only be set by a migration, never through
-    `PackerTemplateForm` or the DRF serializer.
-    """
-    models_src = _read("netbox_packer/models.py")
-    tree = ast.parse(models_src)
-    packer_template = next(
-        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplate"
-    )
-    flag_assign = next(
-        node
-        for node in packer_template.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and node.targets[0].id == "is_fileserver_golden_template"
-    )
-    field_call = flag_assign.value
-    assert isinstance(field_call, ast.Call)
-    kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in field_call.keywords}
-    assert kwargs.get("editable") is False, "is_fileserver_golden_template must declare editable=False"
-    assert kwargs.get("default") is False
-
-    forms_src = _read("netbox_packer/forms.py")
-    form_tree = ast.parse(forms_src)
-    packer_template_form = next(
-        node for node in form_tree.body if isinstance(node, ast.ClassDef) and node.name == "PackerTemplateForm"
-    )
-    meta = next(node for node in packer_template_form.body if isinstance(node, ast.ClassDef) and node.name == "Meta")
-    fields_assign = next(node for node in meta.body if isinstance(node, ast.Assign) and node.targets[0].id == "fields")
-    form_fields = ast.literal_eval(fields_assign.value)
-    assert "is_fileserver_golden_template" not in form_fields
-
-    serializers_src = _read("netbox_packer/api/serializers.py")
-    assert (
-        "is_fileserver_golden_template"
-        not in serializers_src.split("class PackerTemplateSerializer", 1)[1].split("class ", 1)[0]
-    )
-
-    migration_rel = "netbox_packer/migrations/0019_stamp_fileserver_golden_template.py"
-    migration_src = _read(migration_rel)
-    assert '("netbox_packer", "0018_alter_packertemplate_name_unique")' in migration_src
-    assert 'name="is_fileserver_golden_template"' in migration_src
-    assert "editable=False" in migration_src
-    assert "migrations.RunPython(stamp_golden_template, unstamp_golden_template)" in migration_src
-    assert 'TEMPLATE_NAME = "tpl-fileserver-allinone-ubuntu-2404"' in migration_src
-
-
-class _FakePackerPluginSettings:
-    def __init__(self, user: str = "", token: str = "") -> None:
-        self.fileserver_package_read_user = user
-        self._fileserver_package_read_token = token
-
-    def get_fileserver_package_read_token(self) -> str:
-        return self._fileserver_package_read_token
-
-
-def test_fileserver_package_index_authorizes_by_flag_not_name() -> None:
-    """Simulate the rename-then-reclaim bypass the flag exists to close.
-
-    `render_fileserver_package_index` must authorize on
-    `is_fileserver_golden_template` alone, independent of `template_name` — so a
-    row that still carries the trusted name after being reclaimed (flag False)
-    is rejected, and the real golden row keeps working even if renamed away from
-    `FILESERVER_TEMPLATE_NAME` (flag True survives renames).
-    """
-    mod = _load_package_index()
-    config = (
-        "index-url = https://"
-        + mod.PACKAGE_READ_USER_PLACEHOLDER
-        + ":"
-        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
-        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
-    )
-
-    # A new row that reclaimed the trusted name after the original was renamed
-    # away must NOT receive credentials merely because the name matches.
-    try:
-        mod.render_fileserver_package_index(
-            config,
-            settings_row=_FakePackerPluginSettings("fileserver reader", "token"),
-            template_name=mod.FILESERVER_TEMPLATE_NAME,
-            is_fileserver_golden_template=False,
-        )
-    except RuntimeError as exc:
-        assert "not the File Server golden template" in str(exc)
-    else:  # pragma: no cover - name alone must never authorize credential injection
-        raise AssertionError("expected a reclaimed name with flag=False to be rejected")
-
-    # The original golden template, renamed away, must keep working because the
-    # flag (not the name) is what carries trust.
-    rendered = mod.render_fileserver_package_index(
-        config,
-        settings_row=_FakePackerPluginSettings("fileserver reader", "token"),
-        template_name="renamed-golden-template",
-        is_fileserver_golden_template=True,
-    )
-    assert mod.PACKAGE_READ_USER_PLACEHOLDER not in rendered
-    assert mod.PACKAGE_READ_TOKEN_PLACEHOLDER not in rendered
-
-
-def _load_package_index():
-    """Load package_index.py in isolation (it only imports the stdlib)."""
-    path = PKG / "package_index.py"
-    spec = importlib.util.spec_from_file_location("netbox_packer_package_index_iso", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def test_fileserver_package_index_credentials_are_required_and_url_encoded() -> None:
-    mod = _load_package_index()
-    config = (
-        "index-url = https://"
-        + mod.PACKAGE_READ_USER_PLACEHOLDER
-        + ":"
-        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
-        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
-    )
-
-    try:
-        mod.render_fileserver_package_index(
-            config,
-            settings_row=_FakePackerPluginSettings(),
-            template_name=mod.FILESERVER_TEMPLATE_NAME,
-            is_fileserver_golden_template=True,
-        )
-    except RuntimeError as exc:
-        assert "PackerPluginSettings.fileserver_package_read_user" in str(exc)
-        assert "PackerPluginSettings.fileserver_package_read_token" in str(exc)
-    else:  # pragma: no cover - a credentialed bake must fail closed
-        raise AssertionError("expected missing package-index credentials to fail")
-
-    rendered = mod.render_fileserver_package_index(
-        config,
-        settings_row=_FakePackerPluginSettings("fileserver reader", "read/token?only"),
-        template_name=mod.FILESERVER_TEMPLATE_NAME,
-        is_fileserver_golden_template=True,
-    )
-    assert "fileserver%20reader:read%2Ftoken%3Fonly@" in rendered
-    assert "read/token?only" not in rendered
-
-
-def test_fileserver_package_index_rejects_placeholders_on_other_templates() -> None:
-    """An unrelated template embedding the placeholder strings must never receive credentials."""
-    mod = _load_package_index()
-    config = (
-        "index-url = https://"
-        + mod.PACKAGE_READ_USER_PLACEHOLDER
-        + ":"
-        + mod.PACKAGE_READ_TOKEN_PLACEHOLDER
-        + "@git.nmulti.cloud/api/packages/N-MultiCloud/pypi/simple/"
-    )
-    try:
-        mod.render_fileserver_package_index(
-            config,
-            settings_row=_FakePackerPluginSettings("fileserver reader", "read/token?only"),
-            template_name="some-other-template",
-            is_fileserver_golden_template=False,
-        )
-    except RuntimeError as exc:
-        assert "not the File Server golden template" in str(exc)
-    else:  # pragma: no cover - credential injection must be scoped to the File Server template
-        raise AssertionError("expected placeholders on an unrelated template to be rejected")
-
-
-def test_fileserver_package_index_non_target_passthrough_and_log_redaction() -> None:
-    mod = _load_package_index()
-    unrelated = "#cloud-config\npackages:\n  - qemu-guest-agent\n"
-    assert (
-        mod.render_fileserver_package_index(
-            unrelated,
-            settings_row=_FakePackerPluginSettings(),
-            template_name="some-other-template",
-            is_fileserver_golden_template=False,
-        )
-        == unrelated
-    )
-    assert (
-        mod.render_fileserver_package_index(
-            unrelated,
-            settings_row=_FakePackerPluginSettings(),
-            template_name=mod.FILESERVER_TEMPLATE_NAME,
-            is_fileserver_golden_template=True,
-        )
-        == unrelated
-    )
-
-    package_token = "read/token?only"
-    output = "raw=read/token?only encoded=read%2Ftoken%3Fonly"
-    redacted = mod.redact_fileserver_package_token(output, package_token)
-    assert "read/token?only" not in redacted
-    assert "read%2Ftoken%3Fonly" not in redacted
-    assert redacted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
-
-    try:
-        raise RuntimeError(output)
-    except RuntimeError as original:
-        try:
-            raise mod.sanitized_fileserver_package_error(original, package_token) from None
-        except RuntimeError as safe_error:
-            formatted = "".join(traceback.format_exception(safe_error))
-    assert "read/token?only" not in formatted
-    assert "read%2Ftoken%3Fonly" not in formatted
-    assert formatted.count(mod.REDACTED_PACKAGE_TOKEN) == 2
-
-
-def test_fileserver_package_index_target_without_placeholders_fails_closed() -> None:
-    mod = _load_package_index()
-    target_without_placeholders = f"#cloud-config\npath: {mod.FILESERVER_PIP_CONFIG_PATH}\n"
-    try:
-        mod.render_fileserver_package_index(
-            target_without_placeholders,
-            settings_row=_FakePackerPluginSettings(),
-            template_name=mod.FILESERVER_TEMPLATE_NAME,
-            is_fileserver_golden_template=True,
-        )
-    except RuntimeError as exc:
-        assert "placeholders are missing" in str(exc)
-    else:  # pragma: no cover - the target config must never fall back to public PyPI
-        raise AssertionError("expected missing File Server placeholders to fail")
-
-
-def test_fileserver_package_index_has_no_service_environment_dependency() -> None:
-    src = _read("netbox_packer/package_index.py")
-    assert "import os" not in src
-    assert "os.environ" not in src
-    assert "PACKAGE_READ_USER_ENV" not in src
-    assert "PACKAGE_READ_TOKEN_ENV" not in src
 
 
 def test_passbolt_ce_seed_contract() -> None:
@@ -1404,208 +945,6 @@ def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
 # ── Monitoring agent injection ────────────────────────────────────────────────
 
 
-def test_model_has_monitoring_agent_fields() -> None:
-    src = _read("netbox_packer/models.py")
-    assert "install_qemu_guest_agent = models.BooleanField(" in src
-    assert "install_zabbix_agent2 = models.BooleanField(" in src
-    assert "install_nms_agent = models.BooleanField(" in src
-    assert "nms_agent_backend_url = models.URLField(" in src
-    assert 'schemes=["https"]' in src
-    assert "validators=[NMS_AGENT_BACKEND_URL_VALIDATOR]" in src
-    assert "zabbix_server = models.CharField(" in src
-    assert '"zabbix.nmulti.cloud"' in src
-    assert 'default="https://backend.nms.nmulti.cloud"' in src
-    assert "provisions_service = models.CharField(" in src
-    assert 'default="", editable=False' in src
-
-    forms_src = _read("netbox_packer/forms.py")
-    serializers_src = _read("netbox_packer/api/serializers.py")
-    assert "def clean_nms_agent_backend_url(self):" in forms_src
-    assert "NMS_AGENT_BACKEND_URL_VALIDATOR(value)" in forms_src
-    assert "def validate_nms_agent_backend_url(self, value):" in serializers_src
-    assert 'urlsplit(value).scheme.lower() != "https"' in serializers_src
-
-
-def test_migration_0008_adds_monitoring_agent_fields() -> None:
-    src = _read("netbox_packer/migrations/0008_packertemplate_monitoring_agents.py")
-    assert '"install_qemu_guest_agent"' in src
-    assert '"install_zabbix_agent2"' in src
-    assert '"zabbix_server"' in src
-    assert '"0007_seed_influxdb_cloud_init"' in src  # correct dependency
-
-
-def test_migration_0023_adds_optional_nms_agent_and_service_marker() -> None:
-    src = _read("netbox_packer/migrations/0023_packertemplate_nms_agent_and_service_marker.py")
-    assert '("netbox_packer", "0022_update_fileserver_package_settings_comment")' in src
-    assert 'name="install_nms_agent"' in src
-    assert "default=False" in src
-    assert 'name="nms_agent_backend_url"' in src
-    assert 'default="https://backend.nms.nmulti.cloud"' in src
-    assert 'schemes=["https"]' in src
-    assert "Enter an HTTPS URL for the NMS agent backend." in src
-    assert 'name="provisions_service"' in src
-    assert "editable=False" in src
-
-
-def test_jobs_has_monitoring_injection_functions() -> None:
-    src = _read("netbox_packer/jobs.py")
-    assert "def _zabbix_agent2_bootstrap(zabbix_server" in src
-    assert "def _nms_agent_bootstrap()" in src
-    assert "def _inject_monitoring_agents(user_data_yaml" in src
-    # Injection function uses deduplication: skip packages if already present.
-    assert '"qemu-guest-agent" not in pkgs' in src
-    # Zabbix whole-YAML dedup: skip entirely if zabbix-agent2 already in content.
-    assert '"zabbix-agent2" not in user_data_yaml' in src
-    assert 'getattr(template, "install_nms_agent", False)' in src
-    assert '"nms-agent" not in user_data_yaml' not in src
-    assert "expected_paths.issubset(existing_paths)" in src
-    assert "bootstrap_command in runcmds" in src
-    assert 'return ["akvorado.service"]' in src
-    # Zabbix bootstrap script uses ServerActive= with the configured server.
-    assert "ServerActive=" in src
-    # Security: module-level regex guard prevents heredoc break-out via zabbix_server.
-    assert "_ZABBIX_SERVER_RE" in src
-    assert "raise ValueError" in src
-    # Password SSH: every baked image permits password auth (ssh_pwauth), unless
-    # the template already declares it. The password itself is never baked.
-    assert '"ssh_pwauth" not in config' in src
-    assert 'config["ssh_pwauth"] = True' in src
-
-
-def test_nms_agent_injection_renders_bootstrap_and_deduplicates(monkeypatch) -> None:
-    mod = _load_jobs_isolated(monkeypatch)
-    template = SimpleNamespace(
-        install_qemu_guest_agent=False,
-        install_zabbix_agent2=False,
-        install_nms_agent=True,
-        nms_agent_backend_url="https://backend.nms.nmulti.cloud/",
-        provisions_service="akvorado",
-    )
-
-    rendered = mod._inject_monitoring_agents("#cloud-config\npackage_update: false\n", template)
-    config = yaml.safe_load(rendered.split("\n", 1)[1])
-    files = {item["path"]: item for item in config["write_files"]}
-
-    assert set(files) == {
-        "/etc/nms-agent/config.yaml",
-        "/etc/systemd/system/nms-agent.service",
-        "/opt/nmulticloud-nms-agent-bootstrap.sh",
-    }
-    agent_config = yaml.safe_load(files["/etc/nms-agent/config.yaml"]["content"])
-    assert agent_config["backend_url"] == "https://backend.nms.nmulti.cloud"
-    assert agent_config["otlp"]["endpoint"] == "https://backend.nms.nmulti.cloud"
-    assert agent_config["zabbix"] == {
-        "enabled": False,
-        "manage_agent2": False,
-        "server": "zabbix.nmulti.cloud",
-        "host_metadata": "",
-    }
-    assert agent_config["rpc"]["allowed_units"] == ["akvorado.service"]
-    assert files["/etc/nms-agent/config.yaml"]["permissions"] == "0600"
-
-    bootstrap = files["/opt/nmulticloud-nms-agent-bootstrap.sh"]["content"]
-    assert "cec1c4c73d8cf301654ecce63e09c3195fd1b8bb" in bootstrap
-    assert "readonly GO_VERSION='1.24.13'" in bootstrap
-    assert "go${GO_VERSION}.linux-amd64.tar.gz" in bootstrap
-    assert "sha256sum --check --strict" in bootstrap
-    assert "git -C" in bootstrap and "rev-parse HEAD" in bootstrap
-    assert "curl | bash" not in bootstrap
-    subprocess.run(["bash", "-n"], input=bootstrap, text=True, check=True)
-    assert config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
-
-    # The rendered content now references the agent, so a second pass must not
-    # add a second config, unit, script, or command.
-    rerendered = mod._inject_monitoring_agents(rendered, template)
-    rerendered_config = yaml.safe_load(rerendered.split("\n", 1)[1])
-    paths = [item["path"] for item in rerendered_config["write_files"]]
-    assert len(paths) == len(set(paths)) == 3
-    assert rerendered_config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
-
-
-def test_nms_agent_injection_defaults_off_and_rejects_unsafe_backend(monkeypatch) -> None:
-    mod = _load_jobs_isolated(monkeypatch)
-    base = "#cloud-config\npackage_update: false\n"
-    rendered = mod._inject_monitoring_agents(
-        base,
-        SimpleNamespace(install_qemu_guest_agent=False, install_zabbix_agent2=False),
-    )
-    assert "/etc/nms-agent/config.yaml" not in rendered
-
-    template = SimpleNamespace(
-        install_qemu_guest_agent=False,
-        install_zabbix_agent2=False,
-        install_nms_agent=True,
-        nms_agent_backend_url="https://operator:secret@example.invalid/path",
-        provisions_service="",
-    )
-    try:
-        mod._inject_monitoring_agents(base, template)
-    except ValueError as exc:
-        assert "without credentials" in str(exc)
-    else:  # pragma: no cover - unsafe interpolation must fail closed
-        raise AssertionError("expected credential-bearing backend URL to be rejected")
-
-    try:
-        mod._normalize_nms_agent_backend_url("http://backend.nms.nmulti.cloud")
-    except ValueError as exc:
-        assert "HTTPS URL" in str(exc)
-    else:  # pragma: no cover - plaintext bootstrap transport must fail closed
-        raise AssertionError("expected an HTTP backend URL to be rejected")
-
-
-def test_nms_agent_comment_only_mention_does_not_skip_injection(monkeypatch) -> None:
-    mod = _load_jobs_isolated(monkeypatch)
-    template = SimpleNamespace(
-        install_qemu_guest_agent=False,
-        install_zabbix_agent2=False,
-        install_nms_agent=True,
-        nms_agent_backend_url="https://backend.nms.nmulti.cloud",
-        provisions_service="",
-    )
-
-    rendered = mod._inject_monitoring_agents(
-        "#cloud-config\n# nms-agent is installed only when requested\npackage_update: false\n",
-        template,
-    )
-    config = yaml.safe_load(rendered.split("\n", 1)[1])
-
-    assert {item["path"] for item in config["write_files"]} == {
-        "/etc/nms-agent/config.yaml",
-        "/etc/systemd/system/nms-agent.service",
-        "/opt/nmulticloud-nms-agent-bootstrap.sh",
-    }
-    assert ["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"] in config["runcmd"]
-
-
-def test_nms_agent_partial_injection_is_completed(monkeypatch) -> None:
-    mod = _load_jobs_isolated(monkeypatch)
-    template = SimpleNamespace(
-        install_qemu_guest_agent=False,
-        install_zabbix_agent2=False,
-        install_nms_agent=True,
-        nms_agent_backend_url="https://backend.nms.nmulti.cloud",
-        provisions_service="",
-    )
-    partial = """#cloud-config
-write_files:
-  - path: /etc/systemd/system/nms-agent.service
-    permissions: '0644'
-    content: existing-unit
-"""
-
-    rendered = mod._inject_monitoring_agents(partial, template)
-    config = yaml.safe_load(rendered.split("\n", 1)[1])
-    files = {item["path"]: item for item in config["write_files"]}
-
-    assert set(files) == {
-        "/etc/nms-agent/config.yaml",
-        "/etc/systemd/system/nms-agent.service",
-        "/opt/nmulticloud-nms-agent-bootstrap.sh",
-    }
-    assert files["/etc/systemd/system/nms-agent.service"]["content"] == "existing-unit"
-    assert config["runcmd"].count(["bash", "/opt/nmulticloud-nms-agent-bootstrap.sh"]) == 1
-
-
 def test_akvorado_seed_contract() -> None:
     rel = "netbox_packer/migrations/0024_seed_akvorado_cloud_init.py"
     seed_rel = "netbox_packer/seeds/akvorado-2.4.0-ubuntu-2404.cloud-config.yaml"
@@ -1633,9 +972,6 @@ def test_akvorado_seed_contract() -> None:
     assert defaults["storage_pool"] == "local"
     assert defaults["install_qemu_guest_agent"] is True
     assert defaults["install_zabbix_agent2"] is True
-    assert defaults["install_nms_agent"] is True
-    assert defaults["nms_agent_backend_url"] == "https://backend.nms.nmulti.cloud"
-    assert defaults["provisions_service"] == "akvorado"
 
     cloud_config = yaml.safe_load(seed.split("\n", 1)[1])
     files = {item["path"]: item["content"] for item in cloud_config["write_files"]}
@@ -1691,18 +1027,16 @@ def test_akvorado_seed_contract() -> None:
         < install_script.index("cat > /etc/apt/sources.list.d/docker.sources")
         < install_script.index("apt-get update")
     )
-    assert "nms-agent" not in seed
 
 
 def test_akvorado_contract_is_documented() -> None:
     required = (
         "akvorado-2.4.0-ubuntu-2404",
         "9070",
-        "Kafka `4.2.0`",
-        "Valkey `9.0`",
-        "ClickHouse `26.3`",
+        "Kafka",
+        "Valkey",
+        "ClickHouse",
         "akvorado.service",
-        "https://backend.nms.nmulti.cloud",
     )
     for rel in (
         "README.md",
@@ -1766,8 +1100,6 @@ def test_influxdb3_core_debian13_seed_contract() -> None:
     # OFF because the shared injectors are Ubuntu/amd64-only — see the composed
     # cloud-config test below, which proves the injection really stays out.
     assert defaults["install_zabbix_agent2"] is False
-    assert defaults["install_nms_agent"] is False
-    assert defaults["provisions_service"] == "influxdb3-core"
 
     # The seeded os_family/os_version pair must be one the form actually offers,
     # otherwise the template cannot be edited in the UI without being "corrected".
@@ -2004,19 +1336,16 @@ def test_influxdb3_core_debian13_injected_cloud_config_stays_debian_safe(
         os_version=defaults["os_version"],
         install_qemu_guest_agent=defaults["install_qemu_guest_agent"],
         install_zabbix_agent2=defaults["install_zabbix_agent2"],
-        install_nms_agent=defaults["install_nms_agent"],
         zabbix_server="zabbix.nmulti.cloud",
-        nms_agent_backend_url="",
-        provisions_service=defaults["provisions_service"],
+        provisions_service="influxdb3-core",
     )
 
     injected = jobs._inject_monitoring_agents(seed, template)
     config = yaml.safe_load(injected.split("\n", 1)[1])
 
-    # The Ubuntu Zabbix package name and the amd64-only NMS agent must not appear.
+    # The Ubuntu Zabbix package name must not appear.
     assert "zabbix-agent2" not in injected
     assert "ubuntu${VERSION_ID}" not in injected
-    assert "nms-agent" not in injected
     assert "go.dev/dl" not in injected
 
     runcmds = [str(entry) for entry in config["runcmd"]]
@@ -2070,8 +1399,6 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
     assert defaults["build_status"] == "pending"
     assert defaults["install_qemu_guest_agent"] is True
     assert defaults["install_zabbix_agent2"] is False
-    assert defaults["install_nms_agent"] is False
-    assert defaults["provisions_service"] == "influxdb3-explorer"
 
     seeded_vmids = _all_seeded_vmids()
     assert 9053 in seeded_vmids
@@ -2162,7 +1489,7 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
     assert exit_traps == ["trap on_install_exit EXIT"]
     for signal, code in (("TERM", 143), ("INT", 130), ("HUP", 129)):
         assert f"trap 'exit {code}' {signal}" in installer
-    assert "/var/lib/nms/influxdb-install-failed" in installer
+    assert "/var/lib/netbox-packer/influxdb-install-failed" in installer
     assert not any("rm" in str(entry) for entry in cloud_config["runcmd"])
 
     # systemd is the sole lifecycle owner. The published host address is
@@ -2180,11 +1507,8 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
     assert "--volume /var/lib/influxdb3-explorer:/db:rw" in runner
     assert "--volume /etc/influxdb3-explorer:/app-root/config:ro" in runner
 
-    # The exact existing secret-reference boundary: the RPC returns only an
-    # nms-secret:<opaque-id> reference, which is resolved after cloning. Neither
-    # that per-instance reference nor a resolved credential is a write_files item.
-    assert "service.influxdb.1.token_create" in seed
-    assert "nms-secret:<opaque-id>" in seed
+    # Per-instance credentials are provisioned after cloning and are never
+    # represented by a write_files item in the golden-image seed.
     assert "/etc/influxdb3-explorer/config.json" in provisioning
     assert "/etc/influxdb3-explorer/config.json" not in files
     executable = "\n".join((installer, runner, service, environment))
@@ -2198,7 +1522,6 @@ def test_influxdb3_explorer_debian13_seed_contract() -> None:
         r"private[-_ ]key",
         r"BEGIN [A-Z ]*PRIVATE KEY",
         r"https?://[^\s/@]+:[^\s/@]+@",
-        r"nms-secret:(?!<opaque-id>)\S+",
     ):
         assert re.search(pattern, executable, re.IGNORECASE) is None, pattern
     assert "8181" not in executable, "a Core URL must arrive only at provision time"
@@ -2217,10 +1540,8 @@ def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
         os_version=defaults["os_version"],
         install_qemu_guest_agent=defaults["install_qemu_guest_agent"],
         install_zabbix_agent2=defaults["install_zabbix_agent2"],
-        install_nms_agent=defaults["install_nms_agent"],
         zabbix_server="zabbix.nmulti.cloud",
-        nms_agent_backend_url="",
-        provisions_service=defaults["provisions_service"],
+        provisions_service="influxdb3-explorer",
     )
 
     injected = jobs._inject_monitoring_agents(seed, template)
@@ -2228,7 +1549,6 @@ def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
 
     assert "zabbix-agent2" not in injected
     assert "ubuntu${VERSION_ID}" not in injected
-    assert "nms-agent" not in injected
     assert "go.dev/dl" not in injected
     runcmds = [str(entry) for entry in config["runcmd"]]
     assert any("qemu-guest-agent" in entry for entry in runcmds)
@@ -2263,13 +1583,6 @@ def test_influxdb3_explorer_injected_cloud_config_stays_debian_safe(
                 "content": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
             },
             "private key material",
-        ),
-        (
-            {
-                "path": "/tmp/secret-ref",
-                "content": "nms-secret:environment-specific-id\n",
-            },
-            "non-placeholder nms-secret",
         ),
         (
             {
@@ -2389,7 +1702,6 @@ def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
 
     settings_row = SimpleNamespace(
         proxbox_api_url="https://proxbox.example",
-        get_fileserver_package_read_token=lambda: "",
         get_proxbox_api_key=lambda: "api-key",
     )
     models_module = ModuleType("netbox_packer.models")
@@ -2424,11 +1736,9 @@ def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
         os_version="13",
         base_image_url="",
         base_image_sha256="",
-        is_fileserver_golden_template=False,
         install_qemu_guest_agent=True,
         install_zabbix_agent2=False,
         zabbix_server="",
-        install_nms_agent=False,
         provisions_service="influxdb3-explorer",
     )
     build = SimpleNamespace(
@@ -2458,12 +1768,10 @@ def test_cloud_build_rechecks_endpoint_authorization_at_final_call_boundary(
 ) -> None:
     jobs = _load_jobs_isolated(monkeypatch)
     jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
-    jobs.render_fileserver_package_index = lambda content, **_kwargs: content
     jobs._authorize_selected_endpoint = Mock(side_effect=RuntimeError("allow_packer_template_builds was revoked"))
 
     settings_row = SimpleNamespace(
         proxbox_api_url="https://proxbox.example",
-        get_fileserver_package_read_token=lambda: "",
         get_proxbox_api_key=lambda: "api-key",
     )
     models_module = ModuleType("netbox_packer.models")
@@ -2496,11 +1804,9 @@ def test_cloud_build_rechecks_endpoint_authorization_at_final_call_boundary(
         os_version="24.04",
         base_image_url="",
         base_image_sha256="",
-        is_fileserver_golden_template=False,
         install_qemu_guest_agent=False,
         install_zabbix_agent2=False,
         zabbix_server="",
-        install_nms_agent=False,
     )
     build = SimpleNamespace(variable_overrides={}, log="", save=Mock())
 
@@ -2617,18 +1923,18 @@ def test_influxdb3_explorer_installer_failure_trap_records_every_exit(
     )
     prefix, trap_line, _remainder = installer.partition("trap on_install_exit EXIT")
     assert trap_line, "EXIT-trap mutation target disappeared"
-    assert "install -d -m 0755 /var/lib/nms || true" in prefix
+    assert "install -d -m 0755 /var/lib/netbox-packer || true" in prefix
     marker = tmp_path / "influxdb-install-failed"
     harness = (
         (prefix + trap_line)
         .replace(
-            "readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'",
-            f"readonly NMS_FAILURE_MARKER='{marker}'",
+            "readonly PACKER_FAILURE_MARKER='/var/lib/netbox-packer/influxdb-install-failed'",
+            f"readonly PACKER_FAILURE_MARKER='{marker}'",
             1,
         )
         .replace(
-            "install -d -m 0755 /var/lib/nms || true",
-            'install -d -m 0755 "${NMS_FAILURE_MARKER%/*}" || true',
+            "install -d -m 0755 /var/lib/netbox-packer || true",
+            'install -d -m 0755 "${PACKER_FAILURE_MARKER%/*}" || true',
             1,
         )
     )
@@ -2741,7 +2047,7 @@ def test_influxdb_0020_profiles_are_hardened_to_0025_parity() -> None:
         assert "trap on_install_exit EXIT" in installer, constant
         # No ERR trap is *installed* (the comment above it may legitimately mention one).
         assert not re.search(r"^\s*trap\s+\S+\s+ERR\b", installer, re.MULTILINE), constant
-        assert "/var/lib/nms/influxdb-install-failed" in installer, constant
+        assert "/var/lib/netbox-packer/influxdb-install-failed" in installer, constant
         # Exactly ONE EXIT trap: a second would silently replace the first. Signal
         # traps are required alongside it, not forbidden — on an untrapped TERM/INT/HUP
         # bash runs the EXIT trap with `$?` possibly still 0, so the handler would clean
@@ -3068,7 +2374,6 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
 
     settings_row = SimpleNamespace(
         proxbox_api_url="https://proxbox.example",
-        get_fileserver_package_read_token=lambda: "",
         get_proxbox_api_key=lambda: "api-key",
     )
     models_module = ModuleType("netbox_packer.models")
@@ -3107,11 +2412,9 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
         "os_version": "24.04",
         "base_image_url": "",
         "base_image_sha256": "",
-        "is_fileserver_golden_template": False,
         "install_qemu_guest_agent": False,
         "install_zabbix_agent2": False,
         "zabbix_server": "",
-        "install_nms_agent": False,
     }
     template_fields.update(template_pin)
     template = SimpleNamespace(**template_fields)
@@ -3315,7 +2618,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0032_update_endpoint_authorization_descriptions"}
+    assert names - internal_dependencies == {"0033_public_service_markers"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
@@ -3367,7 +2670,7 @@ def test_influxdb3_core_debian13_contract_is_documented() -> None:
         "9052",
         "Debian 13",
         "influxdb3-core.service",
-        "service.influxdb.1.bootstrap",
+        "credential",
     )
     for rel in (
         "README.md",
@@ -3388,8 +2691,7 @@ def test_influxdb3_explorer_debian13_contract_is_documented() -> None:
         "influxdata/influxdb3-ui",
         "sha256:7df00684199c4b983b05b109e72e89aa23a0d6a9a9460d6b90cfd70f979023cc",
         "influxdb3-explorer.service",
-        "service.influxdb.1.token_create",
-        "nms-secret:<opaque-id>",
+        "credential",
     )
     for rel in (
         "README.md",
@@ -3437,8 +2739,6 @@ def test_serializer_exposes_monitoring_agent_fields() -> None:
     assert '"install_qemu_guest_agent"' in src
     assert '"install_zabbix_agent2"' in src
     assert '"zabbix_server"' in src
-    assert '"install_nms_agent"' in src
-    assert '"nms_agent_backend_url"' in src
     assert '"provisions_service"' in src
     template_serializer = src.split("class PackerTemplateSerializer", 1)[1].split("\nclass ", 1)[0]
     assert '"provisions_service"' in template_serializer.split("read_only_fields =", 1)[1]

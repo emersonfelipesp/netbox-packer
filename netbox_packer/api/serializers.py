@@ -1,5 +1,4 @@
 import re
-from urllib.parse import urlsplit
 
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -74,9 +73,7 @@ class PackerTemplateBuildRequestSerializer(serializers.Serializer):
         if not isinstance(value, dict):
             raise serializers.ValidationError("variable_overrides must be an object.")
         if _contains_secret_material(value):
-            raise serializers.ValidationError(
-                "Secret-shaped override keys or values are forbidden; use netbox-nms references."
-            )
+            raise serializers.ValidationError("Secret-shaped override keys or values are forbidden.")
         result = dict(value)
         endpoint_id = result.get("endpoint_id")
         if endpoint_id not in (None, ""):
@@ -146,13 +143,6 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
     )
     installer_config = PackerInstallerConfigSerializer(nested=True, required=False, allow_null=True)
 
-    def validate_nms_agent_backend_url(self, value):
-        """Reject plaintext agent backends at the API validation boundary."""
-
-        if urlsplit(value).scheme.lower() != "https":
-            raise serializers.ValidationError("Enter an HTTPS URL for the NMS agent backend.")
-        return value
-
     def validate_base_image_url(self, value):
         """Keep inline credentials out of persisted template image pins."""
 
@@ -195,8 +185,6 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "install_qemu_guest_agent",
             "install_zabbix_agent2",
             "zabbix_server",
-            "install_nms_agent",
-            "nms_agent_backend_url",
             "base_image_url",
             "base_image_sha256",
             "base_image_url_at_build",

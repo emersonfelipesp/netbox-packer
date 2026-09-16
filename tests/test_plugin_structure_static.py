@@ -124,8 +124,6 @@ def test_packer_template_model_fields() -> None:
     ):
         assert field in block, f"Missing field '{field}' in PackerTemplate"
 
-    assert "validators=[NMS_AGENT_BACKEND_URL_VALIDATOR]" in block
-
 
 def test_packer_template_computed_properties() -> None:
     """PackerTemplate must have age_days, is_stale, and derived_vms properties."""
@@ -524,13 +522,6 @@ def test_template_form_declutters_machine_managed_fields() -> None:
         )
 
 
-def test_template_form_exposes_optional_nms_agent_controls() -> None:
-    forms_src = _read("netbox_packer/forms.py")
-    block = _class_block(forms_src, "PackerTemplateForm")
-    assert '"install_nms_agent"' in block
-    assert '"nms_agent_backend_url"' in block
-
-
 def test_os_version_filter_js_asset() -> None:
     """The progressive-enhancement JS must exist and be XSS-safe."""
     js_src = _read("netbox_packer/static/netbox_packer/os_version_filter.js")
@@ -602,9 +593,23 @@ def test_gitea_ci_workflow_is_the_authoritative_pre_merge_gate() -> None:
     ci = _read(".gitea/workflows/ci.yml")
     for expected in (
         "runs-on: ci-untrusted-python312",
+        'workspace="$(realpath "${GITHUB_WORKSPACE:?}")"',
+        'authority_root="$(realpath -m "${RUNNER_TEMP:?}")"',
+        '"$workspace/"*)',
+        'authority_checkout="$authority_root/netbox-proxbox-authority"',
+        'git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git "$authority_checkout"',
+        'authority_checkout="$(realpath -m "${RUNNER_TEMP:?}/netbox-proxbox-authority")"',
+        'uv pip install --python .venv/bin/python -e "$authority_checkout"',
         ".venv/bin/ruff check .",
         ".venv/bin/python -m pytest -p no:cacheprovider tests --ignore=tests/e2e -q",
         ".venv/bin/python -m build",
         ".venv/bin/python -m twine check dist/*",
     ):
         assert expected in ci
+    authority_repository = "https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git"
+    repository_local_clone = f"git clone --no-checkout {authority_repository} netbox-proxbox"
+    assert repository_local_clone not in ci
+    clone_step = ci.index(f'git clone --no-checkout {authority_repository} "$authority_checkout"')
+    install_step = ci.index('uv pip install --python .venv/bin/python -e "$authority_checkout"')
+    boundary_step = ci.index(".venv/bin/python scripts/check_public_boundary.py --self-test")
+    assert clone_step < install_step < boundary_step

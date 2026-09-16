@@ -6,7 +6,7 @@ from django.db import migrations
 
 INFLUXDB_OSS2_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB OSS 2.9.1 for Proxmox metrics/Flux workloads.
-# Credentials and initial setup are intentionally deferred to typed NMS RPC.
+# Credentials and initial setup are intentionally deferred to post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -14,7 +14,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb-install.sh
+  - path: /opt/netbox-packer-influxdb-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -22,7 +22,7 @@ write_files:
       set -euo pipefail
       export DEBIAN_FRONTEND=noninteractive
       readonly PRODUCT_VERSION='2.9.1'
-      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/nms-managed
+      install -d -m 0755 /etc/apt/keyrings /etc/influxdb/netbox-packer-managed
       curl --fail --silent --show-error --location \
         --output /tmp/influxdata-archive.key \
         https://repos.influxdata.com/influxdata-archive.key
@@ -58,14 +58,14 @@ write_files:
       echo 'InfluxDB OSS health endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb-install.sh]
-  - [rm, -f, /opt/nms-influxdb-install.sh]
+  - [bash, /opt/netbox-packer-influxdb-install.sh]
+  - [rm, -f, /opt/netbox-packer-influxdb-install.sh]
 """
 
 
 INFLUXDB_CORE3_CLOUD_CONFIG = r"""#cloud-config
 # InfluxDB 3 Core 3.11.0 for general-purpose SQL/InfluxQL workloads.
-# The first operator token is intentionally created and vaulted by typed NMS RPC.
+# The first operator token is intentionally created and vaulted by post-clone operator automation.
 package_update: false
 package_upgrade: false
 packages:
@@ -73,7 +73,7 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /opt/nms-influxdb3-install.sh
+  - path: /opt/netbox-packer-influxdb3-install.sh
     permissions: "0755"
     owner: root:root
     content: |
@@ -83,7 +83,7 @@ write_files:
       readonly PRODUCT_VERSION='3.11.0'
       install -d -m 0755 \
         /etc/apt/keyrings \
-        /etc/influxdb3/nms-managed \
+        /etc/influxdb3/netbox-packer-managed \
         /var/lib/influxdb3/plugins
       curl --fail --silent --show-error --location \
         --output /tmp/influxdata-archive.key \
@@ -120,8 +120,8 @@ write_files:
       echo 'InfluxDB 3 Core readiness endpoint did not become ready' >&2
       exit 1
 runcmd:
-  - [bash, /opt/nms-influxdb3-install.sh]
-  - [rm, -f, /opt/nms-influxdb3-install.sh]
+  - [bash, /opt/netbox-packer-influxdb3-install.sh]
+  - [rm, -f, /opt/netbox-packer-influxdb3-install.sh]
 """
 
 
@@ -135,7 +135,7 @@ PROFILES = (
         "description": (
             "Endpoint-agnostic InfluxDB OSS 2.9.1 profile for Proxmox metrics and Flux. "
             "Build dispatch selects an authorized enabled PackerBuildTarget URL and "
-            "target_node; setup and credentials are managed only by typed NMS RPC."
+            "target_node; setup and credentials are managed only by post-clone operator automation."
         ),
     },
     {
@@ -147,7 +147,7 @@ PROFILES = (
         "description": (
             "Endpoint-agnostic InfluxDB 3 Core 3.11.0 profile for general-purpose SQL, "
             "InfluxQL, and processing-engine workloads. Build dispatch selects an authorized "
-            "enabled PackerBuildTarget URL and target_node; tokens are managed only by typed NMS RPC."
+            "enabled PackerBuildTarget URL and target_node; tokens are managed only by post-clone operator automation."
         ),
     },
 )
@@ -208,7 +208,7 @@ def seed_influxdb_profiles(apps, schema_editor):
         legacy.checksum = hashlib.sha256(INFLUXDB_OSS2_CLOUD_CONFIG.encode()).hexdigest()
         legacy.description = (
             "Legacy InfluxDB collector profile hardened to install OSS 2.9.1 without "
-            "credentials; use the typed RPC onboarding flow after cloning."
+            "credentials; complete onboarding after cloning."
         )
         legacy.save(update_fields=["content", "checksum", "description"])
         PackerTemplate.objects.filter(name="influxdb-2-ubuntu-2404-proxmox-collector").update(

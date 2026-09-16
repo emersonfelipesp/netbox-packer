@@ -11,7 +11,7 @@
 1. Create or select a `PackerInstallerConfig` where
    `installer_type = "cloud_config"`.
 2. Create or select a `PackerTemplate` that references the installer config.
-3. Trigger the template build from NetBox, the API, or the NMS page at
+3. Trigger the template build from NetBox or the API.
    `/virtualization/packer`.
 4. Before queueing, netbox-packer matches the template or enabled build-target
    URL to exactly one netbox-proxbox `ProxmoxEndpoint`, requires `enabled`,
@@ -172,7 +172,7 @@ host authority, so proxbox-api derives transport from the same persisted row.
 > removed everywhere. `0026` also refuses to run while a build is queued or running
 > against a linked template, and invalidates rebake state by installer-config
 > relationship rather than by the editable template name. Both profiles additionally
-> record a durable failure marker at `/var/lib/nms/influxdb-install-failed`, because
+> record a durable failure marker at `/var/lib/netbox-packer/influxdb-install-failed`, because
 > cloud-init's `runcmd` wrapper has no `set -e` and the injected Zabbix bootstrap runs
 > after the installer, so a failure would otherwise be masked and reported as success.
 
@@ -192,11 +192,9 @@ The cloud-init profiles:
   request, private key, or endpoint-specific Proxmox data.
 
 After a clone completes cloud-init, use the typed
-`service.influxdb.1.bootstrap`, `database_create`, and `token_create` RPC
-procedures through NMS or nms-cli. The backend generates/resolves one-time
-plaintext only in memory and stores it through netbox-nms as `nms-secret:`
-references. Routine config, managed/plugin files, service state, health, and
-journal operations use the remaining typed InfluxDB RPC procedures.
+post-clone operator automation; no credential is baked into the image. Routine
+configuration, service-state, health, and journal operations remain external to
+the image build.
 
 The immutable historical `influxdb-2-ubuntu-2404-proxmox-collector` / VMID
 `9011` seed remains development-only on `10.0.30.139`. Additive migration
@@ -258,29 +256,17 @@ Two build-path details are specific to this profile:
   The resolver previously returned Bookworm for every Debian row; since a
   `cloud_config` bake never executes cloud-init, that would have produced an
   artifact marked `ready` whose own OS gate fails at clone time.
-- **Monitoring injection.** `install_qemu_guest_agent` is on;
-  `install_zabbix_agent2` and `install_nms_agent` are **off**, because the shared
-  injectors build an Ubuntu Zabbix package name from `VERSION_ID` and the NMS agent
-  bootstrap requires amd64. That also leaves this installer as the last `runcmd`
+- **Monitoring injection.** `install_qemu_guest_agent` is on; `install_zabbix_agent2` is **off** because its package bootstrap is Ubuntu-specific. That also leaves this installer as the last `runcmd`
   entry, so its failure is not masked by a later command in cloud-init's
   `set -e`-less wrapper.
 
 Token authentication stays enabled for every data and admin route: the readiness
 probe is the only unauthenticated call the image makes. Because a remote listener
 would then expose bearer tokens over plaintext HTTP, the baked posture is
-loopback-only — put a TLS reverse proxy in front of it, or use the audited RPC
-installer (below) with explicit TLS material.
-
-For hosts that **already exist**, do not re-bake: `netbox-rpc` seeds
-`os.linux.debian.13.preflight_influxdb3_core` (read) and
-`os.linux.debian.13.install_influxdb3_core` (write, approval required), which
-apply the same posture over audited SSH and accept the installer's parameters
-(`node_id`, `data_dir`, `http_bind`, `tls_cert`/`tls_key`, `enable_plugins`,
-`disable_telemetry`, `wal_flush_interval`, `log_filter`, `package_version`,
-`hold_package`, `upgrade_package`, `force_reconfigure`,
-`allow_plaintext_remote`). Those procedures also create no credential; the
-sanctioned onboarding sequence remains `preflight` -> `install` ->
-`service.influxdb.1.bootstrap`.
+loopback-only — put a TLS reverse proxy in front of it or use an independently
+managed installer with explicit TLS material. Existing hosts should be updated
+through an operator-controlled process that applies the same posture and keeps
+credentials out of the image.
 
 **Known accepted risk (tracked in issue #96).** Like every other seeded profile,
 this one resolves the vendor's **mutable `latest`** image directory and passes no
@@ -328,7 +314,7 @@ manifest under an overall deadline, applies a maximum accepted image size,
 and starts the container through the single systemd lifecycle owner. The local
 readiness probe has per-attempt and overall deadlines. An `EXIT` trap plus
 `TERM`/`INT`/`HUP` conversion records failures durably at
-`/var/lib/nms/influxdb-install-failed`.
+`/var/lib/netbox-packer/influxdb-install-failed`.
 
 Explorer 1.9.0 runs as non-root uid/gid `1500`. The installer therefore creates
 the writable `/var/lib/influxdb3-explorer` data directory as `1500:1500` mode
@@ -343,21 +329,17 @@ access therefore needs an explicit access-control design, normally an
 authenticating TLS reverse proxy.
 
 The golden image deliberately starts with no InfluxDB connection. After clone,
-`service.influxdb.1.token_create` mints and vaults the Core token and returns
-only an `nms-secret:<opaque-id>` reference. Provision-time automation resolves
-that reference only in memory, writes `root:1500` mode-`0640`
+operator automation supplies the Core credential only in memory and writes `root:1500` mode-`0640`
 `/etc/influxdb3-explorer/config.json`, and restarts
 `influxdb3-explorer.service`. Neither the reference nor its resolved value is
-baked into cloud-init. The Ubuntu/amd64-only Zabbix and NMS agent injections
-remain off; QEMU guest-agent injection remains on, and the Explorer installer
+baked into cloud-init. Zabbix injection remains off; QEMU guest-agent injection remains on, and the Explorer installer
 stays the last command in the fully injected `runcmd` list.
 
 This is also a runtime bake boundary. For a template marked
 `provisions_service = "influxdb3-explorer"`, netbox-packer parses and validates
 the fully injected YAML immediately before calling proxbox-api. A Core
-endpoint/config file, credential-bearing key or value, private key, encoded
-`write_files` content that cannot be inspected, or any non-placeholder
-`nms-secret:` reference aborts the build with a log entry; proxbox-api is not
+endpoint/config file, credential-bearing key or value, private key, or encoded
+`write_files` content that cannot be inspected aborts the build with a log entry; proxbox-api is not
 called. The pristine seed checks remain useful, but are not a substitute for
 validating the editable payload that is actually baked.
 
@@ -559,7 +541,7 @@ The cloud-config installs the native `passbolt-ce-server` package via the
 official checksum-verified repo setup (nginx + php-fpm + a local MariaDB), makes
 `PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED=true` effective via php-fpm pool
 `env[]` entries, and configures nginx WITHOUT
-SSL (`passbolt/nginx-configuration-three-choices select none`) because nginx-nms
+SSL (`passbolt/nginx-configuration-three-choices select none`) because upstream reverse proxy
 terminates TLS upstream — the guest serves plain HTTP on `:80`. The QEMU guest
 agent and Zabbix Agent 2 (pointed at `zabbix.nmulti.cloud`) are injected at bake
 time, so they are intentionally absent from the seed. No secret is baked: the
@@ -568,84 +550,6 @@ and the production server OpenPGP key, JWT keys, and database are supplied by th
 data migration from the existing Passbolt instance. SMTP is intentionally left
 unconfigured until an operator wires a relay.
 
-## File Server All-in-One Template
-
-Migration `0014_seed_fileserver_allinone_cloud_init.py` originally seeded the
-combined file server image used by File Server auto-provisioning. Migration
-`0017_update_fileserver_agent_package_index.py` updates the current record.
-
-| Field | Value |
-| --- | --- |
-| Template name | `tpl-fileserver-allinone-ubuntu-2404` |
-| Installer config | `fileserver-allinone-cloud-config` version `1.0.1` |
-| Cloud-config source | `netbox_packer/seeds/tpl-fileserver-allinone.cloud-config.yaml` |
-| OS | Ubuntu `24.04` |
-| Template VMID | `9300` |
-| Proxmox endpoint | `https://10.0.30.71:8006` |
-| Proxmox node / SSH host | `10.0.30.71` |
-| Storage | `local` |
-| NMS backend URL | `https://backend.nms.nmulti.cloud` |
-| NetBox URL | `https://netbox.nmulti.cloud` |
-
-The default bake target is CLUSTER01-DC01. Operators may override the node or
-VMID at build dispatch when a different target is needed, but the seeded row is
-the production convention for this image.
-
-The cloud-config installs Samba AD/DC packages (`samba`, `samba-dsdb-modules`,
-`samba-vfs-modules`, `winbind`, `libnss-winbind`, `libpam-winbind`,
-`krb5-user`, `acl`, `attr`, `chrony`), Nextcloud web/PHP prerequisites
-(`nginx`, `php-fpm`, `php-ldap`, `php-smbclient`, `php-pgsql`, `php-gd`,
-`php-curl`, `php-zip`, `php-xml`, `php-mbstring`, `php-intl`, `php-bcmath`,
-`php-gmp`, `php-imagick`, `smbclient`, `cifs-utils`, `postgresql-client`),
-`qemu-guest-agent`, `zabbix-agent2`, and `python3-venv`.
-`nms-fileserver-agent` is installed into `/opt/nms-fileserver-agent/venv` from
-`NMS_FILESERVER_AGENT_PIP_SPEC` (default `nms-fileserver-agent==0.1.0`), not
-through apt. Store the package-index identity on the singleton
-`PackerPluginSettings` row: the username is plaintext metadata in
-`fileserver_package_read_user`, while the token is written only through
-`set_fileserver_package_read_token()` and stored in
-`fileserver_package_read_token_encrypted` with the same Fernet cipher derived
-from Django's `SECRET_KEY` that is used by the proxbox-api key.
-
-Use the Django/NetBox shell (`manage.py nbshell` or `manage.py shell`) to set or
-rotate the credential; there is no plugin REST endpoint for this settings row,
-and the encrypted field is intentionally not directly editable in Django admin.
-The raw token therefore stays out of request/API parameters and is supplied only
-to the model's encrypted setter in an operator shell:
-
-```python
-from netbox_packer.models import PackerPluginSettings
-
-settings_row = PackerPluginSettings.get_solo()
-settings_row.fileserver_package_read_user = "nms-pkg-reader"
-settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
-settings_row.save()
-```
-
-The credentials must belong to a dedicated non-human Gitea identity, and the
-token must have package-Read permission only—never use a personal token or
-`PACKAGE_WRITE_TOKEN`. Dispatch fails closed if either setting is empty,
-URL-encodes both values, and redacts the raw or encoded token from persisted
-build output. The rendered golden image stores the authenticated N-MultiCloud
-PyPI index in root-only `/etc/nms-fileserver-agent/pip.conf`. Public `httpx` is
-installed from PyPI before the agent is installed from the sole private index
-with `--no-deps`.
-
-Because every clone inherits that root-only credential, rotate the token on the
-`PackerPluginSettings` row and rebake VMID `9300` whenever the read token is
-replaced; retire prior images and clones according to the credential-rotation
-policy.
-Migration `0017_update_fileserver_agent_package_index.py` repoints installations
-that already ran migration 0014 at this v1.0.1 config and marks the template
-pending for a replacement bake.
-
-This image is software-only. The bake does not create a Samba domain, does not
-run a Nextcloud tenant install, and does not include any tenant secret. `nginx`
-is disabled, `smbd`/`nmbd`/`winbind` are masked,
-`nms-fileserver-agent-enroll.service` is installed but disabled/not run on the
-golden template, and `nms-fileserver-agent-heartbeat.timer` is disabled until
-clone-time user-data provides the one-time enrollment token and starts the agent
-lifecycle.
 
 ## Base Ubuntu LTS Cloud-init Templates
 
@@ -673,9 +577,7 @@ clone time.
 
 ## Akvorado 2.4.0 Template
 
-Migrations `0023_packertemplate_nms_agent_and_service_marker.py` and
-`0024_seed_akvorado_cloud_init.py` add the optional NMS host-agent injection
-fields, durable service marker, and Akvorado golden template.
+Migration `0033_public_service_markers.py` adds the durable service marker, and migration `0024_seed_akvorado_cloud_init.py` adds the Akvorado golden template.
 
 | Field | Value |
 | --- | --- |
@@ -711,17 +613,8 @@ not authenticate users itself, so the template does not publish it on a
 wildcard host address. Reach it through an SSH tunnel to loopback port `8081`,
 or provision a separate authenticating reverse proxy explicitly. The shipped
 `akvorado.yaml` plus inlet/outlet/console includes is a working credential-free
-default, so no configuration RPC is required before the stack starts.
+default, so no external configuration step is required before the stack starts.
 
-The seed sets `install_nms_agent=True` only on this template. The build-time
-injector compiles the static agent from one pinned public commit using a
-SHA256-verified Go toolchain, writes a root-only config pointing at
-`https://backend.nms.nmulti.cloud`, and enables its systemd unit. It reuses the
-agent's secure-prefix self-registration flow and contains no enrollment token,
-backend signing key, or other trust material. Zabbix management inside that
-agent is disabled because the existing Zabbix Agent 2 injection remains the
-owner of Zabbix configuration. Its local service allowlist contains exactly
-`akvorado.service`.
 
 Created VMs already store the source template primary key in the
 `source_packer_template` custom field. Downstream integration code follows
@@ -735,15 +628,15 @@ After either current InfluxDB build completes, the template row should be
 `ready` with result VMID `9050` or `9051`; the selected target cluster should
 contain a template with a `cicustom` user-data snippet. Clone verification must
 confirm the exact package version, held package state, systemd state, and local
-health/readiness endpoint before typed RPC onboarding begins.
+health/readiness endpoint before post-clone onboarding begins.
 
 For InfluxDB 3 Explorer, VMID `9053` should be a template on the selected
 endpoint. On a fresh clone, wait for `cloud-init status --wait`, confirm
 `systemctl is-active influxdb3-explorer.service`, and inspect the running image
 reference for the reviewed digest. `curl http://127.0.0.1:8080/` should answer,
 while `/etc/influxdb3-explorer/config.json` should not exist before provision-time
-automation resolves the clone's `nms-secret:<opaque-id>` reference. After
-provisioning, confirm that file is `root:1500` mode `0640` and the unit restarted.
+automation supplies the clone's credential. After provisioning, confirm that
+file is `root:1500` mode `0640` and the unit restarted.
 
 For the PowerDNS co-hosted template, VMID `9019` should be marked as a template
 on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
@@ -751,21 +644,13 @@ on `10.0.30.71`. On first boot from a clone, `pdns` should listen on
 port 53, both PowerDNS API webservers should bind to localhost, and no
 configuration should expose recursion to `0.0.0.0/0`.
 
-For the File Server all-in-one template, VMID `9300` should be marked as a
-template on `10.0.30.71`. On a clone before tenant provisioning, Samba and
-nginx should remain inactive, `zabbix-agent2` should point at
-`zabbix.nmulti.cloud`, and `/etc/nms-fileserver-agent/config.env` should contain
-only the production `NMS_BACKEND_URL` and `NETBOX_URL` values.
 
 For Akvorado, VMID `9070` should be marked as a template on `10.0.30.71` and
 retain the cloud-init snippet. On a fresh clone, wait for
 `cloud-init status --wait`, then verify `systemctl is-active akvorado.service`
-and `systemctl is-active nms-agent.service`. `docker compose -f
 /opt/akvorado/docker-compose.yml ps` should show all seven services running and
 the Kafka, Valkey, ClickHouse, orchestrator, and console health checks should
-settle healthy. The agent journal should show a bootstrap attempt against
-`backend.nms.nmulti.cloud`; authorization still follows the existing
-secure-prefix policy.
+settle healthy.
 
 ## Regression Coverage
 
@@ -787,18 +672,10 @@ secure-prefix policy.
   collision-safe VMID `9053` seeding, and no baked Core connection or credential;
 - build requests validate explicit endpoint, node, VMID, and storage selectors
   and suppress legacy SSH-host metadata when an endpoint ID is selected;
-- project docs and LLM files cover both profiles, typed RPC onboarding, and the
-  `nms-secret:` boundary.
+- project docs and LLM files cover both profiles and post-clone onboarding.
 - the PowerDNS co-hosted seed keeps `pdns-server`, `pdns-recursor`,
   `qemu-guest-agent`, `127.0.0.1:5300`, private `allow-from` ranges, and
   reversible seeded-row cleanup stable.
-- the File Server all-in-one seed keeps `tpl-fileserver-allinone-ubuntu-2404`,
-  `fileserver-allinone-cloud-config`, VMID `9300`, CLUSTER01-DC01 endpoint
-  `https://10.0.30.71:8006`, production NMS URLs, service-disabled defaults,
-  root-only package-index configuration, package-Read credential placeholders,
-  YAML parseability, and reversible seeded-row cleanup stable.
 - the Akvorado seed keeps VMID `9070`, Kafka `4.2.0`, Valkey `9.0`, ClickHouse
   `26.3`, Akvorado `2.4.0`, the exact `akvorado.service` lifecycle contract,
-  loopback-only console, working default config, HTTPS-only agent backend,
-  agent opt-in/default-off behavior, source-template marker, and structural
-  agent deduplication stable.
+  loopback-only console, working default config, and source-template marker.

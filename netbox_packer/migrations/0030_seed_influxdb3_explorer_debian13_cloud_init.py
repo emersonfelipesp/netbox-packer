@@ -6,9 +6,8 @@ template and build run. The container image is the reviewed public
 comes from Debian's own signed repository, and one systemd unit owns the
 container lifecycle with a loopback-default published address.
 
-The image stays credential-free. Typed NMS RPC mints and vaults the Core token,
-returns only an ``nms-secret:<opaque-id>`` reference, and provision-time
-automation resolves it when writing the cloned guest's root-owned Explorer
+The image stays credential-free. Post-clone operator automation supplies the
+Core token only when writing the cloned guest's root-owned Explorer
 connection configuration. No token, Core URL, password, private key, or
 environment-specific secret reference is present in the golden image.
 
@@ -36,18 +35,14 @@ INFLUXDB3_EXPLORER_DEBIAN13_CLOUD_CONFIG = r"""#cloud-config
 # anyone who can reach it inherits the configured InfluxDB token's permissions.
 #
 # Credential-free by design. This golden image contains no InfluxDB Core URL, token,
-# password, TLS private key, or Explorer session secret. After cloning, typed NMS RPC
-# service.influxdb.1.token_create mints and vaults the Core token and returns only an
-# nms-secret:<opaque-id> reference. Provision-time automation resolves that reference
-# in memory, writes the root-owned, Explorer-group-readable connection under
+# password, TLS private key, or Explorer session secret. After cloning, operator
+# automation supplies the Core credential only in memory and writes the root-owned,
+# Explorer-group-readable connection under
 # /etc/influxdb3-explorer, and restarts influxdb3-explorer.service. The reference and
 # its resolved value are both per-instance state and must never be baked here.
 #
-# Zabbix Agent 2 and the NMS host agent are deliberately NOT injected into this
-# template (install_zabbix_agent2 / install_nms_agent are False on the seeded
 # PackerTemplate): the shared injectors build an Ubuntu Zabbix repository package
 # name from VERSION_ID, which yields a nonexistent "ubuntu13" package on Debian 13,
-# and the NMS agent bootstrap accepts only amd64. This installer is therefore the
 # LAST runcmd entry. Cloud-init shellifies runcmd into a plain /bin/sh script with no
 # `set -e`, so a non-final failure could otherwise be masked by a later success.
 package_update: false
@@ -128,13 +123,12 @@ write_files:
     content: |
       This image intentionally has no configured InfluxDB connection.
 
-      After cloning, service.influxdb.1.token_create returns an opaque
-      nms-secret:<opaque-id> reference, never plaintext. Provision-time automation
-      resolves that reference only in memory, writes the per-instance Explorer
+      After cloning, operator automation supplies the credential only in memory
+      and writes the per-instance Explorer
       connection configuration to /etc/influxdb3-explorer/config.json with mode
       0640 with owner root:1500, then restarts influxdb3-explorer.service.
 
-      Never write the secret reference or its resolved value into a golden image.
+      Never write the credential into a golden image.
   - path: /usr/local/sbin/install-influxdb3-explorer
     permissions: "0755"
     owner: root:root
@@ -149,7 +143,7 @@ write_files:
       readonly EXPLORER_IMAGE="${EXPLORER_IMAGE_REPOSITORY}@${EXPLORER_IMAGE_DIGEST}"
       readonly EXPLORER_UID='1500'
       readonly EXPLORER_GID='1500'
-      readonly NMS_FAILURE_MARKER='/var/lib/nms/influxdb-install-failed'
+      readonly PACKER_FAILURE_MARKER='/var/lib/netbox-packer/influxdb-install-failed'
       readonly MAX_IMAGE_SIZE_BYTES='2147483648'
 
       # Cloud-init's runcmd wrapper has no `set -e`. Record durable evidence for
@@ -159,12 +153,12 @@ write_files:
       on_install_exit() {
         local exit_code=$?
         if [ "${exit_code}" -ne 0 ]; then
-          install -d -m 0755 /var/lib/nms || true
+          install -d -m 0755 /var/lib/netbox-packer || true
           {
             printf 'installer: %s\n' "$0"
             printf 'exit_code: %s\n' "${exit_code}"
             printf 'failed_at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > "${NMS_FAILURE_MARKER}" || true
+          } > "${PACKER_FAILURE_MARKER}" || true
         fi
         return "${exit_code}"
       }
@@ -334,14 +328,12 @@ def seed_influxdb3_explorer_debian13(apps, schema_editor):
         # Both optional injectors are incompatible with this Debian/arm64-capable
         # profile. Keeping them off also keeps the hardened installer last in runcmd.
         "install_zabbix_agent2": False,
-        "install_nms_agent": False,
-        "provisions_service": "influxdb3-explorer",
         "installer_config": config,
         "description": (
             "InfluxDB 3 Explorer 1.9.0 cloud-init template for Debian 13 "
             "(Trixie), VMID 9053. Endpoint-agnostic: build dispatch selects an "
             "authorized enabled PackerBuildTarget URL and target_node. The Explorer "
-            "container is pinned by digest and binds to loopback by default; typed NMS "
+            "container is pinned by digest and binds to loopback by default; post-clone "
             "provisioning supplies the vaulted Core connection after cloning."
         ),
     }

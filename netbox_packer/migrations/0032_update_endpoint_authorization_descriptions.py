@@ -18,12 +18,12 @@ DESCRIPTION_UPDATES = (
         (
             "Endpoint-agnostic InfluxDB OSS 2.9.1 profile for Proxmox metrics and Flux. "
             "Build dispatch supplies proxbox-api endpoint_id and target_node; setup and "
-            "credentials are managed only by typed NMS RPC."
+            "credentials are managed only by post-clone operator automation."
         ),
         (
             "Endpoint-agnostic InfluxDB OSS 2.9.1 profile for Proxmox metrics and Flux. "
             "Build dispatch selects an authorized enabled PackerBuildTarget URL and "
-            "target_node; setup and credentials are managed only by typed NMS RPC."
+            "target_node; setup and credentials are managed only by post-clone operator automation."
         ),
     ),
     (
@@ -31,12 +31,12 @@ DESCRIPTION_UPDATES = (
         (
             "Endpoint-agnostic InfluxDB 3 Core 3.11.0 profile for general-purpose SQL, "
             "InfluxQL, and processing-engine workloads. Build dispatch supplies proxbox-api "
-            "endpoint_id and target_node; tokens are managed only by typed NMS RPC."
+            "endpoint_id and target_node; tokens are managed only by post-clone operator automation."
         ),
         (
             "Endpoint-agnostic InfluxDB 3 Core 3.11.0 profile for general-purpose SQL, "
             "InfluxQL, and processing-engine workloads. Build dispatch selects an authorized "
-            "enabled PackerBuildTarget URL and target_node; tokens are managed only by typed NMS RPC."
+            "enabled PackerBuildTarget URL and target_node; tokens are managed only by post-clone operator automation."
         ),
     ),
     (
@@ -47,7 +47,7 @@ DESCRIPTION_UPDATES = (
             "target_node. First boot installs the pinned package, writes the managed "
             "loopback-only configuration, holds the package, and waits on the local "
             "readiness endpoint. Tokens, databases, and config changes are managed "
-            "only through typed NMS RPC."
+            "only through post-clone operator automation."
         ),
         (
             "InfluxDB 3 Core 3.11.0 cloud-init template for Debian 13 (Trixie), "
@@ -55,7 +55,7 @@ DESCRIPTION_UPDATES = (
             "PackerBuildTarget URL and target_node. First boot installs the pinned package, "
             "writes the managed loopback-only configuration, holds the package, and waits "
             "on the local readiness endpoint. Tokens, databases, and config changes are "
-            "managed only through typed NMS RPC."
+            "managed only through post-clone operator automation."
         ),
     ),
     (
@@ -64,14 +64,14 @@ DESCRIPTION_UPDATES = (
             "InfluxDB 3 Explorer 1.9.0 cloud-init template for Debian 13 "
             "(Trixie), VMID 9053. Endpoint-agnostic: build dispatch supplies "
             "endpoint_id and target_node. The Explorer container is pinned by "
-            "digest and binds to loopback by default; typed NMS provisioning "
+            "digest and binds to loopback by default; post-clone provisioning "
             "supplies the vaulted Core connection after cloning."
         ),
         (
             "InfluxDB 3 Explorer 1.9.0 cloud-init template for Debian 13 "
             "(Trixie), VMID 9053. Endpoint-agnostic: build dispatch selects an "
             "authorized enabled PackerBuildTarget URL and target_node. The Explorer "
-            "container is pinned by digest and binds to loopback by default; typed NMS "
+            "container is pinned by digest and binds to loopback by default; post-clone "
             "provisioning supplies the vaulted Core connection after cloning."
         ),
     ),

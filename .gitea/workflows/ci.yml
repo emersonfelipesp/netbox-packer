@@ -41,16 +41,26 @@ jobs:
           NETBOX_PROXBOX_SHA: 24dde6a9095a84efdaa0e07a60c9728c2372e235 # v0.0.23.post2
         run: |
           set -eo pipefail
-          git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git netbox-proxbox
-          git -C netbox-proxbox checkout --detach "$NETBOX_PROXBOX_SHA"
-          test "$(git -C netbox-proxbox rev-parse HEAD)" = "$NETBOX_PROXBOX_SHA"
+          workspace="$(realpath "${GITHUB_WORKSPACE:?}")"
+          authority_root="$(realpath -m "${RUNNER_TEMP:?}")"
+          case "$authority_root/" in
+            "$workspace/"*)
+              echo "RUNNER_TEMP must resolve outside GITHUB_WORKSPACE" >&2
+              exit 1
+              ;;
+          esac
+          authority_checkout="$authority_root/netbox-proxbox-authority"
+          git clone --no-checkout https://git.nmulti.cloud/emersonfelipesp/netbox-proxbox.git "$authority_checkout"
+          git -C "$authority_checkout" checkout --detach "$NETBOX_PROXBOX_SHA"
+          test "$(git -C "$authority_checkout" rev-parse HEAD)" = "$NETBOX_PROXBOX_SHA"
       - name: Create isolated environment
         shell: bash
         run: |
           set -eo pipefail
           export PATH="$HOME/.local/bin:$PATH"
           uv venv --python 3.12
-          uv pip install --python .venv/bin/python -e ./netbox-proxbox
+          authority_checkout="$(realpath -m "${RUNNER_TEMP:?}/netbox-proxbox-authority")"
+          uv pip install --python .venv/bin/python -e "$authority_checkout"
           uv pip install --python .venv/bin/python -e . --no-deps
           uv pip install \
             --python .venv/bin/python \
@@ -66,6 +76,8 @@ jobs:
         shell: bash
         run: |
           set -eo pipefail
+          .venv/bin/python scripts/check_public_boundary.py --self-test
+          .venv/bin/python scripts/check_public_boundary.py
           .venv/bin/ruff check .
           .venv/bin/python -m compileall -q netbox_packer tests
 

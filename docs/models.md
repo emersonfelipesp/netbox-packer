@@ -81,7 +81,7 @@ installer config, target node/storage, and monitoring-agent injection preference
     cloud-init-template fields (`os_version`, `proxmox_template_id`,
     `storage_pool`, `cloud_init_ready`, `installer_config`).
 
-### Monitoring agent injection fields (migrations `0008` and `0023`)
+### Monitoring agent injection fields (migration `0008`)
 
 These fields control what `PackerBuildJob._inject_monitoring_agents()` adds to
 `cloud_config` content at build time. They have no effect on non-`cloud_config`
@@ -92,14 +92,6 @@ installer types.
 | `install_qemu_guest_agent` | BooleanField | `True` | Inject `qemu-guest-agent` package + `systemctl enable --now` runcmd into the cloud-config; skipped if `qemu-guest-agent` already appears in the installer config's packages list |
 | `install_zabbix_agent2` | BooleanField | `True` | Inject Zabbix Agent 2 bootstrap script into `write_files` + `runcmd`; skipped entirely when `"zabbix-agent2"` appears anywhere in the installer config (e.g. the Zabbix server seed manages its own agent) |
 | `zabbix_server` | CharField(255) | `"zabbix.nmulti.cloud"` | `ServerActive=` value in the injected `zabbix_agent2.conf`; validated against hostname/IP + optional `:port`, comma-separated; no spaces or shell metacharacters |
-| `install_nms_agent` | BooleanField | `False` | Inject the pinned static NMS host agent, config, and systemd unit; structural deduplication skips only when all managed files and the exact bootstrap command are present, and completes partial state |
-| `nms_agent_backend_url` | URLField | `"https://backend.nms.nmulti.cloud"` | HTTPS-only bootstrap/heartbeat/OTLP base URL; rendering also rejects credentials, query strings, and fragments |
-
-The Akvorado seed is the first template to set `install_nms_agent=True`. Its
-`provisions_service="akvorado"` marker also causes the injected local RPC
-allowlist to contain exactly `akvorado.service`. The injection reuses the
-agent's secure-prefix bootstrap flow and does not bake a token, signing key, or
-new trust mechanism.
 
 ### HCP Packer fields
 
@@ -188,8 +180,6 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
 | `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |
 | `proxbox_api_key_encrypted` | CharField(512) | blank | Fernet-encrypted API key; not editable directly — use `set_proxbox_api_key()` |
-| `fileserver_package_read_user` | CharField(255) | blank | Plaintext username for the File Server image's read-only package index |
-| `fileserver_package_read_token_encrypted` | CharField(512) | blank | Fernet-encrypted package-read token; not editable directly — use `set_fileserver_package_read_token()` |
 
 ### Key-management methods
 
@@ -202,13 +192,6 @@ settings_row.save()
 
 # Retrieve the decrypted key at job time
 api_key = settings_row.get_proxbox_api_key()
-
-# Store and retrieve the File Server package-index credential
-settings_row.fileserver_package_read_user = "nms-pkg-reader"
-settings_row.set_fileserver_package_read_token("<gitea-package-read-token>")
-settings_row.save()
-package_read_token = settings_row.get_fileserver_package_read_token()
 ```
 
 The Fernet cipher is derived from `settings.SECRET_KEY` (SHA-256 → base64url).
-There is **no dependency on `netbox-nms`** for key management.

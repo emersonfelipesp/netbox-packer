@@ -8,12 +8,9 @@ token authentication enabled, telemetry upload disabled, Processing Engine
 disabled, an explicit managed configuration file, a systemd drop-in, and a held
 package.
 
-It stays credential-free. The first administrative token is created and vaulted
-only by typed NMS RPC (``service.influxdb.1.bootstrap``, ``family="core3"``),
-mirroring the decision recorded in ``0020``; the paired audited procedures
-``os.linux.debian.13.preflight_influxdb3_core`` and
-``os.linux.debian.13.install_influxdb3_core`` apply the same posture to hosts that
-already exist.
+It stays credential-free. The first administrative token is created and stored
+only by post-clone operator automation, mirroring the decision recorded in
+``0020``. Existing hosts use independently managed installation automation.
 
 The verbatim cloud-config source of truth is tracked at
 ``netbox_packer/seeds/influxdb-core-3.11.0-debian-13.cloud-config.yaml``; the
@@ -44,22 +41,16 @@ INFLUXDB3_CORE_DEBIAN13_CLOUD_CONFIG = r"""#cloud-config
 #
 # Credential-free by design. No administrative token, TLS material, or per-bake
 # state is written into this image: the first admin token is created and vaulted
-# only by typed NMS RPC (service.influxdb.1.bootstrap, family=core3), which
-# returns an nms-secret reference and never plaintext. The audited procedures
-# os.linux.debian.13.preflight_influxdb3_core and
-# os.linux.debian.13.install_influxdb3_core apply the same posture to hosts that
-# already exist; this template is for new guests.
+# only by post-clone operator automation. Existing hosts use independently
+# managed installation automation; this template is for new guests.
 #
 # node-id is derived at first boot from the per-VM SMBIOS UUID (falling back to
 # the per-instance machine-id), never from the hostname: the Proxmox clone
 # pipeline reuses this template's cicustom meta-data, so clones can share a
 # hostname. The script fails closed rather than minting a colliding identity.
 #
-# Zabbix Agent 2 and the NMS host agent are deliberately NOT injected into this
-# template (install_zabbix_agent2 / install_nms_agent are False on the seeded
 # PackerTemplate): the shared injectors build an Ubuntu Zabbix repository package
 # name from VERSION_ID, which yields a nonexistent "ubuntu13" package on Debian
-# 13, and the NMS agent bootstrap accepts only amd64. This installer is therefore
 # the LAST runcmd entry, which also matters: cloud-init shellifies runcmd into a
 # plain /bin/sh script with no `set -e`, so a non-final failing command would be
 # masked by a later success.
@@ -328,7 +319,7 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
             "loopback-only bind with token authentication, telemetry upload "
             "disabled, Processing Engine disabled, managed configuration plus "
             "systemd drop-in, and a held package. No credential is baked; the "
-            "first admin token is vaulted by typed NMS RPC."
+            "first admin token is vaulted by post-clone operator automation."
         ),
     }
     config, config_created = PackerInstallerConfig.objects.get_or_create(
@@ -359,21 +350,17 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
         "packer_template_ref": "",
         # QEMU guest agent is a plain Debian package, so its injection is safe.
         "install_qemu_guest_agent": True,
-        # Zabbix Agent 2 and the NMS host agent injections are OFF for this
         # template, and that is a platform constraint rather than a preference:
         # _inject_monitoring_agents() builds the Zabbix repository package name as
         # "ubuntu${VERSION_ID}", which is a nonexistent "ubuntu13" package on
-        # Debian 13, and the NMS agent bootstrap hard-requires amd64 while this
         # image also supports arm64. Injecting either would produce a cloud-config
         # that fails on the very platform this template declares. Turn them on only
         # once those injectors are OS-family- and architecture-aware.
         "install_zabbix_agent2": False,
-        "install_nms_agent": False,
         # With both of those off, this seed's own installer is the LAST runcmd
         # entry. That matters: cloud-init shellifies runcmd into a plain /bin/sh
         # script with no `set -e`, so a failing non-final command would be masked
         # by a later success.
-        "provisions_service": "influxdb3-core",
         "installer_config": config,
         "description": (
             "InfluxDB 3 Core 3.11.0 cloud-init template for Debian 13 (Trixie), "
@@ -381,7 +368,7 @@ def seed_influxdb3_core_debian13(apps, schema_editor):
             "PackerBuildTarget URL and target_node. First boot installs the pinned package, "
             "writes the managed loopback-only configuration, holds the package, and waits "
             "on the local readiness endpoint. Tokens, databases, and config changes are "
-            "managed only through typed NMS RPC."
+            "managed only through post-clone operator automation."
         ),
     }
     template, template_created = PackerTemplate.objects.get_or_create(

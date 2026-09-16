@@ -1,7 +1,7 @@
 # Roadmap
 
 - **v0.0.5** — cloud-init template image bakes through proxbox-api (Zabbix,
-  InfluxDB, Kubernetes, PowerDNS, Passbolt CE, File Server, base Ubuntu LTS
+  InfluxDB, Kubernetes, PowerDNS, Passbolt CE, and base Ubuntu LTS
   seeds), grouped OS-version dropdown, create-instance modal, and build
   dispatch hardening.
 - **v0.0.2.post2** — certification-readiness post release: package metadata,
