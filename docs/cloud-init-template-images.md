@@ -361,6 +361,32 @@ endpoint/config file, credential-bearing key or value, private key, encoded
 called. The pristine seed checks remain useful, but are not a substitute for
 validating the editable payload that is actually baked.
 
+### Generic network appliance marker (`0033`)
+
+`0033_seed_network_appliance_marker.py` creates or stamps a migration-managed
+`provisions_service` marker for external build tooling that owns the generic
+network appliance profile. This plugin does not ship cloud-init content for that
+profile; the tooling upserts the remaining template fields by name before
+dispatching a bake.
+
+| Field | Value |
+| --- | --- |
+| Template name | `network-appliance-debian-13` |
+| Service marker | `provisions_service = "network-appliance"` |
+| OS | Debian `13` |
+| Template VMID | `0` placeholder; Proxmox and proxbox-api refuse VMIDs below 100, so the unbuilt row cannot be cloned until external tooling sets the real value |
+| Proxmox endpoint / node | empty endpoint; node `select-at-build` (placeholders) |
+| Storage | `local` (placeholder) |
+| Installer config | none at migration time |
+
+If a row named `network-appliance-debian-13` already exists with an empty
+marker, the migration stamps `provisions_service` only when the row already
+describes this profile: `os_family = "debian"`, `os_version = "13"`, and
+`proxmox_template_id` equal to the placeholder `0` or the reserved `9700`. All
+other fields stay untouched. Any identity mismatch or a different non-empty
+marker aborts the migration without modifying the row, listing the differing
+fields, in the same compare-and-set style as the earlier seed migrations.
+
 ## Base Image Pinning (reproducible, verifiable OS bases)
 
 A cloud-init bake downloads a vendor base image that becomes the guest's **entire

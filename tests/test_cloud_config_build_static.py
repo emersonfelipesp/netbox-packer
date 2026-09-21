@@ -3315,7 +3315,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0032_update_endpoint_authorization_descriptions"}
+    assert names - internal_dependencies == {"0033_seed_network_appliance_marker"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:
