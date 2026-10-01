@@ -107,6 +107,11 @@ def _import_api_serializers_module():
     for name in ("PackerBuild", "PackerBuildTarget", "PackerInstallerConfig", "PackerTemplate"):
         setattr(models, name, type(name, (), {}))
 
+    django_apps = types.ModuleType("django.apps")
+    django_apps.apps = SimpleNamespace()
+
+    sys.modules["django"] = types.ModuleType("django")
+    sys.modules["django.apps"] = django_apps
     sys.modules["netbox"] = types.ModuleType("netbox")
     sys.modules["netbox.api"] = types.ModuleType("netbox.api")
     sys.modules["netbox.api.serializers"] = netbox_serializers
@@ -648,6 +653,305 @@ def test_models_reject_credentialed_base_image_urls(
     build = models.PackerBuild(variable_overrides={"image_url": image_url})
     with pytest.raises(models.ValidationError, match="must not contain"):
         build.clean()
+
+
+def _endpoint(host: str = "pve.example", port: int = 8006, scheme: str = "https", suffix: str = "") -> str:
+    return f"{scheme}://{host}:{port}{suffix}"
+
+
+@pytest.mark.parametrize("serializer_name", ("PackerTemplateSerializer", "PackerBuildTargetSerializer"))
+def test_serializers_expose_proxmox_endpoint_as_writable_field(
+    isolated_imports,
+    serializer_name: str,
+) -> None:
+    serializers = _import_api_serializers_module()
+    serializer = getattr(serializers, serializer_name)
+
+    assert "proxmox_endpoint" in serializer.Meta.fields
+    assert "proxmox_endpoint" not in getattr(serializer.Meta, "read_only_fields", ())
+    assert "proxmox_endpoint" not in serializer.Meta.brief_fields
+
+
+@pytest.mark.parametrize("serializer_name", ("PackerTemplateSerializer", "PackerBuildTargetSerializer"))
+@pytest.mark.parametrize(
+    ("submitted", "stored"),
+    (
+        ("", ""),
+        ("  ", ""),
+        (_endpoint(), _endpoint()),
+        (_endpoint(scheme="http", port=80), _endpoint(scheme="http", port=80)),
+        (f" {_endpoint('192.0.2.10')} ", _endpoint("192.0.2.10")),
+        (_endpoint(suffix="/"), _endpoint(suffix="/")),
+    ),
+)
+def test_proxmox_endpoint_validation_round_trips_normalized_urls(
+    isolated_imports,
+    serializer_name: str,
+    submitted: str,
+    stored: str,
+) -> None:
+    serializers = _import_api_serializers_module()
+    serializer = getattr(serializers, serializer_name)()
+
+    validated = serializer.validate_proxmox_endpoint(submitted)
+
+    assert validated == stored
+    # A value read back through the API must always be accepted again unchanged.
+    assert serializer.validate_proxmox_endpoint(validated) == stored
+
+
+@pytest.mark.parametrize("serializer_name", ("PackerTemplateSerializer", "PackerBuildTargetSerializer"))
+@pytest.mark.parametrize(
+    ("submitted", "message"),
+    (
+        ("pve.example:8006", "absolute HTTP or HTTPS URL"),
+        ("ftp://pve.example:8006", "absolute HTTP or HTTPS URL"),
+        ("https://", "absolute HTTP or HTTPS URL"),
+        ("https:///path", "absolute HTTP or HTTPS URL"),
+        ("https://pve.example:notaport", "malformed"),
+        ("https://pve.example:99999", "malformed"),
+        ("https://root:hunter2@pve.example:8006", "secret-shaped"),
+        ("https://root@pve.example:8006", "credentials"),
+        ("https://@pve.example:8006", "credentials"),
+        (_endpoint(suffix="/api2/json"), "must not contain a path"),
+        (_endpoint(suffix="/api2/json/"), "must not contain a path"),
+        (_endpoint(suffix="/nested/path"), "must not contain a path"),
+        (_endpoint(suffix="//"), "must not contain a path"),
+        ("https://pve.example:8006/?token=do-not-persist", "query string"),
+        ("https://pve.example:8006/?", "query string or fragment"),
+        ("https://pve.example:8006/#frag", "query string or fragment"),
+        ("https://pve.example:8006 extra", "whitespace"),
+        ("https://pve.example:8006\nHost: evil", "whitespace"),
+        ("https://pve.example:8006/\x00", "whitespace"),
+        ("token=do-not-persist", "secret-shaped"),
+    ),
+)
+def test_proxmox_endpoint_validation_rejects_unsafe_values_without_echoing_them(
+    isolated_imports,
+    serializer_name: str,
+    submitted: str,
+    message: str,
+) -> None:
+    serializers = _import_api_serializers_module()
+    serializer = getattr(serializers, serializer_name)()
+
+    with pytest.raises(ValueError, match=message) as excinfo:
+        serializer.validate_proxmox_endpoint(submitted)
+
+    for secret in ("hunter2", "do-not-persist", "evil"):
+        assert secret not in str(excinfo.value)
+
+
+_CROSS_BOUNDARY_MATRIX = (
+    "",
+    "  ",
+    _endpoint(),
+    _endpoint(scheme="http", port=80),
+    _endpoint("192.0.2.10"),
+    _endpoint("[2001:db8::1]"),
+    _endpoint(suffix="/"),
+    f" {_endpoint()} ",
+    _endpoint(suffix="/api2/json"),
+    _endpoint(suffix="/api2/json/"),
+    _endpoint(suffix="//"),
+    _endpoint(suffix="/x"),
+    _endpoint(suffix="/?"),
+    _endpoint(suffix="/?a=b"),
+    _endpoint(suffix="#f"),
+    "https://root@pve.example:8006",
+    "https://root:pw@pve.example:8006",
+    "https://pve.example:99999",
+    "ftp://pve.example:8006",
+    "pve.example:8006",
+    "https://",
+    "https:///x",
+)
+
+
+@pytest.mark.parametrize("submitted", _CROSS_BOUNDARY_MATRIX)
+def test_every_url_the_api_accepts_also_passes_dispatch_authorization_parsing(
+    isolated_imports,
+    submitted: str,
+) -> None:
+    serializers = _import_api_serializers_module()
+    authorization = importlib.import_module("netbox_packer.endpoint_authorization")
+    # The serializer must use the very parser dispatch authorization uses.
+    assert serializers._split_absolute_http_url is authorization._split_absolute_http_url
+    serializer = serializers.PackerBuildTargetSerializer()
+
+    try:
+        stored = serializer.validate_proxmox_endpoint(submitted)
+    except ValueError:
+        return
+    if stored:
+        # Must not raise: an accepted URL can never be one dispatch refuses to parse.
+        authorization._split_absolute_http_url(stored, label="Proxmox endpoint URL")
+
+
+@pytest.mark.parametrize("serializer_name", ("PackerTemplateSerializer", "PackerBuildTargetSerializer"))
+def test_serializers_wire_the_shared_endpoint_validator(isolated_imports, serializer_name: str) -> None:
+    serializers = _import_api_serializers_module()
+    serializer = getattr(serializers, serializer_name)
+
+    assert serializers._ProxmoxEndpointValidationMixin in serializer.__mro__
+    assert serializer.validate_proxmox_endpoint is serializers._ProxmoxEndpointValidationMixin.validate_proxmox_endpoint
+    # The wired method is the real validator, not a pass-through.
+    with pytest.raises(ValueError, match="must not contain a path"):
+        serializer().validate_proxmox_endpoint(_endpoint(suffix="/api2/json"))
+
+
+def test_cloud_dispatch_uses_the_enabled_target_url_not_the_template_url(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    authorized = _endpoint("target.example")
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            assert field == "priority"
+            return [
+                SimpleNamespace(enabled=True, proxmox_node="pve01", proxmox_endpoint=authorized),
+                SimpleNamespace(enabled=True, proxmox_node="pve02", proxmox_endpoint=_endpoint("other.example")),
+                SimpleNamespace(enabled=False, proxmox_node="pve03", proxmox_endpoint=_endpoint("off.example")),
+            ]
+
+    build = SimpleNamespace(
+        variable_overrides={"target_node": "pve01", "endpoint_id": 99},
+        template=SimpleNamespace(
+            name="cloud-template",
+            proxmox_endpoint=_endpoint("template.example"),
+            build_targets=Targets(),
+        ),
+    )
+
+    assert jobs._endpoint_urls_for_cloud_dispatch(build) == [authorized]
+
+
+def test_select_build_node_dispatches_the_target_endpoint_when_targets_exist(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    target = SimpleNamespace(
+        enabled=True,
+        priority=1,
+        proxmox_endpoint=_endpoint("target.example"),
+        proxmox_node="pve-target",
+    )
+    targets = Mock()
+    targets.all.return_value.order_by.return_value = [target]
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerBuild = type(
+        "PackerBuild",
+        (),
+        {"objects": SimpleNamespace(filter=Mock(return_value=SimpleNamespace(count=lambda: 0)))},
+    )
+    sys.modules["netbox_packer.models"] = models_mod
+    validators_mod = types.ModuleType("netbox_packer.validators")
+    validators_mod.NodeAffinityValidator = object
+    sys.modules["netbox_packer.validators"] = validators_mod
+    template = SimpleNamespace(
+        name="cloud-template",
+        proxmox_endpoint=_endpoint("template.example"),
+        proxmox_node="select-at-build",
+        build_targets=targets,
+    )
+
+    assert jobs.select_build_node(
+        template,
+        skip_affinity_check=True,
+        required_node="pve-target",
+        fail_if_targets_exhausted=True,
+    ) == (_endpoint("target.example"), "pve-target")
+
+
+@pytest.mark.parametrize(
+    ("targets", "requested_node", "expected"),
+    (
+        ([], "pve01", "template 'cloud-template' has no PackerBuildTarget and an empty proxmox_endpoint"),
+        (
+            [("pve01", "")],
+            "pve01",
+            "PackerBuildTarget for node 'pve01' on template 'cloud-template' has an empty proxmox_endpoint",
+        ),
+        (
+            [("pve01", _endpoint()), ("pve02", "")],
+            "",
+            "PackerBuildTarget for node 'pve02' on template 'cloud-template' has an empty proxmox_endpoint",
+        ),
+    ),
+)
+def test_enqueue_error_names_which_endpoint_input_is_missing(
+    isolated_imports,
+    targets,
+    requested_node: str,
+    expected: str,
+) -> None:
+    jobs = _import_jobs_module()
+    rows = [SimpleNamespace(enabled=True, proxmox_node=node, proxmox_endpoint=url) for node, url in targets]
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            return rows
+
+    build = SimpleNamespace(
+        variable_overrides={"target_node": requested_node, "endpoint_id": 7},
+        template=SimpleNamespace(name="cloud-template", proxmox_endpoint="", build_targets=Targets()),
+    )
+
+    with pytest.raises(RuntimeError, match="Proxmox endpoint URL is required") as excinfo:
+        jobs._endpoint_urls_for_cloud_dispatch(build)
+
+    message = str(excinfo.value)
+    assert expected in message
+    assert "variable_overrides.endpoint_id never supplies or authorizes an endpoint URL" in message
+
+
+def test_unauthorized_endpoint_still_fails_closed_before_enqueue(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    settings_row = SimpleNamespace(proxbox_api_url="https://proxbox-api.example")
+    models_mod = types.ModuleType("netbox_packer.models")
+    models_mod.PackerPluginSettings = type(
+        "PackerPluginSettings",
+        (),
+        {"get_solo": staticmethod(lambda: settings_row)},
+    )
+    sys.modules["netbox_packer.models"] = models_mod
+
+    class Denied(RuntimeError):
+        pass
+
+    def deny(endpoint_url, proxbox_api_url):
+        raise Denied("The selected netbox-proxbox ProxmoxEndpoint must have allow_packer_template_builds enabled.")
+
+    class Targets:
+        def all(self):
+            return self
+
+        def order_by(self, field):
+            return [SimpleNamespace(enabled=True, proxmox_node="pve01", proxmox_endpoint=_endpoint())]
+
+    enqueue = Mock()
+    mark_failed = Mock()
+    jobs.PackerBuildJob.enqueue = enqueue
+    jobs._authorize_selected_endpoint = deny
+    jobs._mark_enqueue_failed = mark_failed
+    build = SimpleNamespace(
+        pk=130,
+        variable_overrides={"target_node": "pve01"},
+        template=SimpleNamespace(
+            name="cloud-template",
+            installer_config=SimpleNamespace(installer_type="cloud_config"),
+            build_targets=Targets(),
+        ),
+    )
+
+    with pytest.raises(Denied, match="allow_packer_template_builds"):
+        jobs.dispatch_build(build)
+
+    enqueue.assert_not_called()
+    mark_failed.assert_called_once()
 
 
 class ChainManager:

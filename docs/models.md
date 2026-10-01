@@ -51,7 +51,7 @@ installer config, target node/storage, and monitoring-agent injection preference
 | `os_family` | CharField(20) | — | Choices from `OSFamilyChoices` |
 | `os_version` | CharField(40) | — | e.g. `24.04`. The web form renders this as a dropdown grouped by OS family (`OS_VERSIONS_BY_FAMILY` in `choices.py`); the model/API stay free-form so automation can send any version. |
 | `proxmox_template_id` | PositiveIntegerField | — | Proxmox VMID for the resulting template |
-| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint for Cloud-Init template builds; proxbox-api derives SSH authority from the translated backend row. |
+| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint for Cloud-Init template builds; proxbox-api derives SSH authority from the translated backend row. Readable and writable through the REST API (see [Endpoint URL over REST](#endpoint-url-over-rest) below). |
 | `proxmox_node` | CharField(100) | — | Proxmox node name or IP |
 | `storage_pool` | CharField(100) | blank | Proxmox storage pool name (default: `local`) |
 | `storage_pool_type` | CharField(20) | blank | Choices from `StoragePoolTypeChoices` |
@@ -158,12 +158,33 @@ configured but all are disabled or unavailable, dispatch fails closed.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `template` | FK → PackerTemplate | — | CASCADE; `related_name="build_targets"` |
-| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint when this target is selected. |
+| `proxmox_endpoint` | URLField | blank | Proxmox API URL matched to exactly one authorized netbox-proxbox endpoint when this target is selected. Readable and writable through the REST API (see [Endpoint URL over REST](#endpoint-url-over-rest) below). |
 | `proxmox_node` | CharField(100) | — | Node name or IP |
 | `priority` | PositiveIntegerField | `10` | Lower = higher priority |
 | `enabled` | BooleanField | `True` | Disabled targets are skipped |
 
 **Unique constraint:** `(template, proxmox_node)`.
+
+### Endpoint URL over REST
+
+`proxmox_endpoint` is a regular field on both `packer-templates` and
+`build-targets` in the REST API, so a Cloud-Init template can be dispatched onto
+an authorized endpoint using REST alone: create an enabled build target with
+`proxmox_endpoint` and `proxmox_node`, then `POST` the template's `build/` action
+with `variable_overrides.target_node` set to that node. The value is validated at
+the API boundary: it must be an absolute `http` or `https` origin with a host (no path other
+than `/`, so a value ending in `/api2/json` is rejected), and credentials
+(userinfo), query strings, fragments, whitespace, and secret-shaped values are
+rejected. The structural check is the same parser dispatch authorization uses,
+so every stored URL can also be authorized without echoing the submitted text. A blank value is allowed
+and means "not set". Storing a URL is never authorization: dispatch still
+resolves it to exactly one netbox-proxbox `ProxmoxEndpoint` and requires the
+`enabled`, `allow_writes`, and `allow_packer_template_builds` gates, so an
+unknown, ambiguous, or unauthorized URL fails closed. When a template has build
+targets, the enabled target's URL is the one that is authorized and used; the
+template's own `proxmox_endpoint` is consulted only when no target rows exist.
+If the selected input has no URL, the enqueue error names which one is missing
+(the template, or the build target for a given node).
 
 ---
 

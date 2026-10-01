@@ -38,7 +38,9 @@ support `snippets`, `import`, and `images`. The template's primary endpoint URL,
 or every enabled build-target URL it may select, must match exactly one enabled
 netbox-proxbox endpoint by normalized host and port. Missing, malformed,
 disabled, unmatched, or ambiguous targets fail before queueing. A numeric
-`variable_overrides.endpoint_id` is never treated as authorization.
+`variable_overrides.endpoint_id` is never treated as authorization. Both URL
+fields are writable through the REST API (`packer-templates` and
+`build-targets`); see [Data Models](models.md#endpoint-url-over-rest).
 
 This requires capability-bearing revisions where the signed-preflight contract
 is bound to the explicit packer-template capability. `proxbox-api 0.0.20` and
