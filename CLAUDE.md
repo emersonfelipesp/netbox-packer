@@ -181,6 +181,25 @@ Fernet-encrypted token (`set_fileserver_package_read_token()` /
   succeed through that context. No configured target rows retains the legacy
   primary endpoint candidate; configured-but-all-disabled or exhausted target
   rows fail closed for cloud builds instead of falling back.
+- `proxmox_endpoint` is a writable REST field on both `PackerTemplateSerializer`
+  and `PackerBuildTargetSerializer`. Both share one validator
+  (`_validate_proxmox_endpoint_url` in `api/serializers.py`) that accepts only a
+  blank value or an absolute `http`/`https` origin with a host (path `""` or
+  `/` only) and rejects userinfo, paths, query strings, fragments,
+  whitespace/control characters, and secret-shaped text, never echoing the
+  submitted value. Structure is checked by importing
+  `endpoint_authorization._split_absolute_http_url`, the exact parser dispatch
+  authorization uses, so the API cannot store a URL (such as one ending in
+  `/api2/json`) that dispatch would refuse; one such enabled target would
+  otherwise block every build that has no explicit `target_node`. Never
+  re-implement that parsing in the serializer. Storing a URL is not authorization:
+  the dispatch gates above still apply. When target rows exist, the enabled
+  target's URL is what `_endpoint_urls_for_cloud_dispatch()` authorizes and what
+  `select_build_node()` returns; the template URL is used only with no target
+  rows. A blank URL raises `Proxmox endpoint URL is required: ...` from
+  `_require_endpoint_url()`, naming the template or build target (by node) that
+  lacks it and stating that `variable_overrides.endpoint_id` never supplies one.
+  Do not add `proxmox_endpoint` to `brief_fields`.
 - These contracts are locked by `tests/test_cloud_config_build_static.py` and
   `tests/test_build_dispatch_behavior.py`.
 

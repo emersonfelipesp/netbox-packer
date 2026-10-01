@@ -46,7 +46,10 @@ Proxmox host, the endpoint's `allow_writes=True`, and storage that allows
 have the narrower `allow_packer_template_builds=True` capability. The template's
 `proxmox_endpoint`, or the selected enabled `PackerBuildTarget` URL, is matched
 by normalized host and port to exactly one endpoint; caller-supplied numeric
-`endpoint_id` overrides never authorize a bake. When build-target rows exist,
+`endpoint_id` overrides never authorize a bake. `proxmox_endpoint` is readable and
+writable on both the `packer-templates` and `build-targets` REST endpoints
+(absolute `http(s)` origin with a host; paths, credentials, query strings, and
+fragments are rejected), so no UI step is needed to point a build target at an endpoint. When build-target rows exist,
 an all-disabled or exhausted set fails closed rather than falling back to the
 template's primary endpoint. Configure `proxbox_api_url` and an encrypted API key
 on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell

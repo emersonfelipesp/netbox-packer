@@ -276,10 +276,33 @@ def select_build_node(
     return template.proxmox_endpoint, template.proxmox_node
 
 
+def _require_endpoint_url(value, source):
+    """Return a non-empty endpoint URL or name the input that failed to supply one."""
+
+    url = str(value or "").strip()
+    if url:
+        return url
+    raise RuntimeError(
+        f"Proxmox endpoint URL is required: {source}. "
+        "variable_overrides.endpoint_id never supplies or authorizes an endpoint URL."
+    )
+
+
+def _target_endpoint_url(target, template_name):
+    """Return one build target's endpoint URL, naming the target when it is blank."""
+
+    return _require_endpoint_url(
+        target.proxmox_endpoint,
+        f"the enabled PackerBuildTarget for node {getattr(target, 'proxmox_node', '')!r} on template "
+        f"{template_name!r} has an empty proxmox_endpoint",
+    )
+
+
 def _endpoint_urls_for_cloud_dispatch(build):
     """Return every endpoint URL that the queued cloud build could select."""
 
     template = build.template
+    template_name = getattr(template, "name", "")
     # Derive existence and eligibility from the same database statement. A
     # split snapshot can otherwise race a disabled insertion and fall back to
     # the primary endpoint even though configured targets now exist.
@@ -291,15 +314,22 @@ def _endpoint_urls_for_cloud_dispatch(build):
         matching = [target for target in targets if target.proxmox_node == requested_node]
         if len(matching) != 1:
             raise RuntimeError(f"Exactly one enabled PackerBuildTarget must match requested node {requested_node!r}.")
-        return [str(matching[0].proxmox_endpoint or "").strip()]
+        return [_target_endpoint_url(matching[0], template_name)]
     if targets:
         # Runtime capacity/affinity selects one of these. Authorize every
         # possible target before queueing so target selection cannot bypass the
         # endpoint capability.
-        return list(dict.fromkeys(str(target.proxmox_endpoint or "").strip() for target in targets))
+        return list(dict.fromkeys(_target_endpoint_url(target, template_name) for target in targets))
     if has_configured_targets:
         raise RuntimeError(f"No enabled PackerBuildTarget is available for template {template.name!r}.")
-    return [str(template.proxmox_endpoint or "").strip()]
+    return [
+        _require_endpoint_url(
+            template.proxmox_endpoint,
+            f"template {template_name!r} has no PackerBuildTarget and an empty proxmox_endpoint; "
+            "set proxmox_endpoint on the template or create an enabled PackerBuildTarget with "
+            "proxmox_endpoint and proxmox_node",
+        )
+    ]
 
 
 def _authorize_selected_endpoint(endpoint_url, proxbox_api_url):

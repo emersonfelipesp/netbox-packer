@@ -31,6 +31,10 @@ derives SSH authority from it. Numeric caller overrides are not authorization.
 Configured-but-all-disabled or exhausted build-target sets fail closed for
 cloud builds; they must never fall back to the template's primary endpoint.
 Optional `template_vmid` and `storage` overrides select destination identifiers.
+The endpoint URL itself is a writable REST field on `build-targets` and
+`packer-templates` (validated with the same parser dispatch uses: absolute `http(s)` origin
+with a host, no path, credentials, query, or fragment); a blank URL at enqueue fails with an error naming the
+template or build target that lacks it. Storing a URL never authorizes it.
 Never put a password, token, setup request, or private key in an
 installer config or build override. Initial setup, database creation, and token
 creation are typed NMS RPC operations backed by netbox-nms secret references.

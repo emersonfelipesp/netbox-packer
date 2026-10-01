@@ -5,6 +5,7 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 
 from ..base_image import validate_base_image_url
+from ..endpoint_authorization import PackerEndpointAuthorizationError, _split_absolute_http_url
 from ..models import (
     PackerBuild,
     PackerBuildTarget,
@@ -62,6 +63,59 @@ def _contains_secret_material(value):
         elif isinstance(item, str) and any(pattern.search(item) for pattern in _SECRET_VALUE_PATTERNS):
             return True
     return False
+
+
+def _proxmox_endpoint_text_problem(raw):
+    """Return why raw endpoint text is unsafe to persist, or None."""
+
+    if any(char.isspace() or ord(char) < 32 for char in raw):
+        return "Proxmox endpoint URL must not contain whitespace or control characters."
+    if "?" in raw or "#" in raw:
+        return "Proxmox endpoint URL must not contain a query string or fragment."
+    if _contains_secret_material(raw):
+        return "Proxmox endpoint URL must not contain secret-shaped values."
+    return None
+
+
+def _proxmox_endpoint_structure_problem(raw):
+    """Return why a text-safe endpoint would be refused at dispatch, or None.
+
+    Delegates to the exact parser dispatch authorization uses, so the API can
+    never store a URL (for example one carrying a path) that authorization
+    would later reject for every build.
+    """
+
+    try:
+        _split_absolute_http_url(raw, label="Proxmox endpoint URL")
+    except PackerEndpointAuthorizationError as exc:
+        return str(exc)
+    return None
+
+
+def _validate_proxmox_endpoint_url(value):
+    """Validate a stored Proxmox endpoint URL without echoing the submitted value.
+
+    The URL only identifies which netbox-proxbox endpoint a build targets; it is
+    never itself authorization. Credentials, query strings, and fragments are
+    refused so no secret can be persisted in this field.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    problem = _proxmox_endpoint_text_problem(raw) or _proxmox_endpoint_structure_problem(raw)
+    if problem:
+        raise serializers.ValidationError(problem)
+    return raw
+
+
+class _ProxmoxEndpointValidationMixin:
+    """Shared API boundary validation for models that persist ``proxmox_endpoint``."""
+
+    def validate_proxmox_endpoint(self, value):
+        """Reject credentialed or malformed endpoint URLs before they are stored."""
+
+        return _validate_proxmox_endpoint_url(value)
 
 
 class PackerTemplateBuildRequestSerializer(serializers.Serializer):
@@ -140,7 +194,7 @@ class PackerInstallerConfigSerializer(NetBoxModelSerializer):
         brief_fields = ("id", "url", "display", "name", "version")
 
 
-class PackerTemplateSerializer(NetBoxModelSerializer):
+class PackerTemplateSerializer(_ProxmoxEndpointValidationMixin, NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_packer-api:packertemplate-detail",
     )
@@ -173,6 +227,7 @@ class PackerTemplateSerializer(NetBoxModelSerializer):
             "os_family",
             "os_version",
             "proxmox_template_id",
+            "proxmox_endpoint",
             "proxmox_node",
             "storage_pool",
             "storage_pool_type",
@@ -260,7 +315,7 @@ class PackerBuildSerializer(NetBoxModelSerializer):
         read_only_fields = ("base_image_url_at_build", "base_image_sha256_at_build")
 
 
-class PackerBuildTargetSerializer(NetBoxModelSerializer):
+class PackerBuildTargetSerializer(_ProxmoxEndpointValidationMixin, NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_packer-api:packerbuildtarget-detail",
     )
@@ -273,6 +328,7 @@ class PackerBuildTargetSerializer(NetBoxModelSerializer):
             "url",
             "display",
             "template",
+            "proxmox_endpoint",
             "proxmox_node",
             "priority",
             "enabled",
