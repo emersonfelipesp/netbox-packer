@@ -38,7 +38,6 @@ def test_capability_version_floor_excludes_pre_feature_packages() -> None:
     )
     docs = (
         "README.md",
-        "CLAUDE.md",
         "AGENTS.md",
         "COMPATIBILITY.md",
         "docs/cloud-init-template-images.md",
@@ -397,7 +396,7 @@ def test_influxdb_process_is_documented_for_operators_and_agents() -> None:
         "endpoint_id",
         "target_node",
     )
-    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+    for rel in ("README.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)
         for text in required:
             assert text in doc, f"{rel} must document {text}"
@@ -473,7 +472,7 @@ def test_powerdns_auth_recursor_process_is_documented_for_operators_and_agents()
         "172.16.0.0/12",
         "0.0.0.0/0",
     )
-    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+    for rel in ("README.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)
         for text in required:
             assert text in doc, f"{rel} must document {text}"
@@ -587,7 +586,7 @@ def test_passbolt_ce_process_is_documented_for_operators_and_agents() -> None:
         "passbolt-ce-server",
         "PASSBOLT_PLUGINS_JWT_AUTHENTICATION_ENABLED",
     )
-    for rel in ("README.md", "CLAUDE.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
+    for rel in ("README.md", "AGENTS.md", "docs/cloud-init-template-images.md", "docs/index.md"):
         doc = _read(rel)
         for text in required:
             assert text in doc, f"{rel} must document {text}"
@@ -702,7 +701,7 @@ def _install_proxbox_responses(monkeypatch, mod, responses: list[dict | BaseExce
             raise response
         return _FakeResp(json.dumps(response).encode())
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", lambda req, timeout, _verify: fake_urlopen(req, timeout=timeout))
     return captured
 
 
@@ -839,7 +838,7 @@ def test_call_proxbox_build_rejects_older_api_without_preflight(monkeypatch) -> 
             fp=__import__("io").BytesIO(b'{"detail":"Not Found"}'),
         )
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", lambda req, timeout, _verify: fake_urlopen(req, timeout=timeout))
 
     with pytest.raises(mod.ProxboxApiError, match="incompatible proxbox-api.*legacy one-step"):
         mod.call_proxbox_build(**_proxbox_build_kwargs())
@@ -877,7 +876,7 @@ def test_call_proxbox_build_surfaces_execute_plan_rejection(
             fp=__import__("io").BytesIO(body),
         )
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", lambda req, timeout, _verify: fake_urlopen(req, timeout=timeout))
 
     with pytest.raises(mod.ProxboxApiError, match=expected):
         mod.call_proxbox_build(**_proxbox_build_kwargs())
@@ -923,7 +922,7 @@ def test_call_proxbox_build_raises_on_http_error(monkeypatch) -> None:
             req.full_url, 403, "Forbidden", {}, fp=__import__("io").BytesIO(b"writes disabled")
         )
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod, "_open_request", lambda req, timeout, _verify: fake_urlopen(req, timeout=timeout))
 
     try:
         mod.call_proxbox_build(
@@ -1040,7 +1039,6 @@ def test_akvorado_contract_is_documented() -> None:
     )
     for rel in (
         "README.md",
-        "CLAUDE.md",
         "AGENTS.md",
         "docs/cloud-init-template-images.md",
         "docs/index.md",
@@ -1677,10 +1675,23 @@ def test_influxdb3_explorer_payload_guard_resists_encoding_and_path_aliases(
     jobs._validate_influxdb3_explorer_payload(seed)
 
 
+def _stub_proxbox_linkage(jobs) -> None:
+    """Resolve the linkage from the stubbed settings row without netbox-proxbox."""
+
+    jobs._resolve_proxbox_linkage = lambda row: SimpleNamespace(
+        base_url=row.proxbox_api_url,
+        api_key=row.get_proxbox_api_key(),
+        verify_ssl=True,
+        source="packer-setting override",
+        warning="",
+    )
+
+
 def test_influxdb3_explorer_tainted_final_payload_never_reaches_proxbox(
     monkeypatch,
 ) -> None:
     jobs = _load_jobs_isolated(monkeypatch)
+    _stub_proxbox_linkage(jobs)
     seed = _read("netbox_packer/seeds/influxdb3-explorer-1.9.0-debian-13.cloud-config.yaml")
     config = yaml.safe_load(seed.split("\n", 1)[1])
     assert len(config["write_files"]) == 5, "mutation target: pristine Explorer write_files changed"
@@ -1767,6 +1778,7 @@ def test_cloud_build_rechecks_endpoint_authorization_at_final_call_boundary(
     monkeypatch,
 ) -> None:
     jobs = _load_jobs_isolated(monkeypatch)
+    _stub_proxbox_linkage(jobs)
     jobs._inject_monitoring_agents = Mock(return_value="#cloud-config\n")
     jobs._authorize_selected_endpoint = Mock(side_effect=RuntimeError("allow_packer_template_builds was revoked"))
 
@@ -2336,6 +2348,7 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     """Protect the job-to-client seam and the atomic provenance snapshots."""
 
     jobs = _load_jobs_isolated(monkeypatch)
+    _stub_proxbox_linkage(jobs)
     if bypass_url_validation:
         # Simulate the structural rejection guard being bypassed so this test
         # independently proves the persistence/logging redaction backstop.
@@ -2468,6 +2481,8 @@ def test_cloud_build_job_passes_and_snapshots_resolved_base_image(
     assert client_kwargs["image_url"] == expected_url
     assert client_kwargs["image_sha256"] == expected_sha256
     assert client_kwargs["endpoint_id"] == 17
+    assert client_kwargs["proxbox_api_key"] == "api-key"
+    assert client_kwargs["verify_ssl"] is True
     assert build.base_image_url_at_build == safe_expected_url
     assert build.base_image_sha256_at_build == expected_sha256
     assert template_updates == [
@@ -2674,7 +2689,6 @@ def test_influxdb3_core_debian13_contract_is_documented() -> None:
     )
     for rel in (
         "README.md",
-        "CLAUDE.md",
         "AGENTS.md",
         "docs/cloud-init-template-images.md",
         "docs/index.md",
@@ -2695,7 +2709,6 @@ def test_influxdb3_explorer_debian13_contract_is_documented() -> None:
     )
     for rel in (
         "README.md",
-        "CLAUDE.md",
         "AGENTS.md",
         "docs/cloud-init-template-images.md",
         "docs/index.md",

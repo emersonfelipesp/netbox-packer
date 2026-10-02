@@ -125,10 +125,11 @@ NetBox UI (Create dialog -> Build)
      when that source still matches its current declared pin (otherwise stale)
 ```
 
-Configuration lives on the singleton `PackerPluginSettings`: `proxbox_api_url`
-plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
-`get_proxbox_api_key()`). Encryption is keyed off
-`settings.SECRET_KEY`.
+The proxbox-api linkage is reused from netbox-proxbox by default
+(`netbox_packer/proxbox_linkage.py`, `resolve_proxbox_linkage()`). The singleton
+`PackerPluginSettings` holds only an optional selector and key override: `proxbox_api_url` plus a
+Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
+`get_proxbox_api_key()`, keyed off `settings.SECRET_KEY`).
 
 ### Dispatch invariants (do not regress)
 
@@ -156,6 +157,13 @@ plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
   `PACKER_BUILD_TIMEOUT_SECONDS` even when the process emits no stdout. The
   watchdog in `_run_subprocess()` is intentionally independent of output
   arrival.
+- Every authenticated proxbox-api request goes through `proxbox_client._open_request()`,
+  whose opener uses `_RefuseRedirects`: every HTTP redirect (300-series, including
+  307/308 and https -> http downgrades) raises a secret-free `ProxboxApiError`, so
+  urllib can never replay `X-Proxbox-API-Key` to another origin. Do not call
+  `urllib.request.urlopen` for these requests, and keep `verify_ssl=False` (the
+  netbox-proxbox endpoint's own choice) on that same opener via `HTTPSHandler`.
+  `tests/test_proxbox_client_redirects.py` exercises this against a local server.
 - `target_node` MUST collapse an unset value to `None`, never `""` — proxbox-api
   rejects an empty `target_node` with HTTP 422 (`min_length=1`).
 - Executable cloud-config builds MUST use plan → signed preflight → execute.
@@ -171,9 +179,37 @@ plus a Fernet-encrypted `proxbox_api_key_encrypted` (`set_proxbox_api_key()` /
   exact resolution immediately before `call_proxbox_build()`. Missing,
   malformed, disabled, unmatched, ambiguous, or revoked endpoints fail closed;
   caller-supplied numeric `endpoint_id` overrides never grant authorization.
-  The configured `proxbox_api_url` must match exactly one usable
-  netbox-proxbox `FastAPIEndpoint` context, and the backend-id resolver must
-  succeed through that context. No configured target rows retains the legacy
+  The proxbox-api linkage is resolved by `resolve_proxbox_linkage()`: a blank
+  `proxbox_api_url` (the model default, and the only blank-or-example value the
+  plugin ever shipped; the example value earlier documentation showed is **not**
+  special and is treated like any other stored URL) derives the base URL (hostname URL first),
+  API key, and `verify_ssl` from the single enabled netbox-proxbox
+  `FastAPIEndpoint` context; zero or several enabled endpoints fail closed with
+  an error naming netbox-proxbox. A non-blank URL matching exactly one enabled
+  endpoint by origin selects it (this disambiguates several endpoints). A
+  non-blank URL matching none is stale — the plugin has no page to edit or clear
+  it — so it is ignored, together with its stored API key, in favour of the single
+  enabled endpoint and that endpoint's own key (the stale backend's key is never
+  sent to the selected backend; an endpoint with no key of its own fails closed),
+  with a secret-free `[WARNING]` in the build log (and a logger warning at
+  dispatch); with zero or several enabled endpoints it fails closed. The stored URL is never
+  a transport target unless it matches an enabled endpoint. "Exactly one endpoint"
+  counts enabled **rows**, not usable contexts: `enabled_fastapi_context_slots()`
+  keeps a `None` slot for an enabled row whose request context cannot be built, so
+  an unusable row can never make a different backend look like the only one. A
+  single enabled row without a usable context fails closed and points at its
+  target fingerprint and key configuration in netbox-proxbox; only an explicit
+  stored URL matching exactly one usable endpoint may disambiguate. For the default
+  linkage and an explicit match the packer API key wins when set; for a stale
+  stored URL the stored key is ignored with the URL and the selected context's own
+  key is required. Otherwise the context's `X-Proxbox-API-Key` header is used. Keys never
+  appear in logs, errors, or `repr`. `jobs._resolve_build_linkage()` runs first in
+  `_run_proxbox_cloud_build()` (logging only the secret-free error), and
+  `_authorize_cloud_build_dispatch()` authorizes against the derived base URL.
+  Resolving the linkage is not authorization: the netbox-proxbox gates and the
+  backend-id resolver must still succeed through that context at dispatch and
+  again at the final call boundary. Never reintroduce a hard dependency on
+  `PackerPluginSettings.proxbox_api_url`. No configured target rows retains the legacy
   primary endpoint candidate; configured-but-all-disabled or exhausted target
   rows fail closed for cloud builds instead of falling back.
 - `proxmox_endpoint` is a writable REST field on both `PackerTemplateSerializer`
@@ -264,8 +300,8 @@ The modal gathers:
 
 `PackerTemplateCreateInstanceForm` validates the POST and builds the exact
 `/cloud/vm/provision` payload. `call_proxbox_vm_provision()` sends that payload
-to the configured `PackerPluginSettings.proxbox_api_url` using the encrypted API
-key. The selected template supplies `template_vmid` from
+to the same resolved proxbox-api linkage (netbox-proxbox by default, with
+`PackerPluginSettings` as an optional override). The selected template supplies `template_vmid` from
 `proxmox_template_id`, plus default `target_node` and `storage`.
 
 Important boundary: the create-instance modal's numeric proxbox-api endpoint id

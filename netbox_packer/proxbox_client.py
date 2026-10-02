@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -49,6 +50,49 @@ def _error_code_from_body(body: str) -> str | None:
     return str(code) if code else None
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every HTTP redirect so the API key can never reach another origin.
+
+    urllib would otherwise replay the request headers (including the API key) to
+    the redirect target, and may follow an https -> http downgrade. proxbox-api
+    does not redirect its API, so any redirect is unexpected and fatal. The error
+    carries only the status code, never the Location, URL, or key.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        raise ProxboxApiError(
+            f"proxbox-api answered with an HTTP {code} redirect; redirects are refused so the API key is not forwarded",
+            status_code=code,
+        )
+
+
+def _tls_handlers(verify_ssl: bool) -> list:
+    """Return extra opener handlers: none (default verification) unless disabled.
+
+    ``verify_ssl`` mirrors the TLS choice of the netbox-proxbox FastAPI endpoint the
+    build is linked to, so a backend that operators already reach without
+    verification in netbox-proxbox is reachable here too. Verification stays on by
+    default and for every endpoint that does not opt out.
+    """
+    if verify_ssl:
+        return []
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return [urllib.request.HTTPSHandler(context=context)]
+
+
+def _build_opener(verify_ssl: bool) -> urllib.request.OpenerDirector:
+    """Build the opener used for every authenticated proxbox-api request."""
+    return urllib.request.build_opener(_RefuseRedirects, *_tls_handlers(verify_ssl))
+
+
+def _open_request(request: urllib.request.Request, timeout: int, verify_ssl: bool):
+    """Send one authenticated request without ever following a redirect."""
+    # nosec B310 - scheme is operator-configured http(s) from netbox-proxbox/plugin settings
+    return _build_opener(verify_ssl).open(request, timeout=timeout)  # noqa: S310
+
+
 def _post_json(
     *,
     proxbox_api_url: str,
@@ -56,6 +100,7 @@ def _post_json(
     path: str,
     payload: dict,
     timeout: int,
+    verify_ssl: bool = True,
 ) -> dict:
     """POST JSON to proxbox-api and return the decoded response body."""
     base = proxbox_api_url.rstrip("/")
@@ -72,8 +117,7 @@ def _post_json(
         },
     )
     try:
-        # nosec B310 - scheme is operator-configured http(s) from plugin settings
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+        with _open_request(request, timeout, verify_ssl) as resp:
             body = resp.read().decode()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")
@@ -187,6 +231,7 @@ def call_proxbox_build(
     ssh_identity_file: str | None = None,
     execute: bool = True,
     timeout: int = 3900,
+    verify_ssl: bool = True,
 ) -> dict:
     """Plan, preflight, and execute a proxbox-api cloud-image build.
 
@@ -232,6 +277,7 @@ def call_proxbox_build(
             path="/cloud/templates/images",
             payload={**payload, "execute": False},
             timeout=timeout,
+            verify_ssl=verify_ssl,
         )
 
     if endpoint_id is None:
@@ -252,6 +298,7 @@ def call_proxbox_build(
         path="/cloud/templates/images",
         payload=plan_payload,
         timeout=timeout,
+        verify_ssl=verify_ssl,
     )
     recipe_digest = plan.get("recipe_digest")
     if (
@@ -283,6 +330,7 @@ def call_proxbox_build(
             path="/cloud/templates/images/preflight",
             payload=preflight_payload,
             timeout=timeout,
+            verify_ssl=verify_ssl,
         )
     except ProxboxApiError as exc:
         if exc.status_code == 404:
@@ -341,6 +389,7 @@ def call_proxbox_build(
             path="/cloud/templates/images",
             payload=execute_payload,
             timeout=timeout,
+            verify_ssl=verify_ssl,
         )
     except ProxboxApiError as exc:
         _raise_execute_error(exc)
@@ -366,6 +415,7 @@ def call_proxbox_vm_provision(
     cores: int | None = None,
     full_clone: bool = True,
     timeout: int = 90,
+    verify_ssl: bool = True,
 ) -> dict:
     """POST to ``{proxbox_api_url}/cloud/vm/provision`` and return the JSON body."""
     payload: dict = {
@@ -387,4 +437,5 @@ def call_proxbox_vm_provision(
         path="/cloud/vm/provision",
         payload=payload,
         timeout=timeout,
+        verify_ssl=verify_ssl,
     )

@@ -282,6 +282,13 @@ def test_cloud_dispatch_authorizes_each_possible_target_with_configured_backend(
     isolated_imports,
 ) -> None:
     jobs = _import_jobs_module()
+    jobs._resolve_proxbox_linkage = lambda row: SimpleNamespace(
+        base_url=row.proxbox_api_url,
+        api_key="k",
+        verify_ssl=True,
+        source="packer-setting override",
+        warning="",
+    )
     calls = []
 
     class Targets:
@@ -910,6 +917,13 @@ def test_enqueue_error_names_which_endpoint_input_is_missing(
 
 def test_unauthorized_endpoint_still_fails_closed_before_enqueue(isolated_imports) -> None:
     jobs = _import_jobs_module()
+    jobs._resolve_proxbox_linkage = lambda row: SimpleNamespace(
+        base_url=row.proxbox_api_url,
+        api_key="k",
+        verify_ssl=True,
+        source="packer-setting override",
+        warning="",
+    )
     settings_row = SimpleNamespace(proxbox_api_url="https://proxbox-api.example")
     models_mod = types.ModuleType("netbox_packer.models")
     models_mod.PackerPluginSettings = type(

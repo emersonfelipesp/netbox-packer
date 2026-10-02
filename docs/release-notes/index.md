@@ -2,7 +2,7 @@
 
 | Version | Summary |
 | --- | --- |
-| [Unreleased](unreleased.md) | `proxmox_endpoint` is readable and writable over REST on templates and build targets, with API-boundary validation and a clearer enqueue error. |
+| [Unreleased](unreleased.md) | `proxmox_endpoint` is readable and writable over REST on templates and build targets, with API-boundary validation and a clearer enqueue error; cloud-init builds reuse the netbox-proxbox proxbox-api linkage by default. |
 | [0.0.5](version-0.0.5.md) | Packer template form: OS-family-grouped OS version dropdown, decluttered machine-managed fields, and cloud-init-template guidance help text. |
 | [0.0.2.post2](version-0.0.2.post2.md) | Certification-readiness metadata, docs, compatibility evidence, and release validation updates. |
 | 0.0.2.post1 | Published package metadata repair for the 0.0.2 line. |

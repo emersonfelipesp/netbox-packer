@@ -29,9 +29,12 @@
    snippet as Proxmox `cicustom` user-data, converts the VM to a template, and
    returns a completed, executed, artifact-verified response.
 
-The `PackerPluginSettings` singleton row must include `proxbox_api_url` and an
-encrypted proxbox-api key (see [Configuration](configuration.md) — today this
-is set via the Python shell only, not a UI page or REST endpoint). The target
+By default the proxbox-api URL, API key, and TLS verification choice are reused
+from the single enabled netbox-proxbox `FastAPIEndpoint`, so no netbox-packer
+setting is required (see [Configuration](configuration.md#proxbox-api-linkage)).
+A stored `PackerPluginSettings.proxbox_api_url` is honored only when it matches an
+enabled netbox-proxbox endpoint; a stale value and its stored key are ignored together (with a build-log
+warning) when exactly one endpoint is enabled, and that endpoint's own key is used. The target
 `ProxmoxEndpoint` in netbox-proxbox must have both `allow_writes=True` and
 `allow_packer_template_builds=True`, and the selected Proxmox storage must
 support `snippets`, `import`, and `images`. The template's primary endpoint URL,

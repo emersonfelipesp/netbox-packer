@@ -330,6 +330,34 @@ def _authorize_selected_endpoint(endpoint_url, proxbox_api_url):
     return authorize_packer_template_build(endpoint_url, proxbox_api_url)
 
 
+def _resolve_proxbox_linkage(settings_row):
+    """Resolve the proxbox-api URL, key, and TLS choice, reusing netbox-proxbox by default."""
+
+    from .proxbox_linkage import resolve_proxbox_linkage
+
+    return resolve_proxbox_linkage(settings_row.proxbox_api_url, settings_row.get_proxbox_api_key())
+
+
+def _linkage_log_lines(linkage):
+    """Return the secret-free log lines describing the resolved proxbox-api linkage."""
+
+    lines = [f"[INFO] Delegating real Proxmox bake to proxbox-api: {linkage.base_url} (linkage: {linkage.source})"]
+    if linkage.warning:
+        lines.append(f"[WARNING] {linkage.warning}")
+    return lines
+
+
+def _resolve_build_linkage(build, settings_row):
+    """Resolve the linkage for a running build, persisting a secret-free log on failure."""
+
+    try:
+        return _resolve_proxbox_linkage(settings_row)
+    except Exception as exc:
+        build.log = f"{build.log or ''}\n[ERROR] {exc}".strip()
+        build.save(update_fields=["log"])
+        raise
+
+
 def _authorize_cloud_build_dispatch(build):
     """Require endpoint authorization before a cloud-config build is queued."""
 
@@ -340,9 +368,11 @@ def _authorize_cloud_build_dispatch(build):
 
     from .models import PackerPluginSettings
 
-    proxbox_api_url = (PackerPluginSettings.get_solo().proxbox_api_url or "").strip()
+    linkage = _resolve_proxbox_linkage(PackerPluginSettings.get_solo())
+    if linkage.warning:
+        logger.warning(linkage.warning)
     for endpoint_url in _endpoint_urls_for_cloud_dispatch(build):
-        _authorize_selected_endpoint(endpoint_url, proxbox_api_url)
+        _authorize_selected_endpoint(endpoint_url, linkage.base_url)
 
 
 def _zabbix_agent2_bootstrap(zabbix_server: str) -> str:
@@ -694,7 +724,8 @@ class PackerBuildJob(JobRunner):
         from .proxbox_client import ProxboxApiError, call_proxbox_build
 
         settings_row = PackerPluginSettings.get_solo()
-        api_url = (settings_row.proxbox_api_url or "").strip()
+        linkage = _resolve_build_linkage(build, settings_row)
+        api_url = linkage.base_url
         installer = template.installer_config
         storage = _resolve_storage(template, build.variable_overrides)
         # proxbox-api rejects an empty target_node (min_length=1); send None when unset.
@@ -708,21 +739,13 @@ class PackerBuildJob(JobRunner):
 
         log_lines = [
             f"[INFO] Cloud-init template image build for '{template.name}'",
-            f"[INFO] Delegating real Proxmox bake to proxbox-api: {api_url or 'UNSET'}",
+            *_linkage_log_lines(linkage),
             f"[INFO] Installer config: {installer_name} v{installer_version} ({installer.installer_type})",
             f"[INFO] Base image: {safe_image_url}",
             f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
             f"[INFO] Destination template VMID: {template_vmid}",
             f"[INFO] Selected netbox-proxbox endpoint URL: {endpoint or 'UNSET'}",
         ]
-
-        if not api_url:
-            build.log = "\n".join(log_lines)
-            build.save(update_fields=["log"])
-            raise RuntimeError(
-                "PackerPluginSettings.proxbox_api_url is not configured; cannot bake a "
-                "cloud_config template image via proxbox-api."
-            )
 
         user_data_yaml = _inject_monitoring_agents(installer.content, template)
         zabbix_status = "disabled"
@@ -751,7 +774,8 @@ class PackerBuildJob(JobRunner):
             log_lines.append(f"[INFO] Authorized proxbox-api endpoint_id: {authorization.backend_endpoint_id}")
             response = call_proxbox_build(
                 proxbox_api_url=api_url,
-                proxbox_api_key=settings_row.get_proxbox_api_key(),
+                proxbox_api_key=linkage.api_key,
+                verify_ssl=linkage.verify_ssl,
                 name=template.name,
                 vmid=template_vmid,
                 target_node=target_node,

@@ -115,53 +115,81 @@ def resolve_netbox_proxmox_endpoint(endpoint_url: str) -> object:
     return matches[0]
 
 
-def _resolve_backend_authorization(
-    endpoint: object,
-    proxbox_api_url: str,
-) -> PackerTemplateEndpointAuthorization:
-    """Translate one plugin endpoint through the exact configured backend."""
+def _context_origins(context: object) -> set[tuple[str, str, int]]:
+    """Return the usable (scheme, host, port) origins a FastAPI context exposes."""
 
-    wanted_origin = _url_origin(proxbox_api_url, label="proxbox-api URL")
+    origins: set[tuple[str, str, int]] = set()
+    for candidate in (
+        getattr(context, "http_url", None),
+        getattr(context, "ip_address_url", None),
+    ):
+        if not candidate:
+            continue
+        try:
+            origins.add(_url_origin(candidate, label="configured proxbox-api URL"))
+        except PackerEndpointAuthorizationError:
+            continue
+    return origins
+
+
+def enabled_fastapi_context_slots() -> list[object | None]:
+    """Return one entry per enabled netbox-proxbox FastAPI row: its context, or None if unusable.
+
+    Row cardinality is preserved on purpose. An enabled row whose request context
+    cannot be built (for example a failed target-fingerprint check) is still an
+    enabled row, so callers that need "exactly one endpoint" must not silently
+    ignore it and fall back to a different backend.
+    """
+
     try:
         fastapi_model = apps.get_model("netbox_proxbox", "FastAPIEndpoint")
     except LookupError:
         raise PackerEndpointAuthorizationError("netbox-proxbox FastAPI endpoint inventory is unavailable.") from None
 
     from netbox_proxbox.services.backend_context import get_fastapi_request_context
-    from netbox_proxbox.views.backend_sync import resolve_backend_endpoint_id
 
-    contexts: list[object] = []
+    slots: list[object | None] = []
     for fastapi_endpoint in fastapi_model.objects.filter(enabled=True):
         try:
-            context = get_fastapi_request_context(endpoint_id=fastapi_endpoint.pk)
+            slots.append(get_fastapi_request_context(endpoint_id=fastapi_endpoint.pk))
         except Exception as exc:
             raise PackerEndpointAuthorizationError(
                 "Could not resolve the configured netbox-proxbox FastAPI endpoint context."
             ) from exc
-        if context is None:
-            continue
-        context_origins: set[tuple[str, str, int]] = set()
-        for candidate in (
-            getattr(context, "http_url", None),
-            getattr(context, "ip_address_url", None),
-        ):
-            if not candidate:
-                continue
-            try:
-                context_origins.add(_url_origin(candidate, label="configured proxbox-api URL"))
-            except PackerEndpointAuthorizationError:
-                continue
-        if wanted_origin in context_origins:
-            contexts.append(context)
+    return slots
 
+
+def enabled_fastapi_contexts() -> list[object]:
+    """Return the usable request context of every enabled netbox-proxbox FastAPI endpoint."""
+
+    return [context for context in enabled_fastapi_context_slots() if context is not None]
+
+
+def fastapi_contexts_for_url(proxbox_api_url: str) -> list[object]:
+    """Return enabled FastAPI contexts whose origin equals the given proxbox-api URL."""
+
+    wanted_origin = _url_origin(proxbox_api_url, label="proxbox-api URL")
+    return [context for context in enabled_fastapi_contexts() if wanted_origin in _context_origins(context)]
+
+
+def _resolve_backend_authorization(
+    endpoint: object,
+    proxbox_api_url: str,
+) -> PackerTemplateEndpointAuthorization:
+    """Translate one plugin endpoint through the exact configured backend."""
+
+    contexts = fastapi_contexts_for_url(proxbox_api_url)
     if not contexts:
         raise PackerEndpointAuthorizationError(
-            "PackerPluginSettings.proxbox_api_url does not match an enabled netbox-proxbox FastAPI endpoint."
+            "The proxbox-api URL does not match an enabled netbox-proxbox FastAPI endpoint; "
+            "configure the proxbox-api endpoint in netbox-proxbox."
         )
     if len(contexts) != 1:
         raise PackerEndpointAuthorizationError(
-            "PackerPluginSettings.proxbox_api_url matches more than one enabled netbox-proxbox FastAPI endpoint."
+            "The proxbox-api URL matches more than one enabled netbox-proxbox FastAPI endpoint."
         )
+
+    from netbox_proxbox.views.backend_sync import resolve_backend_endpoint_id
 
     context = contexts[0]
     try:
@@ -206,5 +234,8 @@ __all__ = (
     "PackerEndpointAuthorizationError",
     "PackerTemplateEndpointAuthorization",
     "authorize_packer_template_build",
+    "enabled_fastapi_context_slots",
+    "enabled_fastapi_contexts",
+    "fastapi_contexts_for_url",
     "resolve_netbox_proxmox_endpoint",
 )

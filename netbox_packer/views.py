@@ -133,14 +133,14 @@ class PackerTemplateCreateInstanceView(generic.ObjectView):
             )
             return _redirect_after_instance_create(request, template)
 
+        from .endpoint_authorization import PackerEndpointAuthorizationError
+        from .proxbox_linkage import resolve_proxbox_linkage
+
         settings_row = models.PackerPluginSettings.get_solo()
-        proxbox_api_url = (settings_row.proxbox_api_url or "").strip()
-        proxbox_api_key = settings_row.get_proxbox_api_key()
-        if not proxbox_api_url or not proxbox_api_key:
-            messages.error(
-                request,
-                "Configure Packer plugin proxbox_api_url and API key before creating VM instances.",
-            )
+        try:
+            linkage = resolve_proxbox_linkage(settings_row.proxbox_api_url, settings_row.get_proxbox_api_key())
+        except PackerEndpointAuthorizationError as exc:
+            messages.error(request, f"Could not create instance: {exc}")
             return _redirect_after_instance_create(request, template)
 
         from .proxbox_client import ProxboxApiError, call_proxbox_vm_provision
@@ -148,8 +148,9 @@ class PackerTemplateCreateInstanceView(generic.ObjectView):
         payload = form.proxbox_payload(template)
         try:
             response = call_proxbox_vm_provision(
-                proxbox_api_url=proxbox_api_url,
-                proxbox_api_key=proxbox_api_key,
+                proxbox_api_url=linkage.base_url,
+                proxbox_api_key=linkage.api_key,
+                verify_ssl=linkage.verify_ssl,
                 **payload,
             )
         except ProxboxApiError as exc:

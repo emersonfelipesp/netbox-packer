@@ -19,6 +19,38 @@ PLUGINS_CONFIG = {
 }
 ```
 
+## Proxbox API linkage
+
+netbox-proxbox is the single source of truth for how to reach proxbox-api.
+Cloud-init builds (and the create-instance modal) reuse its enabled
+`FastAPIEndpoint` by default:
+
+| Stored `proxbox_api_url` | Linkage used |
+| --- | --- |
+| blank | The base URL (hostname URL preferred, then the IP-address URL), API key, and TLS verification choice of the **single** enabled netbox-proxbox FastAPI endpoint. Zero or several enabled endpoints fail closed with an actionable message. |
+| a URL that matches exactly one enabled netbox-proxbox FastAPI endpoint (scheme, host, and port) | That endpoint. This is the only way an explicit URL is honored, and it selects one endpoint when several are enabled. |
+| a URL that matches **no** enabled endpoint (stale or malformed, including the value earlier documentation showed as an example) | Treated as stale, because the plugin has no page to edit or clear it. With exactly one enabled endpoint, that endpoint is used together with **its own** API key (the stored packer key belonged to the stale backend and is ignored too; an endpoint with no key fails closed) and a secret-free warning is written to the build log; with zero or several enabled endpoints the build fails closed with a message that names netbox-proxbox. The stored URL is never used as a transport target. |
+
+The API key is taken from `PackerPluginSettings` when one is stored there and from
+the netbox-proxbox endpoint otherwise. Secrets are never written to build logs or
+error messages; the build log records only the base URL and which linkage was used.
+
+"Exactly one endpoint" counts enabled netbox-proxbox rows. An enabled endpoint whose
+request context cannot be built (for example a failed target-fingerprint check) still
+counts, so it can never make a different backend look like the only one: with a single
+enabled row that has no usable context the build fails closed and points at its target
+fingerprint and key configuration in netbox-proxbox, and with several enabled rows it
+fails closed unless the stored URL matches exactly one usable endpoint.
+
+Requests to proxbox-api never follow HTTP redirects. A redirect response fails the
+request with an error that contains only the status code, so the API key is never
+forwarded to another origin or over plain HTTP.
+
+Selecting the linkage is not authorization. The selected Proxmox endpoint must still
+pass the netbox-proxbox gates (`enabled`, `allow_writes`,
+`allow_packer_template_builds`) and be translated to the backend endpoint id before
+dispatch and again immediately before the call to proxbox-api.
+
 ## PackerPluginSettings
 
 After running migrations, the singleton settings row exists in the database
@@ -32,8 +64,8 @@ see "Storing the key" below.
 
 | Setting | Model field | Description |
 | --- | --- | --- |
-| Proxbox API URL | `proxbox_api_url` | Base URL of the proxbox-api backend (e.g. `http://10.0.30.207:8000`). Required for `cloud_config` installer-type builds. |
-| Proxbox API key | `proxbox_api_key_encrypted` | Set only via `set_proxbox_api_key()` / read via `get_proxbox_api_key()` — never stored or read as plaintext. See key management below. |
+| Proxbox API URL | `proxbox_api_url` | Optional selector (for example `https://proxbox-api.example.invalid:8000`). Leave blank to reuse the single enabled netbox-proxbox FastAPI endpoint; see [Proxbox API linkage](#proxbox-api-linkage). |
+| Proxbox API key | `proxbox_api_key_encrypted` | Optional override; when blank, the key comes from the netbox-proxbox endpoint. Set only via `set_proxbox_api_key()` / read via `get_proxbox_api_key()` — never stored or read as plaintext. See key management below. |
 | Enable branching | `branching_enabled` | When `True`, staleness-check jobs run inside a netbox-branching branch. If the branching runtime is unavailable, the job fails with `BranchingUnavailableError` before writing anything; set it to `False` to explicitly allow writes to `main`. |
 | Branch name prefix | `branch_name_prefix` | Prefix for auto-created branch names (default: `packer-stale`). |
 | Branch conflict behavior | `branch_on_conflict` | `fail` (leave branch open) or `acknowledge` (merge anyway). |

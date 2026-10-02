@@ -199,8 +199,8 @@ Singleton settings row for the plugin. Exactly one row exists; use
 | `branching_enabled` | BooleanField | `False` | When `True`, `PackerStalenessCheckJob` uses netbox-branching for stale updates and fails closed (no writes) if the runtime is unavailable |
 | `branch_name_prefix` | CharField(64) | `"packer-stale"` | Prefix for auto-created branch names |
 | `branch_on_conflict` | CharField(16) | `"fail"` | `"fail"` or `"acknowledge"` — behavior on branching merge conflicts |
-| `proxbox_api_url` | URLField | blank | Base URL of the proxbox-api backend; required for `cloud_config` builds |
-| `proxbox_api_key_encrypted` | CharField(512) | blank | Fernet-encrypted API key; not editable directly — use `set_proxbox_api_key()` |
+| `proxbox_api_url` | URLField | blank | Optional selector. Blank reuses the single enabled netbox-proxbox FastAPI endpoint; a URL matching exactly one enabled endpoint selects it; a non-matching (stale) URL and its stored key are ignored together when exactly one endpoint is enabled and otherwise fails closed |
+| `proxbox_api_key_encrypted` | CharField(512) | blank | Optional Fernet-encrypted API key override; when blank the netbox-proxbox endpoint's key is used. Not editable directly — use `set_proxbox_api_key()` |
 
 ### Key-management methods
 

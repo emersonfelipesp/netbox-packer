@@ -49,10 +49,21 @@ writable on both the `packer-templates` and `build-targets` REST endpoints
 (absolute `http(s)` origin with a host; paths, credentials, query strings, and
 fragments are rejected), so no UI step is needed to point a build target at an endpoint. When build-target rows exist,
 an all-disabled or exhausted set fails closed rather than falling back to the
-template's primary endpoint. Configure `proxbox_api_url` and an encrypted API key
-on the `PackerPluginSettings` singleton row from the Django/NetBox Python shell
-(there is no NetBox UI page or REST endpoint for this settings model yet — see
-[`docs/configuration.md`](docs/configuration.md)). Seeded examples include
+template's primary endpoint. The proxbox-api URL, API key, and TLS verification
+choice are reused by default from the single enabled netbox-proxbox FastAPI
+endpoint; zero or several enabled endpoints fail closed with a message that points
+at netbox-proxbox. A stored `PackerPluginSettings.proxbox_api_url` is honored only
+when it matches an enabled netbox-proxbox endpoint (which selects one when several
+are enabled); a stale value that matches none is ignored, together with its stored key, with a
+build-log warning when exactly one endpoint is enabled (that endpoint's own key is
+used), and is never used as a transport target. The stored
+encrypted API key, when set, takes precedence over the netbox-proxbox key only
+when the stored URL is blank or matches the selected endpoint; this includes the
+value earlier documentation showed as an example, which is stale unless it matches
+(set from
+the Django/NetBox Python shell; there is no NetBox UI page or REST endpoint for
+this settings model) — see
+[`docs/configuration.md`](docs/configuration.md#proxbox-api-linkage). Seeded examples include
 Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, Akvorado, and base Ubuntu LTS cloud-init templates.
 An older service that returns 404 for the preflight endpoint is incompatible;
 the client fails the build and never falls back to legacy one-step execution.
@@ -195,7 +206,8 @@ The Packer Templates table includes a per-row **Create new instance** action.
 The button opens a NetBox modal with template confirmation, destination VMID,
 target node, resource, cloud-init, and submit steps. Submission delegates to
 `proxbox-api` `POST /cloud/vm/provision` using the configured
-`PackerPluginSettings.proxbox_api_url` and encrypted API key.
+the same proxbox-api linkage as template builds (netbox-proxbox by default,
+`PackerPluginSettings` as an override).
 
 Operators must provide the proxbox-api backend `ProxmoxEndpoint` ID in the modal
 because `PackerTemplate.proxmox_endpoint` stores the Proxmox URL, not the
