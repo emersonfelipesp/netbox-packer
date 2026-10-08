@@ -70,7 +70,7 @@ def test_plugin_config_fields() -> None:
     assert 'base_url = "packer"' in src
     assert f'version = "{pyproject_version}"' in src
     assert 'min_version = "4.5.8"' in src
-    assert 'max_version = "4.7.0"' in src
+    assert "max_version = PLUGIN_MAX_VERSION" in src
     assert "def ready" in src and "jobs" in src  # jobs module imported in ready() for RQ discovery
 
 

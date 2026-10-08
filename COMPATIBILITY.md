@@ -12,11 +12,11 @@ whole Proxbox plugin stack (`netbox-proxbox`, `netbox-ceph`, `netbox-packer`,
 
 | Tier | NetBox range | Constant | Behaviour |
 |---|---|---|---|
-| **Stable** | `4.5.8` – `4.7.0` GA | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. Directly exercised in CI at v4.5.8, v4.6.1, and official v4.7.0 GA. |
+| **Stable** | `4.5.8` – `4.7.99` GA | `STABLE_MIN_NETBOX_VERSION` / `STABLE_MAX_NETBOX_VERSION` | Admitted silently. Directly exercised in CI at v4.5.8, v4.6.1, and official v4.7.0 GA. |
 | **Experimental** | NetBox pre-releases within the supported numeric range | `NetBoxSupportLevel.EXPERIMENTAL` | Loads and runs with one advisory warning via `netbox_packer.W001`. |
 
 `PluginConfig.min_version` is the stable floor and `PluginConfig.max_version`
-is the stable GA ceiling (`4.7.0`). The retired release-identity hook remains a
+is the stable ceiling (`4.7.99`, the whole 4.7 series). The retired release-identity hook remains a
 no-op for older callers; runtime support uses the numeric compatibility band.
 
 On a 4.7 pre-release install you will see one warning per plugin, from
@@ -26,7 +26,7 @@ On a 4.7 pre-release install you will see one warning per plugin, from
 WARNINGS:
 ?: (netbox_packer.W001) NetBox Packer is running on NetBox 4.7.0-beta2, which is
    supported on an experimental basis only. Certified support covers NetBox
-   4.5.8 through 4.7.0.
+   4.5.8 through 4.7.99.
 ```
 
 It is a warning, never an error — it cannot block NetBox from starting.
@@ -47,7 +47,7 @@ That silences both the system check and the startup log line.
 > It only applies through NetBox's `local_settings.py` hatch, which upstream
 > labels unsupported. Use the `PLUGINS_CONFIG` key above.
 
-NetBox below `4.5.8` and 4.7.1+ are refused by the stock numeric gate.
+NetBox below `4.5.8` and releases above 4.7.99 are refused by the stock numeric gate.
 
 > **These tiers describe the *next* release, not the currently published
 > package.** Every artifact published before this change declares

@@ -446,7 +446,7 @@ than re-typed as literals:
 - **stable** `4.5.8` – `4.6.99` — admitted silently; specific versions in
   this band are exercised in CI, the rest are admitted on their strength;
 - **held beta** canonical `4.7.0-beta2` metadata only — the numeric ceiling is
-  `4.7.0`, the v3 identity guard rejects GA/other 4.7 identities, and the
+  `4.7.99`, the v3 identity guard rejects GA/other 4.7 identities, and the
   admitted beta emits `netbox_packer.W001` (a **Warning**, never an Error)
   plus one `ready()` log line. A version that cannot be classified reports
   `netbox_packer.W002` rather than passing silently. Operators silence the notice with the
