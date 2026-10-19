@@ -92,10 +92,10 @@ def pin_differs_from_built_source(
     return bool(built_sha256)
 
 
-# Only the cloud_config builder resolves a vendor base image, forwards its digest for
+# Only the cloud-image builders resolve a vendor base image, forward its digest for
 # verification, and records the at-build snapshot. Keep this name in step with
 # PackerInstallerConfig.INSTALLER_TYPE_CHOICES.
-PIN_CAPABLE_INSTALLER_TYPES = frozenset({"cloud_config"})
+PIN_CAPABLE_INSTALLER_TYPES = frozenset({"cloud_config", "vendor_data"})
 
 
 def base_image_pin_applies(installer_type: str | None) -> bool:

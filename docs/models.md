@@ -18,7 +18,7 @@ detection can identify out-of-date templates.
 | --- | --- | --- |
 | `name` | CharField(100) | — |
 | `os_family` | CharField(20) | Choices from `OSFamilyChoices` |
-| `installer_type` | CharField(20) | `autoinstall`, `kickstart`, `preseed`, or `cloud_config` |
+| `installer_type` | CharField(20) | `autoinstall`, `kickstart`, `preseed`, `cloud_config`, `vendor_data`, or `unattend` |
 | `content` | TextField | Verbatim installer payload (e.g. the full `#cloud-config` YAML) |
 | `version` | CharField(40) | Default `"1.0.0"` |
 | `checksum` | CharField(64) | SHA-256 hex of `content`; auto-computed, not editable |
@@ -34,9 +34,11 @@ detection can identify out-of-date templates.
 | `kickstart` | Anaconda kickstart (RHEL-family) |
 | `preseed` | d-i preseed (Debian) |
 | `cloud_config` | Cloud-config YAML (#cloud-config, Proxmox/generic) |
+| `vendor_data` | Cloud-init vendor-data (keeps per-VM Cloud-Init fields) |
 
-Only `cloud_config` triggers the proxbox-api cloud-init bake path. All other
-types are run via `packer build`.
+`cloud_config` and `vendor_data` trigger the proxbox-api cloud-image bake path.
+The former sends `user_data_yaml`; the latter sends `first_boot_script`. These
+fields are mutually exclusive. All other types run via `packer build`.
 
 ---
 
@@ -84,8 +86,8 @@ installer config, target node/storage, and monitoring-agent injection preference
 ### Monitoring agent injection fields (migration `0008`)
 
 These fields control what `PackerBuildJob._inject_monitoring_agents()` adds to
-`cloud_config` content at build time. They have no effect on non-`cloud_config`
-installer types.
+`cloud_config` content and `#cloud-config` `vendor_data` at build time. They do
+not affect a `#!` vendor script or a local Packer installer type.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |

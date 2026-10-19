@@ -1,7 +1,7 @@
 """Minimal stdlib HTTP client for delegating cloud-init template image bakes.
 
 netbox-packer does not perform Proxmox operations itself. For ``cloud_config``
-installer configs it delegates the real bake to the proxbox-api backend's
+and ``vendor_data`` installer configs it delegates the real bake to the proxbox-api backend's
 ``POST /cloud/templates/images`` endpoint, which writes the supplied
 ``#cloud-config`` as a Proxmox ``cicustom`` user snippet over SSH and converts
 the result into a VM template.
@@ -207,6 +207,115 @@ def _validate_executed_response(response: dict) -> None:
     )
 
 
+def _cloud_build_payload(
+    *,
+    name: str,
+    vmid: int,
+    target_node: str | None,
+    image_url: str,
+    user_data_yaml: str | None,
+    first_boot_script: str | None,
+    image_sha256: str,
+    endpoint_id: int | None,
+    image_storage: str,
+    vm_storage: str,
+    storage: str,
+    snippets_storage: str,
+    memory_mb: int,
+    cores: int,
+    bridge: str,
+    ssh_host: str | None,
+    ssh_user: str,
+    ssh_port: int,
+    ssh_identity_file: str | None,
+) -> dict:
+    """Assemble the unchanged build fields used by plan and execution."""
+    if user_data_yaml is not None and first_boot_script is not None:
+        raise ValueError("user_data_yaml and first_boot_script are mutually exclusive")
+
+    payload: dict = {
+        "name": name,
+        "vmid": vmid,
+        "target_node": target_node,
+        "image_url": image_url,
+        "image_storage": image_storage,
+        "vm_storage": vm_storage,
+        "storage": storage,
+        "snippets_storage": snippets_storage,
+        "memory_mb": memory_mb,
+        "cores": cores,
+        "bridge": bridge,
+        "provider": "release_image",
+    }
+    _add_cloud_build_content(payload, user_data_yaml, first_boot_script)
+    optional_fields = {
+        "sha256": image_sha256 or None,
+        "endpoint_id": endpoint_id,
+        "ssh_identity_file": ssh_identity_file or None,
+    }
+    payload.update({key: value for key, value in optional_fields.items() if value is not None})
+    if ssh_host:
+        payload.update(ssh_host=ssh_host, ssh_user=ssh_user, ssh_port=ssh_port)
+    return payload
+
+
+def _add_cloud_build_content(payload: dict, user_data_yaml: str | None, first_boot_script: str | None) -> None:
+    """Add exactly one cloud-init content field to a build payload."""
+    if user_data_yaml is not None:
+        payload["user_data_yaml"] = user_data_yaml
+    if first_boot_script is not None:
+        payload["first_boot_script"] = first_boot_script
+
+
+def _validate_preflight(preflight: dict, recipe_digest: str) -> str:
+    """Validate a signed preflight response and return its live plan token."""
+    if preflight.get("ready") is not True:
+        raise ProxboxApiError(
+            "proxbox-api signed preflight did not report ready=true; findings: "
+            + _preflight_findings_summary(preflight)
+        )
+    if preflight.get("writes_enabled") is not True:
+        raise ProxboxApiError(
+            "proxbox-api signed preflight reported writes_enabled=false; enable writes "
+            "for the selected ProxmoxEndpoint before rebuilding"
+        )
+    if preflight.get("recipe_digest") != recipe_digest:
+        raise ProxboxApiError(
+            "proxbox-api signed preflight returned a recipe_digest that does not match "
+            "the server-rendered build plan; refusing execution"
+        )
+
+    plan_token = preflight.get("plan_token")
+    if not isinstance(plan_token, str) or not plan_token:
+        raise ProxboxApiError("proxbox-api signed preflight returned ready=true but no plan_token; refusing execution")
+    expires_at = preflight.get("expires_at")
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+        raise ProxboxApiError(
+            "proxbox-api signed preflight returned a plan_token without a valid expires_at; refusing execution"
+        )
+    expires_at = float(expires_at)
+    if not math.isfinite(expires_at) or expires_at <= time.time():
+        raise ProxboxApiError(
+            "proxbox-api signed preflight plan expired before execution; start a fresh build to obtain a new plan"
+        )
+    return plan_token
+
+
+def _validate_signed_build_inputs(endpoint_id: int | None, target_node: str | None) -> tuple[int, str]:
+    """Require the endpoint and node fields bound into a signed build plan."""
+    if endpoint_id is None:
+        raise ProxboxApiError(
+            "proxbox-api signed preflight requires the backend endpoint id; "
+            "netbox-packer could not resolve it from the authorized selected endpoint"
+        )
+    if not target_node:
+        raise ProxboxApiError(
+            "proxbox-api signed preflight requires target_node; select a Proxmox node "
+            "or pass variable_overrides['target_node'] for this build"
+        )
+    return endpoint_id, target_node
+
+
 def call_proxbox_build(
     *,
     proxbox_api_url: str,
@@ -215,7 +324,8 @@ def call_proxbox_build(
     vmid: int,
     target_node: str | None,
     image_url: str,
-    user_data_yaml: str,
+    user_data_yaml: str | None,
+    first_boot_script: str | None = None,
     image_sha256: str = "",
     endpoint_id: int | None = None,
     image_storage: str = "local",
@@ -241,34 +351,27 @@ def call_proxbox_build(
     behavior. Raises :class:`ProxboxApiError` on any transport, contract,
     preflight, expiry, execution, or artifact-verification failure.
     """
-    payload: dict = {
-        "name": name,
-        "vmid": vmid,
-        "target_node": target_node,
-        "image_url": image_url,
-        "user_data_yaml": user_data_yaml,
-        "image_storage": image_storage,
-        "vm_storage": vm_storage,
-        "storage": storage,
-        "snippets_storage": snippets_storage,
-        "memory_mb": memory_mb,
-        "cores": cores,
-        "bridge": bridge,
-        "provider": "release_image",
-    }
-    if image_sha256:
-        # proxbox-api's CloudImageTemplateBuildRequest verifies the downloaded image
-        # against this digest. Omitted entirely when empty, so an unpinned build keeps
-        # a byte-for-byte identical payload.
-        payload["sha256"] = image_sha256
-    if endpoint_id is not None:
-        payload["endpoint_id"] = endpoint_id
-    if ssh_host:
-        payload["ssh_host"] = ssh_host
-        payload["ssh_user"] = ssh_user
-        payload["ssh_port"] = ssh_port
-    if ssh_identity_file:
-        payload["ssh_identity_file"] = ssh_identity_file
+    payload = _cloud_build_payload(
+        name=name,
+        vmid=vmid,
+        target_node=target_node,
+        image_url=image_url,
+        user_data_yaml=user_data_yaml,
+        first_boot_script=first_boot_script,
+        image_sha256=image_sha256,
+        endpoint_id=endpoint_id,
+        image_storage=image_storage,
+        vm_storage=vm_storage,
+        storage=storage,
+        snippets_storage=snippets_storage,
+        memory_mb=memory_mb,
+        cores=cores,
+        bridge=bridge,
+        ssh_host=ssh_host,
+        ssh_user=ssh_user,
+        ssh_port=ssh_port,
+        ssh_identity_file=ssh_identity_file,
+    )
 
     if not execute:
         return _post_json(
@@ -280,16 +383,7 @@ def call_proxbox_build(
             verify_ssl=verify_ssl,
         )
 
-    if endpoint_id is None:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight requires the backend endpoint id; "
-            "netbox-packer could not resolve it from the authorized selected endpoint"
-        )
-    if not target_node:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight requires target_node; select a Proxmox node "
-            "or pass variable_overrides['target_node'] for this build"
-        )
+    endpoint_id, target_node = _validate_signed_build_inputs(endpoint_id, target_node)
 
     plan_payload = {**payload, "execute": False}
     plan = _post_json(
@@ -347,35 +441,7 @@ def call_proxbox_build(
             error_code=exc.error_code,
         ) from exc
 
-    if preflight.get("ready") is not True:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight did not report ready=true; findings: "
-            + _preflight_findings_summary(preflight)
-        )
-    if preflight.get("writes_enabled") is not True:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight reported writes_enabled=false; enable writes "
-            "for the selected ProxmoxEndpoint before rebuilding"
-        )
-    if preflight.get("recipe_digest") != recipe_digest:
-        raise ProxboxApiError(
-            "proxbox-api signed preflight returned a recipe_digest that does not match "
-            "the server-rendered build plan; refusing execution"
-        )
-
-    plan_token = preflight.get("plan_token")
-    if not isinstance(plan_token, str) or not plan_token:
-        raise ProxboxApiError("proxbox-api signed preflight returned ready=true but no plan_token; refusing execution")
-    expires_at = preflight.get("expires_at")
-    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
-        raise ProxboxApiError(
-            "proxbox-api signed preflight returned a plan_token without a valid expires_at; refusing execution"
-        )
-    expires_at = float(expires_at)
-    if not math.isfinite(expires_at) or expires_at <= time.time():
-        raise ProxboxApiError(
-            "proxbox-api signed preflight plan expired before execution; start a fresh build to obtain a new plan"
-        )
+    plan_token = _validate_preflight(preflight, recipe_digest)
 
     execute_payload = {
         **payload,

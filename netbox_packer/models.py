@@ -45,6 +45,7 @@ class PackerInstallerConfig(NetBoxModel):
         ("kickstart", "Anaconda kickstart (RHEL-family)"),
         ("preseed", "d-i preseed (Debian)"),
         ("cloud_config", "Cloud-config YAML (#cloud-config, Proxmox/generic)"),
+        ("vendor_data", "Cloud-init vendor-data (keeps per-VM Cloud-Init fields)"),
         ("unattend", "Windows Unattend XML (autounattend.xml)"),
     ]
 
@@ -84,6 +85,25 @@ class PackerInstallerConfig(NetBoxModel):
     def save(self, *args, **kwargs):
         self.checksum = hashlib.sha256(self.content.encode()).hexdigest()
         super().save(*args, **kwargs)
+
+    def clean(self):
+        """Validate Cloud-Init vendor-data before it is stored."""
+        super().clean()
+        if self.installer_type != "vendor_data":
+            return
+        content = self.content.lstrip()
+        if content.startswith("#!"):
+            return
+        if not content.startswith("#cloud-config"):
+            raise ValidationError({"content": "Vendor-data must start with #cloud-config or #!."})
+        import yaml
+
+        try:
+            document = yaml.safe_load(content)
+        except yaml.YAMLError as exc:
+            raise ValidationError({"content": f"Vendor-data is not valid YAML: {exc}"}) from exc
+        if not isinstance(document, dict):
+            raise ValidationError({"content": "Cloud-config vendor-data must contain a YAML mapping."})
 
 
 class PackerTemplate(NetBoxModel):
@@ -258,7 +278,7 @@ class PackerTemplate(NetBoxModel):
 
     @property
     def supports_base_image_pin(self):
-        """Only the cloud_config builder resolves, verifies, and snapshots a base image."""
+        """Return whether this template uses a cloud-image builder that enforces pins."""
         installer = self.installer_config
         return installer is not None and base_image_pin_applies(installer.installer_type)
 
@@ -279,7 +299,7 @@ class PackerTemplate(NetBoxModel):
         if (self.base_image_url or self.base_image_sha256) and not self.supports_base_image_pin:
             message = (
                 "Base image pinning applies only to templates whose installer config is "
-                "of type 'cloud_config'. The local Packer builder never resolves a base "
+                "of type 'cloud_config' or 'vendor_data'. The local Packer builder never resolves a base "
                 "image URL, so a pin here would not be enforced and would leave this "
                 "template permanently stale."
             )
@@ -295,8 +315,8 @@ class PackerTemplate(NetBoxModel):
             and self.installer_config_checksum_at_build
             and self.installer_config.checksum != self.installer_config_checksum_at_build
         )
-        # Base image pins are only meaningful on the cloud_config path: that is the only
-        # builder which resolves a vendor image, forwards the digest, and records the
+        # Base image pins are only meaningful on the cloud-image paths: those builders
+        # resolve a vendor image, forward the digest, and record the
         # at-build snapshot. The local Packer path builds from HCL inputs and writes no
         # snapshot, so a pin there would leave `built_*` permanently empty while
         # `desired_*` is set — reporting the template stale forever and, with

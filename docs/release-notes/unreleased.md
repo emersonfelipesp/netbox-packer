@@ -1,5 +1,27 @@
 # Unreleased
 
+## PBS vendor-data template builds
+
+The `vendor_data` installer now builds through proxbox-api as signed
+`first_boot_script` content. Migration `0036` seeds the credential-free
+`pbs-4-debian-13` template at VMID `9061`.
+
+Migrations `0034` and `0036` support databases that retain the historical
+private agent columns. They set PostgreSQL database defaults for those columns
+before seed inserts, without restoring the fields to public model state. If the
+database records the old pre-renumbering seed name, the corresponding migration
+adopts the existing operator-owned rows without reading or changing them.
+
+The installer pins the Proxmox archive keyring by SHA-256 and installs from the
+`pbs-no-subscription` repository. The package ships a subscription-only enterprise
+repository enabled, so the installer moves its dedicated files (`pbs-enterprise.sources`
+and `pbs-enterprise.list`) aside as `*.disabled` before the first `apt-get update`
+(which lets a rerun recover from a partial install, whatever the stanzas or field
+case inside the file) and again after the package transaction, whatever its outcome.
+It then verifies the remaining sources with
+`apt-get --error-on=any update`, so a transient fetch failure cannot be reported as
+a completed install, and it keeps the exit status of a failed install.
+
 ## Proxmox endpoint URL is now settable over REST
 
 `proxmox_endpoint` was a model field but was missing from the REST serializers,

@@ -87,7 +87,9 @@ def test_compat_imports_without_django() -> None:
         ("4.6.99", "stable"),
         ("4.7.0", "stable"),
         ("4.7.0-beta2", "experimental"),
-        ("4.7.99", "unsupported-new"),
+        ("4.7.2", "stable"),
+        ("4.7.99", "stable"),
+        ("4.8.0", "unsupported-new"),
     ],
 )
 def test_support_level_classifies_the_backward_compatible_range(release: str, expected: str) -> None:
@@ -97,9 +99,9 @@ def test_support_level_classifies_the_backward_compatible_range(release: str, ex
 def test_declared_bounds_preserve_the_upgrade_floor_and_ga_ceiling() -> None:
     assert compat.CONTRACT_VERSION == "netbox-compat-v5"
     assert compat.STABLE_MIN_NETBOX_VERSION == "4.5.8"
-    assert compat.STABLE_MAX_NETBOX_VERSION == "4.7.0"
+    assert compat.STABLE_MAX_NETBOX_VERSION == "4.7.99"
     assert compat.PLUGIN_MIN_VERSION == "4.5.8"
-    assert compat.PLUGIN_MAX_VERSION == "4.7.0"
+    assert compat.PLUGIN_MAX_VERSION == "4.7.99"
 
 
 def test_unparseable_version_fails_loudly() -> None:

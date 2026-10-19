@@ -6,7 +6,7 @@ This checklist tracks readiness for the NetBox Plugin Certification Program.
 | --- | --- |
 | Open source license | Apache-2.0 in `LICENSE` and `pyproject.toml` |
 | Package metadata | PyPI project `netbox-packer`, project URLs, classifiers, Python `>=3.12` |
-| NetBox compatibility | Plugin config preserves the `4.5.8` backward-compatible floor and admits official NetBox `4.7.0` GA |
+| NetBox compatibility | Plugin config preserves the `4.5.8` backward-compatible floor and admits the NetBox 4.7 series (`4.7.0` GA through `4.7.99`) |
 | Dependency policy | Standalone NetBox plugin; optional HCP Packer Registry integration uses HTTPS APIs |
 | CI | GitHub Actions run lint, static tests, NetBox integration tests, docs, page coverage, screenshot capture, and release validation |
 | Documentation | README, MkDocs site, installation, roadmap, release notes, and support links |

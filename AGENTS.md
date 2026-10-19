@@ -270,6 +270,14 @@ list, so only the `systemctl enable` runcmd line is added.
 
 Migration `0008_packertemplate_monitoring_agents.py` adds the QEMU/Zabbix
 fields. Migration `0033_public_service_markers.py` adds the read-only `provisions_service` marker.
+Migrations `0034_seed_network_appliance_marker.py` and
+`0036_seed_pbs4_debian13_vendor_data.py` first set database defaults for the
+legacy private agent columns when those physical PostgreSQL columns still
+exist. They do not restore the columns to model state. Each migration checks
+for its old pre-renumbering migration name after that compatibility step. If
+the old name is recorded, it adopts the operator-owned seed rows and returns
+without querying or modifying them. Keep collision checks unchanged for all
+other databases.
 
 **Password SSH (`ssh_pwauth`).** `_inject_monitoring_agents()` also always sets
 `ssh_pwauth: true` in the baked `#cloud-config` (idempotent — skipped only if
@@ -957,6 +965,11 @@ enabled. The Explorer installer must be the last entry in the fully injected
 `runcmd` list so cloud-init's `set -e`-less wrapper cannot mask it.
 
 ## Signed Preflight Build Guardrail
+
+Migration `0036` seeds `pbs-4-debian-13` at VMID `9061` with `vendor_data`.
+This type preserves generated per-VM Cloud-Init user fields. It sends the
+content as caller-supplied `first_boot_script`; the signed recipe digest binds
+the exact bytes. This requires a proxbox-api release that includes issue 606.
 
 Every executable cloud-config build uses the proxbox-api signed handshake in
 this exact order: `POST /cloud/templates/images` with `execute=false` to obtain

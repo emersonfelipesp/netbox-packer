@@ -212,7 +212,9 @@ jobs:
           set -euo pipefail
           python ../netbox/netbox/manage.py migrate --no-input
           python ../netbox/netbox/manage.py migrate netbox_packer 0032 --no-input
-          python ../netbox/netbox/manage.py migrate netbox_packer 0033 --no-input
+          python ../netbox/netbox/manage.py migrate netbox_packer 0036 --no-input
+          python ../netbox/netbox/manage.py migrate --check
+          python ../netbox/netbox/manage.py shell -c 'import sys; from netbox_packer.models import PackerTemplate; required = {"pbs-4-debian-13", "network-appliance-debian-13"}; found = set(PackerTemplate.objects.filter(name__in=required).values_list("name", flat=True)); missing = sorted(required - found); sys.exit(f"Missing re-applied seed rows: {missing}") if missing else print(f"OK: re-applied seed rows {sorted(found)}")'
           python ../netbox/netbox/manage.py makemigrations netbox_packer --check --dry-run
           # `check` must succeed on every tier. On the experimental tier it also
           # has to emit exactly one netbox_packer.W001 and no errors; on a stable

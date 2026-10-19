@@ -224,6 +224,44 @@ def test_dispatch_authorizes_cloud_build_before_enqueue(isolated_imports) -> Non
     assert calls == ["authorize:124", "enqueue:124"]
 
 
+def test_dispatch_authorizes_vendor_data_build_before_enqueue(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    calls: list[str] = []
+    jobs._authorize_cloud_build_dispatch = lambda build: calls.append(f"authorize:{build.pk}")
+    jobs.PackerBuildJob.enqueue = lambda **kwargs: calls.append(f"enqueue:{kwargs['build_id']}")
+    build = SimpleNamespace(
+        pk=125,
+        template=SimpleNamespace(installer_config=SimpleNamespace(installer_type="vendor_data")),
+    )
+
+    jobs.dispatch_build(build)
+
+    assert calls == ["authorize:125", "enqueue:125"]
+
+
+def test_vendor_data_payload_injects_yaml_and_skips_script(isolated_imports) -> None:
+    jobs = _import_jobs_module()
+    injected: list[str] = []
+    jobs._inject_monitoring_agents = lambda content, _template: injected.append(content) or content + "packages: []\n"
+    template = SimpleNamespace(name="pbs")
+
+    user_data, vendor_data, skipped = jobs._prepare_cloud_build_payload(
+        SimpleNamespace(installer_type="vendor_data", content="#cloud-config\n"), template
+    )
+    assert user_data is None
+    assert vendor_data == "#cloud-config\npackages: []\n"
+    assert skipped is False
+    assert injected == ["#cloud-config\n"]
+
+    user_data, vendor_data, skipped = jobs._prepare_cloud_build_payload(
+        SimpleNamespace(installer_type="vendor_data", content="#!/bin/sh\ntrue\n"), template
+    )
+    assert user_data is None
+    assert vendor_data == "#!/bin/sh\ntrue\n"
+    assert skipped is True
+    assert injected == ["#cloud-config\n"]
+
+
 def test_dispatch_authorizes_every_possible_enabled_cloud_build_target(
     isolated_imports,
 ) -> None:

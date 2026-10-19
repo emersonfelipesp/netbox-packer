@@ -7,7 +7,7 @@ class PackerPluginIntegrationTests(SimpleTestCase):
     def test_plugin_config_is_loaded_by_netbox(self) -> None:
         self.assertEqual(config.name, "netbox_packer")
         self.assertEqual(config.min_version, "4.5.8")
-        self.assertEqual(config.max_version, "4.7.0")
+        self.assertEqual(config.max_version, "4.7.99")
 
     def test_plugin_api_routes_are_registered(self) -> None:
         from netbox_packer.api.urls import router

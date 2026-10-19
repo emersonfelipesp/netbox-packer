@@ -50,6 +50,8 @@ _DEBIAN_CODENAMES = {
     "13": "trixie",
 }
 
+_CLOUD_BUILD_INSTALLER_TYPES = frozenset({"cloud_config", "vendor_data"})
+
 
 def _resolve_cloud_image_source(template, overrides):
     """Resolve the base image URL and its digest, refusing an unverified pin.
@@ -363,7 +365,7 @@ def _authorize_cloud_build_dispatch(build):
 
     template = getattr(build, "template", None)
     installer = getattr(template, "installer_config", None)
-    if installer is None or installer.installer_type != "cloud_config":
+    if installer is None or installer.installer_type not in _CLOUD_BUILD_INSTALLER_TYPES:
         return
 
     from .models import PackerPluginSettings
@@ -417,6 +419,35 @@ systemctl enable --now zabbix-agent2
 """
 
 
+def _inject_qemu_guest_agent(packages: list, commands: list, template: object) -> None:
+    """Add the QEMU guest agent package and enable command when requested."""
+    if not getattr(template, "install_qemu_guest_agent", True):
+        return
+    if "qemu-guest-agent" not in packages:
+        packages.append("qemu-guest-agent")
+    if not any("qemu-guest-agent" in str(command) for command in commands):
+        commands.insert(0, ["bash", "-c", "systemctl enable --now qemu-guest-agent || true"])
+
+
+def _inject_zabbix_agent(user_data_yaml: str, write_files: list, commands: list, template: object) -> None:
+    """Add the Zabbix Agent 2 bootstrap when requested and not already present."""
+    if not getattr(template, "install_zabbix_agent2", True) or "zabbix-agent2" in user_data_yaml:
+        return
+    zabbix_server = (getattr(template, "zabbix_server", "") or "").strip() or "zabbix.nmulti.cloud"
+    script_path = "/opt/nmulticloud-zabbix-agent2-bootstrap.sh"
+    if not any(isinstance(item, dict) and item.get("path") == script_path for item in write_files):
+        write_files.append(
+            {
+                "path": script_path,
+                "permissions": "0755",
+                "owner": "root:root",
+                "content": _zabbix_agent2_bootstrap(zabbix_server),
+            }
+        )
+    if not any(script_path in str(command) for command in commands):
+        commands.append(["bash", script_path])
+
+
 def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
     """Inject QEMU Guest Agent and/or Zabbix Agent 2 into cloud-config.
 
@@ -441,31 +472,8 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
     runcmds = list(config.get("runcmd", []))
     write_files = list(config.get("write_files", []))
 
-    # --- QEMU Guest Agent ---
-    if getattr(template, "install_qemu_guest_agent", True):
-        if "qemu-guest-agent" not in pkgs:
-            pkgs.append("qemu-guest-agent")
-        # Add enable/start command if not already referenced in any runcmd entry.
-        if not any("qemu-guest-agent" in str(r) for r in runcmds):
-            runcmds.insert(0, ["bash", "-c", "systemctl enable --now qemu-guest-agent || true"])
-
-    # --- Zabbix Agent 2 ---
-    # Whole-YAML dedup: if the existing content already handles zabbix-agent2
-    # (e.g. the Zabbix server template), skip injection to avoid a double-install.
-    if getattr(template, "install_zabbix_agent2", True) and "zabbix-agent2" not in user_data_yaml:
-        zabbix_server = (getattr(template, "zabbix_server", "") or "").strip() or "zabbix.nmulti.cloud"
-        script_path = "/opt/nmulticloud-zabbix-agent2-bootstrap.sh"
-        if not any((isinstance(f, dict) and f.get("path") == script_path) for f in write_files):
-            write_files.append(
-                {
-                    "path": script_path,
-                    "permissions": "0755",
-                    "owner": "root:root",
-                    "content": _zabbix_agent2_bootstrap(zabbix_server),
-                }
-            )
-        if not any(script_path in str(r) for r in runcmds):
-            runcmds.append(["bash", script_path])
+    _inject_qemu_guest_agent(pkgs, runcmds, template)
+    _inject_zabbix_agent(user_data_yaml, write_files, runcmds, template)
 
     # --- Password SSH auth ---
     # Every cloud-init template must support username+password SSH (key-based
@@ -486,6 +494,137 @@ def _inject_monitoring_agents(user_data_yaml: str, template) -> str:
 
     serialized = yaml.safe_dump(config, default_flow_style=False, allow_unicode=True)
     return header + "\n" + serialized
+
+
+def _prepare_cloud_build_payload(installer, template) -> tuple[str | None, str | None, bool]:
+    """Return mutually exclusive user-data or vendor-data content and skip state."""
+    content = installer.content
+    injection_skipped = installer.installer_type == "vendor_data" and content.startswith("#!")
+    if not injection_skipped:
+        content = _inject_monitoring_agents(content, template)
+    if installer.installer_type == "vendor_data":
+        return None, content, injection_skipped
+    return content, None, injection_skipped
+
+
+def _append_cloud_build_output(log_lines: list[str], response: dict, image_url: str, safe_image_url: str) -> None:
+    """Append scrubbed proxbox-api output fields to the build log."""
+    for key in ("build_script", "stdout", "stderr"):
+        value = response.get(key)
+        if value:
+            safe_value = str(value).replace(image_url, safe_image_url)
+            log_lines.append(f"[{key.upper()}]\n{safe_value}")
+
+
+def _record_cloud_build_result(
+    *,
+    build: object,
+    template: object,
+    installer: object,
+    response: dict,
+    log_lines: list[str],
+    safe_image_url: str,
+    image_sha256: str,
+    template_model: object,
+) -> None:
+    """Record the proxbox-api result and update the template atomically on success."""
+    status = str(response.get("status", "")).lower()
+    result_vmid = response.get("vmid") or response.get("template_vmid")
+    log_lines.append(f"[INFO] proxbox-api status: {status or 'unknown'} (vmid={result_vmid})")
+    build.finished_at = timezone.now()
+    if status in {"created", "completed", "already_exists"}:
+        build.status = "success"
+        build.exit_code = 0
+        build.base_image_url_at_build = safe_image_url
+        build.base_image_sha256_at_build = image_sha256
+        if result_vmid:
+            build.result_template_id = int(result_vmid)
+    else:
+        build.status = "failed"
+        build.exit_code = response.get("returncode") or 1
+        template_model.objects.filter(pk=template.pk).update(build_status="failed")
+
+    build.log = "\n".join(log_lines)
+    build_update_fields = ["status", "finished_at", "exit_code", "result_template_id", "log"]
+    if build.status != "success":
+        build.save(update_fields=build_update_fields)
+        return
+
+    from django.db import transaction
+
+    build_update_fields += ["base_image_url_at_build", "base_image_sha256_at_build"]
+    with transaction.atomic():
+        current_template = template_model.objects.select_for_update().get(pk=template.pk)
+        source_drifted = pin_differs_from_built_source(
+            desired_url=current_template.base_image_url,
+            desired_sha256=current_template.base_image_sha256,
+            built_url=safe_image_url,
+            built_sha256=image_sha256,
+        )
+        update = {
+            "build_status": "stale" if source_drifted else "ready",
+            "built_at": build.finished_at,
+            "base_image_url_at_build": safe_image_url,
+            "base_image_sha256_at_build": image_sha256,
+        }
+        if installer:
+            update["installer_config_checksum_at_build"] = installer.checksum
+        template_model.objects.filter(pk=current_template.pk).update(**update)
+        build.save(update_fields=build_update_fields)
+
+
+def _cloud_build_log_lines(
+    *,
+    template: object,
+    installer: object,
+    linkage: object,
+    safe_image_url: str,
+    ssh_host: str | None,
+    storage: str,
+    template_vmid: int,
+    endpoint: str | None,
+) -> list[str]:
+    """Describe the selected cloud build inputs without exposing secrets."""
+    installer_name = str(getattr(installer, "name", "") or "unnamed")
+    installer_version = str(getattr(installer, "version", "") or "unknown")
+    return [
+        f"[INFO] Cloud-init template image build for '{template.name}'",
+        *_linkage_log_lines(linkage),
+        f"[INFO] Installer config: {installer_name} v{installer_version} ({installer.installer_type})",
+        f"[INFO] Base image: {safe_image_url}",
+        f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
+        f"[INFO] Destination template VMID: {template_vmid}",
+        f"[INFO] Selected netbox-proxbox endpoint URL: {endpoint or 'UNSET'}",
+    ]
+
+
+def _append_cloud_agent_log_lines(log_lines: list[str], template: object, injection_skipped: bool) -> None:
+    """Append monitoring-agent state after payload injection completes."""
+    zabbix_status = "disabled"
+    if template.install_zabbix_agent2:
+        zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"
+    log_lines += [
+        f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
+        f"[INFO] Zabbix Agent 2 injection: {zabbix_status}",
+        "[INFO] proxbox-api signed handshake: plan -> preflight -> execute",
+    ]
+    if injection_skipped:
+        log_lines.append("[WARNING] Monitoring-agent injection was skipped because vendor_data contains a #! script.")
+
+
+def _validate_cloud_service_payload(
+    template: object, payload_content: str, build: object, log_lines: list[str]
+) -> None:
+    """Apply the service-specific final payload boundary before authorization."""
+    if getattr(template, "provisions_service", "") != _EXPLORER_SERVICE_MARKER:
+        return
+    try:
+        _validate_influxdb3_explorer_payload(payload_content)
+    except RuntimeError as exc:
+        log_lines.append(f"[ERROR] {exc}")
+        build.log = "\n".join(log_lines)
+        build.save(update_fields=["log"])
+        raise
 
 
 _EXPLORER_SERVICE_MARKER = "influxdb3-explorer"
@@ -594,6 +733,29 @@ def _validate_explorer_write_paths(write_files: list[dict]) -> None:
             )
 
 
+def _validate_explorer_tree(config: dict) -> None:
+    """Inspect every YAML key and scalar for forbidden credential material."""
+    pending = [config]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                normalized_key = str(key).lower().replace("-", "_")
+                if any(part in normalized_key for part in _EXPLORER_CREDENTIAL_KEY_PARTS):
+                    raise _explorer_payload_error("a credential-bearing YAML key is present")
+                pending.append(nested)
+        elif isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, (bytes, bytearray)):
+            raise _explorer_payload_error(
+                "the payload contains binary content, which cannot be inspected for credentials"
+            )
+        elif not isinstance(item, (str, int, float, bool)) and item is not None:
+            raise _explorer_payload_error(f"the payload contains an uninspectable {type(item).__name__} value")
+        elif isinstance(item, str):
+            _validate_explorer_string(item)
+
+
 def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
     """Fail closed if the final Explorer cloud-config contains connection secrets."""
 
@@ -611,33 +773,7 @@ def _validate_influxdb3_explorer_payload(user_data_yaml: str) -> None:
         raise _explorer_payload_error("write_files is not a list")
     for entry in write_files:
         _validate_explorer_write_entry(entry)
-
-    pending = [config]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            for key, nested in item.items():
-                normalized_key = str(key).lower().replace("-", "_")
-                if any(part in normalized_key for part in _EXPLORER_CREDENTIAL_KEY_PARTS):
-                    raise _explorer_payload_error("a credential-bearing YAML key is present")
-                pending.append(nested)
-            continue
-        if isinstance(item, list):
-            pending.extend(item)
-            continue
-        if isinstance(item, (bytes, bytearray)):
-            # PyYAML loads `!!binary` as bytes and the safe-load/safe-dump injection cycle
-            # preserves it. Skipping it here is what let unscanned base64 through, so fail
-            # closed: the payload has no legitimate reason to carry binary.
-            raise _explorer_payload_error(
-                "the payload contains binary content, which cannot be inspected for credentials"
-            )
-        if not isinstance(item, (str, int, float, bool)) and item is not None:
-            raise _explorer_payload_error(f"the payload contains an uninspectable {type(item).__name__} value")
-        if not isinstance(item, str):
-            continue
-
-        _validate_explorer_string(item)
+    _validate_explorer_tree(config)
 
     # Final catch-all, deliberately last so the specific diagnostics above win when they
     # apply. Everything before this is a denylist, and a denylist over operator-editable
@@ -679,7 +815,7 @@ class PackerBuildJob(JobRunner):
         template = build.template
         timeout = _get_plugin_setting("PACKER_BUILD_TIMEOUT_SECONDS", 3600)
         installer = template.installer_config
-        is_cloud_config = installer is not None and installer.installer_type == "cloud_config"
+        is_cloud_build = installer is not None and installer.installer_type in _CLOUD_BUILD_INSTALLER_TYPES
 
         # Mark build as running
         build.status = "running"
@@ -694,16 +830,16 @@ class PackerBuildJob(JobRunner):
             requested_node = str((build.variable_overrides or {}).get("target_node") or "").strip()
             endpoint, node = select_build_node(
                 template,
-                skip_affinity_check=bool(requested_node and is_cloud_config),
-                required_node=requested_node if is_cloud_config else None,
-                fail_if_targets_exhausted=is_cloud_config,
+                skip_affinity_check=bool(requested_node and is_cloud_build),
+                required_node=requested_node if is_cloud_build else None,
+                fail_if_targets_exhausted=is_cloud_build,
             )
             if requested_node:
                 node = requested_node
             build.selected_node = node or ""
             build.save(update_fields=["selected_node"])
 
-            if is_cloud_config:
+            if is_cloud_build:
                 # Cloud-init template image: delegate the real Proxmox bake to proxbox-api,
                 # which writes installer_config.content as a cicustom user snippet over SSH.
                 self._run_proxbox_cloud_build(build, template, endpoint, node, timeout)
@@ -734,37 +870,21 @@ class PackerBuildJob(JobRunner):
         safe_image_url = redact_base_image_url(image_url)
         ssh_host = _resolve_ssh_host(template, build.variable_overrides)
         template_vmid = _resolve_template_vmid(template, build.variable_overrides)
-        installer_name = str(getattr(installer, "name", "") or "unnamed")
-        installer_version = str(getattr(installer, "version", "") or "unknown")
+        log_lines = _cloud_build_log_lines(
+            template=template,
+            installer=installer,
+            linkage=linkage,
+            safe_image_url=safe_image_url,
+            ssh_host=ssh_host,
+            storage=storage,
+            template_vmid=template_vmid,
+            endpoint=endpoint,
+        )
 
-        log_lines = [
-            f"[INFO] Cloud-init template image build for '{template.name}'",
-            *_linkage_log_lines(linkage),
-            f"[INFO] Installer config: {installer_name} v{installer_version} ({installer.installer_type})",
-            f"[INFO] Base image: {safe_image_url}",
-            f"[INFO] Proxmox SSH host: {ssh_host or 'derived from endpoint'} | storage: {storage}",
-            f"[INFO] Destination template VMID: {template_vmid}",
-            f"[INFO] Selected netbox-proxbox endpoint URL: {endpoint or 'UNSET'}",
-        ]
-
-        user_data_yaml = _inject_monitoring_agents(installer.content, template)
-        zabbix_status = "disabled"
-        if template.install_zabbix_agent2:
-            zabbix_status = f"enabled (server={template.zabbix_server or 'zabbix.nmulti.cloud'})"
-        log_lines += [
-            f"[INFO] QEMU Guest Agent injection: {'enabled' if template.install_qemu_guest_agent else 'disabled'}",
-            f"[INFO] Zabbix Agent 2 injection: {zabbix_status}",
-            "[INFO] proxbox-api signed handshake: plan -> preflight -> execute",
-        ]
-
-        if getattr(template, "provisions_service", "") == _EXPLORER_SERVICE_MARKER:
-            try:
-                _validate_influxdb3_explorer_payload(user_data_yaml)
-            except RuntimeError as exc:
-                log_lines.append(f"[ERROR] {exc}")
-                build.log = "\n".join(log_lines)
-                build.save(update_fields=["log"])
-                raise
+        user_data_yaml, first_boot_script, injection_skipped = _prepare_cloud_build_payload(installer, template)
+        payload_content = first_boot_script if first_boot_script is not None else user_data_yaml
+        _append_cloud_agent_log_lines(log_lines, template, injection_skipped)
+        _validate_cloud_service_payload(template, payload_content, build, log_lines)
 
         try:
             # Re-resolve both default-off endpoint gates and translate this
@@ -782,6 +902,7 @@ class PackerBuildJob(JobRunner):
                 image_url=image_url,
                 image_sha256=image_sha256,
                 user_data_yaml=user_data_yaml,
+                first_boot_script=first_boot_script,
                 image_storage=storage,
                 vm_storage=storage,
                 storage=storage,
@@ -792,59 +913,24 @@ class PackerBuildJob(JobRunner):
             )
         except ProxboxApiError as exc:
             safe_error = str(exc).replace(image_url, safe_image_url)
+            if getattr(exc, "error_code", None) and exc.error_code not in safe_error:
+                safe_error = f"{exc.error_code}: {safe_error}"
             log_lines.append(f"[ERROR] {safe_error}")
             build.log = "\n".join(log_lines)
             build.save(update_fields=["log"])
             raise RuntimeError(safe_error) from None
 
-        status = str(response.get("status", "")).lower()
-        result_vmid = response.get("vmid") or response.get("template_vmid")
-        log_lines.append(f"[INFO] proxbox-api status: {status or 'unknown'} (vmid={result_vmid})")
-        for key in ("build_script", "stdout", "stderr"):
-            value = response.get(key)
-            if value:
-                safe_value = str(value).replace(image_url, safe_image_url)
-                log_lines.append(f"[{key.upper()}]\n{safe_value}")
-
-        build.finished_at = timezone.now()
-        if status in {"created", "completed", "already_exists"}:
-            build.status = "success"
-            build.exit_code = 0
-            build.base_image_url_at_build = safe_image_url
-            build.base_image_sha256_at_build = image_sha256
-            if result_vmid:
-                build.result_template_id = int(result_vmid)
-        else:
-            build.status = "failed"
-            build.exit_code = response.get("returncode") or 1
-            PackerTemplate.objects.filter(pk=template.pk).update(build_status="failed")
-
-        build.log = "\n".join(log_lines)
-        build_update_fields = ["status", "finished_at", "exit_code", "result_template_id", "log"]
-        if build.status == "success":
-            from django.db import transaction
-
-            build_update_fields += ["base_image_url_at_build", "base_image_sha256_at_build"]
-            with transaction.atomic():
-                current_template = PackerTemplate.objects.select_for_update().get(pk=template.pk)
-                source_drifted = pin_differs_from_built_source(
-                    desired_url=current_template.base_image_url,
-                    desired_sha256=current_template.base_image_sha256,
-                    built_url=safe_image_url,
-                    built_sha256=image_sha256,
-                )
-                update = {
-                    "build_status": "stale" if source_drifted else "ready",
-                    "built_at": build.finished_at,
-                    "base_image_url_at_build": safe_image_url,
-                    "base_image_sha256_at_build": image_sha256,
-                }
-                if installer:
-                    update["installer_config_checksum_at_build"] = installer.checksum
-                PackerTemplate.objects.filter(pk=current_template.pk).update(**update)
-                build.save(update_fields=build_update_fields)
-        else:
-            build.save(update_fields=build_update_fields)
+        _append_cloud_build_output(log_lines, response, image_url, safe_image_url)
+        _record_cloud_build_result(
+            build=build,
+            template=template,
+            installer=installer,
+            response=response,
+            log_lines=log_lines,
+            safe_image_url=safe_image_url,
+            image_sha256=image_sha256,
+            template_model=PackerTemplate,
+        )
 
     def _run_packer(self, build, template, endpoint, node, timeout):
         """Run packer init + packer build, streaming output into build.log."""
@@ -971,6 +1057,69 @@ def _build_var_args(template, overrides, endpoint, node):
     return [f"-var={k}={v}" for k, v in resolved.items()]
 
 
+def _scan_stale_templates(build_model: object, template_model: object) -> tuple[int, int, list[int]]:
+    """Mark stale templates and return build IDs that need dispatch."""
+    checked = 0
+    stale = 0
+    rebuild_ids = []
+    for template in template_model.objects.exclude(build_status__in=("building",)):
+        checked += 1
+        if not template.is_stale:
+            continue
+        stale += 1
+        template_model.objects.filter(pk=template.pk).update(build_status="stale")
+        if not template.auto_rebuild:
+            continue
+        if build_model.objects.filter(template=template, status="running").exists():
+            continue
+        build = build_model.objects.filter(template=template, status="queued").order_by("queued_at").first()
+        if build is None:
+            build = build_model.objects.create(
+                template=template,
+                triggered_by="PackerStalenessCheckJob",
+                status="queued",
+            )
+            logger.info("Auto-queued rebuild for stale template '%s' (build #%s)", template.name, build.pk)
+        else:
+            logger.warning("Recovering queued rebuild #%s for stale template '%s'", build.pk, template.name)
+        rebuild_ids.append(build.pk)
+    return checked, stale, rebuild_ids
+
+
+def _scan_stale_branch(
+    build_model: object,
+    template_model: object,
+    branch: object,
+    branch_config: dict,
+    activate_branch_context: object,
+    merge_branch: object,
+) -> tuple[int, int, list[int]]:
+    """Run the stale scan in a branch and suppress dispatch IDs when its merge fails."""
+    with activate_branch_context(branch):
+        checked, stale, rebuild_ids = _scan_stale_templates(build_model, template_model)
+    merged, message = merge_branch(branch=branch, user=None, on_conflict=branch_config["on_conflict"])
+    if merged:
+        logger.info("Staleness check branch merged: %s", message)
+        return checked, stale, rebuild_ids
+    logger.warning("Staleness check branch merge failed: %s", message)
+    return checked, stale, []
+
+
+def _dispatch_stale_builds(build_model: object, template_model: object, rebuild_ids: list[int]) -> int:
+    """Dispatch queued stale-template builds after any branch merge succeeds."""
+    dispatched = 0
+    for build_id in rebuild_ids:
+        build = build_model.objects.select_related("template").get(pk=build_id)
+        template_model.objects.filter(pk=build.template_id).update(build_status="building")
+        try:
+            dispatch_build(build)
+        except Exception:
+            logger.exception("Auto-rebuild dispatch failed for build #%s", build_id)
+            continue
+        dispatched += 1
+    return dispatched
+
+
 class PackerStalenessCheckJob(JobRunner):
     """
     Periodic job that marks stale templates and optionally queues rebuilds.
@@ -999,78 +1148,19 @@ class PackerStalenessCheckJob(JobRunner):
             branch = create_and_provision_branch(name=branch_name, user=None)
             logger.info("Staleness check: using branch '%s'", branch_name)
 
-        def _run_staleness(PackerBuild, PackerTemplate):
-            checked = 0
-            stale = 0
-            rebuild_ids = []
-
-            # Age is only one source of staleness. Installer checksum and base-image
-            # pin drift must still be evaluated when max_age_days is unset.
-            for template in PackerTemplate.objects.exclude(build_status__in=("building",)):
-                checked += 1
-                if not template.is_stale:
-                    continue
-
-                stale += 1
-                PackerTemplate.objects.filter(pk=template.pk).update(build_status="stale")
-
-                if not template.auto_rebuild:
-                    continue
-
-                if PackerBuild.objects.filter(template=template, status="running").exists():
-                    continue
-
-                build = PackerBuild.objects.filter(template=template, status="queued").order_by("queued_at").first()
-                if build is None:
-                    build = PackerBuild.objects.create(
-                        template=template,
-                        triggered_by="PackerStalenessCheckJob",
-                        status="queued",
-                    )
-                    logger.info(
-                        "Auto-queued rebuild for stale template '%s' (build #%s)",
-                        template.name,
-                        build.pk,
-                    )
-                else:
-                    logger.warning(
-                        "Recovering queued rebuild #%s for stale template '%s'",
-                        build.pk,
-                        template.name,
-                    )
-                rebuild_ids.append(build.pk)
-
-            return checked, stale, rebuild_ids
-
-        checked = 0
-        stale = 0
-        rebuild_ids = []
         if branch is not None:
-            with activate_branch_context(branch):
-                checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
-            merged, msg = merge_branch(
-                branch=branch,
-                user=None,
-                on_conflict=branch_config["on_conflict"],
+            checked, stale, rebuild_ids = _scan_stale_branch(
+                PackerBuild,
+                PackerTemplate,
+                branch,
+                branch_config,
+                activate_branch_context,
+                merge_branch,
             )
-            if merged:
-                logger.info("Staleness check branch merged: %s", msg)
-            else:
-                logger.warning("Staleness check branch merge failed: %s", msg)
-                rebuild_ids = []
         else:
-            checked, stale, rebuild_ids = _run_staleness(PackerBuild, PackerTemplate)
+            checked, stale, rebuild_ids = _scan_stale_templates(PackerBuild, PackerTemplate)
 
-        dispatched = 0
-        for build_id in rebuild_ids:
-            build = PackerBuild.objects.select_related("template").get(pk=build_id)
-            PackerTemplate.objects.filter(pk=build.template_id).update(build_status="building")
-            try:
-                dispatch_build(build)
-            except Exception:
-                logger.exception("Auto-rebuild dispatch failed for build #%s", build_id)
-                continue
-            dispatched += 1
+        dispatched = _dispatch_stale_builds(PackerBuild, PackerTemplate, rebuild_ids)
 
         logger.info(
             "Staleness check complete: %d templates checked, %d stale, %d rebuilds dispatched",

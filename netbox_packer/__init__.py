@@ -1,6 +1,6 @@
 from netbox.plugins import PluginConfig
 
-from .compat import register_netbox_compatibility_check
+from .compat import PLUGIN_MAX_VERSION, register_netbox_compatibility_check
 
 
 class NetBoxPackerConfig(PluginConfig):
@@ -12,7 +12,7 @@ class NetBoxPackerConfig(PluginConfig):
     author = "Emerson Felipe"
     author_email = "emersonfelipe.2003@gmail.com"
     min_version = "4.5.8"
-    max_version = "4.7.0"
+    max_version = PLUGIN_MAX_VERSION
     default_settings = {
         "PACKER_BUILD_TIMEOUT_SECONDS": 3600,
         "PACKER_STALENESS_CHECK_INTERVAL": "0 */6 * * *",

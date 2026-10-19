@@ -1,0 +1,83 @@
+#cloud-config
+disable_root: false
+package_update: true
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+write_files:
+  - path: /usr/local/sbin/install-proxmox-backup-server
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/usr/bin/env bash
+      set -eu
+      set -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+
+      readonly KEY_URL='https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg'
+      readonly KEY_SHA256='136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45'
+      readonly KEYRING='/usr/share/keyrings/proxmox-archive-keyring.gpg'
+      readonly SOURCE='/etc/apt/sources.list.d/pbs-no-subscription.sources'
+      readonly LOG='/var/log/netbox-pbs-install.log'
+      key_tmp="$(mktemp)"
+      cleanup() { rm -f "${key_tmp}"; }
+      trap cleanup EXIT
+
+      curl --fail --silent --show-error --location \
+        --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
+        --retry-max-time 60 --connect-timeout 10 --max-time 60 \
+        --max-filesize 1048576 --output "${key_tmp}" "${KEY_URL}"
+      printf '%s  %s\n' "${KEY_SHA256}" "${key_tmp}" | sha256sum --check --strict -
+      install -o root -g root -m 0644 "${key_tmp}" "${KEYRING}"
+
+      cat > "${SOURCE}" <<'SOURCES'
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pbs
+      Suites: trixie
+      Components: pbs-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+      SOURCES
+
+      # The package installs its enterprise repository enabled. That repository
+      # needs a subscription, so apt-get update fails while it is enabled. Move
+      # the dedicated enterprise files out of the names apt reads instead of
+      # editing them: any stanza, field case, or whitespace is then irrelevant,
+      # and dpkg keeps a removed conffile removed on later upgrades. Do this
+      # before the first update (a partial install by an earlier run may have
+      # left the file behind) and again after the package transaction, whatever
+      # its outcome.
+      disable_enterprise_sources() {
+        for enterprise in /etc/apt/sources.list.d/pbs-enterprise.sources \
+          /etc/apt/sources.list.d/pbs-enterprise.list; do
+          [ -f "${enterprise}" ] || continue
+          mv -f "${enterprise}" "${enterprise}.disabled"
+        done
+      }
+
+      # --error-on=any makes a transient fetch failure fatal. A plain update can
+      # exit zero and keep stale indexes, which would hide an unreachable source.
+      disable_enterprise_sources
+      apt-get --error-on=any update
+      install_status=0
+      apt-get install -y proxmox-backup-server qemu-guest-agent || install_status=$?
+      disable_enterprise_sources
+      if [ "${install_status}" -ne 0 ]; then
+        echo 'Installing Proxmox Backup Server failed.' >&2
+        exit "${install_status}"
+      fi
+      apt-get --error-on=any update
+
+      systemctl enable --now proxmox-backup proxmox-backup-proxy qemu-guest-agent
+
+      deadline=$((SECONDS + 120))
+      until ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8007$'; do
+        if [ "${SECONDS}" -ge "${deadline}" ]; then
+          echo 'Timed out waiting for Proxmox Backup Server port 8007.' >&2
+          exit 1
+        fi
+        sleep 2
+      done
+      printf '%s\n' 'NETBOX_PBS_INSTALL_COMPLETE' >> "${LOG}"
+runcmd:
+  - [/usr/local/sbin/install-proxmox-backup-server]

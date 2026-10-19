@@ -217,11 +217,14 @@ def test_plugin_settings_has_proxbox_api_fields() -> None:
 
 def test_jobs_branches_on_cloud_config_and_delegates() -> None:
     src = _read("netbox_packer/jobs.py")
-    assert 'installer.installer_type == "cloud_config"' in src
+    assert '_CLOUD_BUILD_INSTALLER_TYPES = frozenset({"cloud_config", "vendor_data"})' in src
+    assert "installer.installer_type in _CLOUD_BUILD_INSTALLER_TYPES" in src
     assert "def _run_proxbox_cloud_build(self, build, template, endpoint, node, timeout):" in src
     assert "from .proxbox_client import ProxboxApiError, call_proxbox_build" in src
     # Monitoring agents are injected before the proxbox-api call.
-    assert "_inject_monitoring_agents(installer.content, template)" in src
+    assert "_prepare_cloud_build_payload(" in src
+    assert "content = _inject_monitoring_agents(content, template)" in src
+    assert "first_boot_script=first_boot_script" in src
     assert "user_data_yaml=user_data_yaml" in src
     assert "proxbox-api signed handshake: plan -> preflight -> execute" in src
     # Gap 1: PackerBuild creation must enqueue the job.
@@ -264,7 +267,8 @@ def test_proxbox_client_targets_template_images_endpoint() -> None:
     assert "/cloud/templates/images" in src
     assert "/cloud/templates/images/preflight" in src
     assert '"X-Proxbox-API-Key": proxbox_api_key' in src
-    assert '"user_data_yaml": user_data_yaml' in src
+    assert 'payload["user_data_yaml"] = user_data_yaml' in src
+    assert 'payload["first_boot_script"] = first_boot_script' in src
     assert '"preflight_plan_token": plan_token' in src
 
 
@@ -2554,13 +2558,15 @@ def test_staleness_evaluates_pin_drift_without_an_age_policy() -> None:
     from netbox_packer.base_image import base_image_pin_applies
 
     assert base_image_pin_applies("cloud_config") is True
+    assert base_image_pin_applies("vendor_data") is True
     for installer_type in ("autoinstall", "kickstart", "preseed", "", None):
         assert base_image_pin_applies(installer_type) is False, installer_type
 
     # `is_stale` must actually consult it, and `clean()` must refuse to create the state.
     assert "self.supports_base_image_pin and pin_differs_from_built_source(" in models_src
     assert "base_image_pin_applies(installer.installer_type)" in models_src
-    template_clean = models_src.split("    def clean(self):", 1)[1].split("\n    @property", 1)[0]
+    template_block = models_src.split("class PackerTemplate", 1)[1].split("class PackerBuild", 1)[0]
+    template_clean = template_block.split("    def clean(self):", 1)[1].split("\n    @property", 1)[0]
     assert "supports_base_image_pin" in template_clean
     assert "ValidationError" in template_clean
 
@@ -2633,7 +2639,7 @@ def test_base_image_build_snapshots_are_machine_managed_and_migration_graph_is_l
             if app_label == "netbox_packer":
                 internal_dependencies.add(dependency)
 
-    assert names - internal_dependencies == {"0033_public_service_markers"}
+    assert names - internal_dependencies == {"0036_seed_pbs4_debian13_vendor_data"}
 
 
 def test_influxdb3_debian13_base_image_pin_is_dated_and_verifiable() -> None:

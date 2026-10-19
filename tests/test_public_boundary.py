@@ -147,7 +147,10 @@ def test_github_ci_runs_base_upgrade_and_separate_fresh_database() -> None:
     assert "check_historical_upgrade.py assert-head" in workflow
     assert "NETBOX_TEST_DB_NAME: netbox_fresh" in workflow
     assert "migrate netbox_packer 0032" in workflow
-    assert "migrate netbox_packer 0033" in workflow
+    assert "migrate netbox_packer 0036 --no-input" in workflow
+    assert "manage.py migrate --check" in workflow
+    assert '"pbs-4-debian-13"' in workflow
+    assert '"network-appliance-debian-13"' in workflow
 
 
 def _load_migration_0033(monkeypatch):

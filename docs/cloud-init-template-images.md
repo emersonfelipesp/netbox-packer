@@ -6,6 +6,19 @@
 `PackerBuild`, queues `PackerBuildJob`, and delegates the real Proxmox work to
 `POST /cloud/templates/images` on `proxbox-api`.
 
+A `cicustom user=` snippet replaces Proxmox-generated user data. The clone then
+loses its `ciuser`, `cipassword`, and `sshkeys` values. Use Cloud-Init vendor-data
+for installers that must preserve these per-VM fields. The `vendor_data` model
+type sends its content as `first_boot_script`; the signed recipe binds the exact
+bytes. A `#cloud-config` document receives the normal monitoring-agent
+injection. A `#!` script does not, and the build log records the skipped step.
+
+The build path requires a proxbox-api release that includes issue 606
+`first_boot_script` support. Plan a `POST /cloud/templates/images` request with
+`first_boot_script`, then send its digest to
+`POST /cloud/templates/images/preflight` to check compatibility. An older
+proxbox-api returns HTTP 422 for the plan.
+
 ## Flow
 
 1. Create or select a `PackerInstallerConfig` where
@@ -347,6 +360,32 @@ endpoint/config file, credential-bearing key or value, private key, or encoded
 `write_files` content that cannot be inspected aborts the build with a log entry; proxbox-api is not
 called. The pristine seed checks remain useful, but are not a substitute for
 validating the editable payload that is actually baked.
+
+### Generic network appliance marker (`0034`)
+
+`0034_seed_network_appliance_marker.py` creates or stamps a migration-managed
+`provisions_service` marker for external build tooling that owns the generic
+network appliance profile. This plugin does not ship cloud-init content for that
+profile; the tooling upserts the remaining template fields by name before
+dispatching a bake.
+
+| Field | Value |
+| --- | --- |
+| Template name | `network-appliance-debian-13` |
+| Service marker | `provisions_service = "network-appliance"` |
+| OS | Debian `13` |
+| Template VMID | `0` placeholder; Proxmox and proxbox-api refuse VMIDs below 100, so the unbuilt row cannot be cloned until external tooling sets the real value |
+| Proxmox endpoint / node | empty endpoint; node `select-at-build` (placeholders) |
+| Storage | `local` (placeholder) |
+| Installer config | none at migration time |
+
+If a row named `network-appliance-debian-13` already exists with an empty
+marker, the migration stamps `provisions_service` only when the row already
+describes this profile: `os_family = "debian"`, `os_version = "13"`, and
+`proxmox_template_id` equal to the placeholder `0` or the reserved `9700`. All
+other fields stay untouched. Any identity mismatch or a different non-empty
+marker aborts the migration without modifying the row, listing the differing
+fields, in the same compare-and-set style as the earlier seed migrations.
 
 ## Base Image Pinning (reproducible, verifiable OS bases)
 

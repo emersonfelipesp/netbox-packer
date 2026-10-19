@@ -68,6 +68,21 @@ Zabbix 7.4, InfluxDB OSS 2/Core 3, Kubernetes 1.31, PowerDNS, Passbolt CE, Akvor
 An older service that returns 404 for the preflight endpoint is incompatible;
 the client fails the build and never falls back to legacy one-step execution.
 
+The `vendor_data` installer type stores Cloud-Init vendor-data. Use it when the
+installer must keep Proxmox-generated per-VM user data. A `cicustom user=`
+snippet replaces that generated data, so it loses `ciuser`, `cipassword`, and
+`sshkeys`. The build sends vendor-data as `first_boot_script` through the same
+plan, signed preflight, and execute handshake as `cloud_config`.
+
+This netbox-packer version requires a proxbox-api release that includes issue
+606 `first_boot_script` support. Test compatibility by planning a
+`POST /cloud/templates/images` request with `first_boot_script`, then submit its
+digest to `POST /cloud/templates/images/preflight`. An older proxbox-api rejects
+the plan with HTTP 422, before preflight can authorize it.
+
+Migration `0036` seeds `pbs-4-debian-13` at VMID `9061`. Its credential-free
+vendor-data installs Proxmox Backup Server 4 and QEMU Guest Agent on Debian 13.
+
 The Akvorado seed is `akvorado-2.4.0-ubuntu-2404`, VMID `9070`, on
 CLUSTER01-DC01 at `https://10.0.30.71:8006` / node `10.0.30.71`. First boot
 installs Docker Engine and the Compose plugin, then starts Kafka `4.2.0`,
