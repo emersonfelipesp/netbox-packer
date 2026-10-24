@@ -655,47 +655,129 @@ open resolver. Replace `PDNS_AUTH_API_KEY` and `PDNS_RECURSOR_API_KEY`
 placeholders before production use.
 
 
-## Automatic Staging/Production Deployment
+## Staging and Production Deployment
 
-The deploy workflow treats `develop` as staging and `main` as production.
-Pushes to `develop` deploy `netbox-packer` to
-`https://staging.netbox.nmulti.cloud`; pushes to `main` deploy to
-`https://netbox.nmulti.cloud`.
+`.gitea/workflows/deploy-production.yml` is the only deployment workflow. It
+runs on the dedicated deploy runner and calls only the managed deploy helpers
+installed there. It contains no remote-shell path to any host.
 
-**Deploy job in `.gitea/workflows/deploy-production.yml`:**
-- Triggers on `push: [develop, main]` branch updates
-- Also supports manual dispatch via `workflow_dispatch` with optional `ref` and optional `environment` choice
-- Runs on `prod-deploy` runner with access to the NetBox deploy host
-- For staging, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging netbox-packer "$REF"`
-- For production, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"` when local, or falls back to `ssh nmc-prod-207 -- deploy-plugin netbox-packer "$REF"`
-- Keep the full plugin slug `netbox-packer`; the production deploy helper validates repository-style NetBox plugin names and rejects the short historical slug `packer`.
+| Trigger | Branch | Target | Commit deployed |
+|---|---|---|---|
+| `push` | `develop` | staging NetBox | the pushed develop commit (`GITHUB_SHA`) |
+| `workflow_dispatch` (staging deployment target) | `develop` | staging NetBox | the dispatched develop commit |
+| `workflow_dispatch` (production deployment target) | `main` | production NetBox | the dispatched main commit |
+| `push` | `main` | **nothing** | a main push never deploys |
 
-**Deploy parameters:**
-- REF: can be a version tag (v0.1.0), branch name (main/develop), or 7+ character commit SHA
-- Default: uses current commit SHA if not specified in manual dispatch
+Rules the workflow enforces, and that `tests/test_deploy_workflow_contract.py`
+locks (it also executes the step script against stub helpers, so the dry run
+never reaches a host):
 
-**Security hardening:**
-- REF is passed via environment variable, not direct GitHub Actions context interpolation
-- Bash case statement validates ref format before SSH (whitelist: version tags, branch names, commit SHAs)
-- StrictHostKeyChecking=accept-new prevents MITM attacks
-- Quoted variable interpolation prevents shell injection
+- The branch decides the target. `environment` may only confirm it
+  (`develop`=staging, `main`=production); any other event, branch, or
+  combination fails the run. Neither input declares a default, so an omitted
+  `environment` leaves the decision to the branch.
+- The contract test also pins the exact job and step shape (job condition,
+  environment bindings, one `bash` step, no step condition, no swallowed helper
+  failure). Change it deliberately together with the workflow.
+- `ref` is a cross-check only. It may be empty, the branch name, or the exact
+  dispatched commit SHA. Tags, other branches, short SHAs, and anything else fail
+  the run. The helper always receives the full 40-character run commit.
+- If the managed helper is absent on the runner, the run fails. There is no
+  fallback.
+- Keep the full plugin slug `netbox-packer`; the production helper rejects the
+  short historical slug `packer`.
+- The `ref` and `environment` input names are part of the registered deployment
+  targets. Do not rename or remove them without updating those targets in the
+  same change window.
 
-**Deployment on target server (`nmc-prod-207`):**
-1. Git fetch/checkout of the specified ref in the plugin submodule
-2. pip install -e to refresh editable install and pick up new dependencies
-3. manage.py migrate to apply any pending migrations
-4. manage.py collectstatic to collect new/updated static files
-5. Reload/restart the target NetBox web and worker services
-6. Health check the selected endpoint to verify the service is responding
+**Production is operator-dispatched only.** Deploy production by dispatching
+the registered production deployment target from the managed deployment
+control plane after the change has been merged to `develop`, validated on staging, and promoted to
+`main`. Record the dispatched commit, the workflow run, and the smoke result.
+The rollback point is the previously deployed main commit: dispatch the
+production target again from a `main` that contains the reverted change.
 
-**Monitoring and verification:**
-- Watch the `deploy-production.yml` workflow run in Gitea Actions
-- Check the `deploy` job logs for SSH output and health check results
-- Verify staging: `curl -fsS https://staging.netbox.nmulti.cloud/api/`
-- Verify production: `curl -fsS https://netbox.nmulti.cloud/api/`
-- Check service logs: `ssh nmc-prod-207 -- logs netbox`
+**Retired behaviour.** Until this change, every push to `main` deployed
+production automatically, a dispatch could select any tag, branch, or short SHA,
+and the production step fell back to a remote shell on the deploy host when the
+local helper was missing. All three are removed. A merge to `main` is now a
+release-branch update only.
 
-Keep deployment-specific infrastructure outside this public repository. Public release automation is documented in the repository workflows and release guide.
+**Package-first production (in progress).** The target end state deploys the
+latest immutable Gitea package by default, with canonical `main` as an explicit
+operator override, and binds each production dispatch to a signed deployment
+request from the control plane. The package source is the Gitea publication
+described in "Gitea Package Publication" below. The remaining steps are
+managed-helper support for this plugin, a registered package publish target, a
+re-registered production deployment target, and the first published package;
+until all exist, production deploys the dispatched `main` commit as described
+above.
+
+## Gitea Package Publication
+
+`.gitea/workflows/publish-gitea.yml` is a manual, dispatch-only publisher for an
+existing release tag on canonical `main`. It validates that the tagged commit is
+on `main` and that `[project].version` in the tagged `pyproject.toml` matches the
+tag. It then builds exactly one wheel and one sdist from that commit and creates
+the canonical schema-1 `release-manifest.json` for the generic package
+`netbox-packer-release-manifest`.
+
+Publication is package-first and fail-closed. Before any Gitea upload, an `rcN`
+release must already exist on TestPyPI, while a final or `.postN` release must
+already exist on PyPI. The check records the public file names and SHA-256
+digests in the workflow log. It does not require byte identity between the
+public-index artifacts and the Gitea build because the two builds are not
+currently byte-reproducible; cross-channel artifact identity is tracked
+separately.
+
+The build step builds from an extracted copy of the tagged commit with build
+tooling kept in a separate directory, pins `SOURCE_DATE_EPOCH` to the tagged
+commit time, and writes the manifest with the canonical publisher checkout's
+helper (so a historical tag that predates the helper can still be published).
+That build-step manifest is the source of truth for the rest of the run.
+
+The publication step first validates `GITHUB_SERVER_URL` as a canonical HTTPS
+origin and uses only that validated value for every registry operation. It then
+runs a resumable plan/upload/finish sequence. The plan first verifies that the
+build-step manifest describes exactly the local artifacts. It then reads the
+PyPI and generic package state. **Registry bytes never replace local build
+output:** an artifact that already exists remotely must be byte-identical to
+the artifact this run built, otherwise the run fails closed and the partial
+publication must be resolved by the owner before a retry. Only missing
+artifacts are listed for Twine. An existing remote manifest must equal the
+build-step manifest exactly. The wheel rebuild is reproducible under the pinned
+`SOURCE_DATE_EPOCH`, so a retry after a wheel-only upload continues; the sdist
+still embeds build-time metadata timestamps, so a retry after an sdist upload
+fails closed until resolved. The plan accepts a package that is uploaded but not
+yet linked (an interrupted link step); a package linked to any other repository
+fails, and the finish step requires the exact link before success.
+
+The finish step uploads the generic manifest only when a confirmed HTTP 404
+shows that it is absent, requires HTTP 201 for that upload, and links both
+package versions to `emersonfelipesp/netbox-packer`. HTTP 201 and 204 are direct
+link successes. Any other link response is accepted only after a metadata read
+confirms the required repository association. It then verifies both package
+identities and associations, the generic package's single-file inventory and
+manifest digest, the PyPI package's exact two-file inventory, and every
+downloaded byte against the canonical manifest.
+
+All registry reads refuse redirects and have time and size bounds. Only HTTP
+404 means absent; authentication failures, server failures, redirects,
+transport errors, invalid JSON, unexpected files, digest or size mismatches,
+different repository links, and a differing existing manifest fail closed.
+The `PACKAGE_WRITE_TOKEN` secret is passed only through environment variables,
+used only in the Authorization header, and never printed or placed on a command
+line.
+
+**Release order and current state.** A Gitea publication is the last channel
+step of a release, never the first: tag, publish to TestPyPI (`rcN`) or PyPI
+(final, `.postN`) through the public release workflow, then dispatch this
+publisher for the same tag. The workflow has not been dispatched yet. No Gitea
+package exists for this repository, the latest public final is older than the
+version declared in `pyproject.toml`, and the first package-first release waits
+on the release-history decision for this repository. The repository secret
+`PACKAGE_WRITE_TOKEN` must be provisioned before the first dispatch; until then
+the publish step fails closed on the empty credential.
 
 ## NetBox compatibility: two tiers, one shared module
 
