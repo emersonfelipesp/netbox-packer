@@ -706,9 +706,78 @@ release-branch update only.
 **Package-first production (in progress).** The target end state deploys the
 latest immutable Gitea package by default, with canonical `main` as an explicit
 operator override, and binds each production dispatch to a signed deployment
-request from the control plane. That requires managed-helper support for this plugin and a
-re-registered deployment target; until both exist, production deploys the
-dispatched `main` commit as described above.
+request from the control plane. The package source is the Gitea publication
+described in "Gitea Package Publication" below. The remaining steps are
+managed-helper support for this plugin, a registered package publish target, a
+re-registered production deployment target, and the first published package;
+until all exist, production deploys the dispatched `main` commit as described
+above.
+
+## Gitea Package Publication
+
+`.gitea/workflows/publish-gitea.yml` is a manual, dispatch-only publisher for an
+existing release tag on canonical `main`. It validates that the tagged commit is
+on `main` and that `[project].version` in the tagged `pyproject.toml` matches the
+tag. It then builds exactly one wheel and one sdist from that commit and creates
+the canonical schema-1 `release-manifest.json` for the generic package
+`netbox-packer-release-manifest`.
+
+Publication is package-first and fail-closed. Before any Gitea upload, an `rcN`
+release must already exist on TestPyPI, while a final or `.postN` release must
+already exist on PyPI. The check records the public file names and SHA-256
+digests in the workflow log. It does not require byte identity between the
+public-index artifacts and the Gitea build because the two builds are not
+currently byte-reproducible; cross-channel artifact identity is tracked
+separately.
+
+The build step builds from an extracted copy of the tagged commit with build
+tooling kept in a separate directory, pins `SOURCE_DATE_EPOCH` to the tagged
+commit time, and writes the manifest with the canonical publisher checkout's
+helper (so a historical tag that predates the helper can still be published).
+That build-step manifest is the source of truth for the rest of the run.
+
+The publication step first validates `GITHUB_SERVER_URL` as a canonical HTTPS
+origin and uses only that validated value for every registry operation. It then
+runs a resumable plan/upload/finish sequence. The plan first verifies that the
+build-step manifest describes exactly the local artifacts. It then reads the
+PyPI and generic package state. **Registry bytes never replace local build
+output:** an artifact that already exists remotely must be byte-identical to
+the artifact this run built, otherwise the run fails closed and the partial
+publication must be resolved by the owner before a retry. Only missing
+artifacts are listed for Twine. An existing remote manifest must equal the
+build-step manifest exactly. The wheel rebuild is reproducible under the pinned
+`SOURCE_DATE_EPOCH`, so a retry after a wheel-only upload continues; the sdist
+still embeds build-time metadata timestamps, so a retry after an sdist upload
+fails closed until resolved. The plan accepts a package that is uploaded but not
+yet linked (an interrupted link step); a package linked to any other repository
+fails, and the finish step requires the exact link before success.
+
+The finish step uploads the generic manifest only when a confirmed HTTP 404
+shows that it is absent, requires HTTP 201 for that upload, and links both
+package versions to `emersonfelipesp/netbox-packer`. HTTP 201 and 204 are direct
+link successes. Any other link response is accepted only after a metadata read
+confirms the required repository association. It then verifies both package
+identities and associations, the generic package's single-file inventory and
+manifest digest, the PyPI package's exact two-file inventory, and every
+downloaded byte against the canonical manifest.
+
+All registry reads refuse redirects and have time and size bounds. Only HTTP
+404 means absent; authentication failures, server failures, redirects,
+transport errors, invalid JSON, unexpected files, digest or size mismatches,
+different repository links, and a differing existing manifest fail closed.
+The `PACKAGE_WRITE_TOKEN` secret is passed only through environment variables,
+used only in the Authorization header, and never printed or placed on a command
+line.
+
+**Release order and current state.** A Gitea publication is the last channel
+step of a release, never the first: tag, publish to TestPyPI (`rcN`) or PyPI
+(final, `.postN`) through the public release workflow, then dispatch this
+publisher for the same tag. The workflow has not been dispatched yet. No Gitea
+package exists for this repository, the latest public final is older than the
+version declared in `pyproject.toml`, and the first package-first release waits
+on the release-history decision for this repository. The repository secret
+`PACKAGE_WRITE_TOKEN` must be provisioned before the first dispatch; until then
+the publish step fails closed on the empty credential.
 
 ## NetBox compatibility: two tiers, one shared module
 

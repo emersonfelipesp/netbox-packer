@@ -1,0 +1,123 @@
+name: Publish immutable Gitea package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing release tag to publish (v0.1.0rcN, v0.1.0, or v0.1.0.postN)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netbox-packer-package-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'emersonfelipesp/netbox-packer' && github.ref == 'refs/heads/main' }}
+    runs-on: mirror-host
+    steps:
+      - name: Checkout canonical publisher policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable tagged source
+        id: release
+        env:
+          TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "+refs/tags/${TAG}:refs/release-policy/candidate"
+          git fetch --force --no-tags origin "+refs/heads/main:refs/release-policy/main"
+          event=final
+          printf '%s' "$TAG" | grep -Eq 'rc[1-9][0-9]*$' && event=rc
+          python3 scripts/validate_release_ref.py --repository . --tag "$TAG" \
+            --event "$event" --github-output "$GITHUB_OUTPUT"
+
+      - name: Build exact wheel, sdist, and manifest
+        env:
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          build_root="$(mktemp -d "$RUNNER_TEMP/netbox-packer-release.XXXXXX")"
+          trap 'rm -rf -- "$build_root"' EXIT
+          # Source, build tooling, and output live in separate directories so
+          # the tooling can never be packaged. SOURCE_DATE_EPOCH pins archive
+          # timestamps to the tagged commit so a retry rebuilds the same wheel.
+          install -d -m 0700 "$build_root/src" "$build_root/tools" "$build_root/dist"
+          git archive "$SOURCE_SHA" | tar -x -C "$build_root/src"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$SOURCE_SHA")"
+          export SOURCE_DATE_EPOCH
+          curl --fail --silent --show-error --location --max-redirs 3 \
+            https://bootstrap.pypa.io/get-pip.py --output "$build_root/tools/get-pip.py"
+          printf '%s  %s\n' \
+            'fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6' \
+            "$build_root/tools/get-pip.py" | sha256sum --check --strict
+          python3 "$build_root/tools/get-pip.py" --disable-pip-version-check \
+            --no-warn-script-location --target "$build_root/tools/pip" 'pip==25.2'
+          PYTHONPATH="$build_root/tools/pip" python3 -m pip install --disable-pip-version-check \
+            --no-warn-script-location --target "$build_root/tools/dependencies" \
+            'build==1.3.0' 'setuptools==80.9.0' 'twine==6.2.0'
+          PYTHONPATH="$build_root/tools/dependencies" python3 -m build --no-isolation \
+            --outdir "$build_root/dist" "$build_root/src"
+          PYTHONPATH="$build_root/tools/dependencies" python3 -m twine check "$build_root"/dist/*
+          # The manifest is written by the canonical publisher checkout, so a
+          # historical tag that predates this helper can still be published.
+          python3 scripts/release_artifacts.py manifest \
+            --dist "$build_root/dist" --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --manifest "$build_root/release-manifest.json"
+          install -d -m 0700 release-transfer release-transfer/dist
+          cp "$build_root"/dist/* release-transfer/dist/
+          cp "$build_root/release-manifest.json" release-transfer/release-manifest.json
+
+      - name: Verify release exists on its public index
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_artifacts.py public-index --version "$VERSION"
+
+      - name: Verify, upload, link, and verify immutable package bytes
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PACKAGE_WRITE_TOKEN }}
+          TWINE_USERNAME: emersonfelipesp
+          TWINE_PASSWORD: ${{ secrets.PACKAGE_WRITE_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          registry="$(python3 scripts/release_artifacts.py registry-origin --value "$GITHUB_SERVER_URL")"
+          test -n "$GITEA_PACKAGE_TOKEN"
+          publisher_root="$(mktemp -d "$RUNNER_TEMP/netbox-packer-publisher.XXXXXX")"
+          trap 'rm -rf -- "$publisher_root"' EXIT
+          python3 scripts/release_artifacts.py plan \
+            --registry-origin "$registry" --owner emersonfelipesp \
+            --repository netbox-packer --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --dist release-transfer/dist \
+            --manifest release-transfer/release-manifest.json \
+            --upload-list "$publisher_root/upload-list"
+          python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' \
+            https://bootstrap.pypa.io/get-pip.py "$publisher_root/get-pip.py"
+          printf '%s  %s\n' \
+            'fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6' \
+            "$publisher_root/get-pip.py" | sha256sum --check --strict
+          python3 "$publisher_root/get-pip.py" --disable-pip-version-check \
+            --no-warn-script-location --target "$publisher_root/pip" 'pip==25.2'
+          PYTHONPATH="$publisher_root/pip" python3 -m pip install --disable-pip-version-check \
+            --no-warn-script-location --target "$publisher_root/dependencies" 'twine==6.2.0'
+          mapfile -t uploads < "$publisher_root/upload-list"
+          if ((${#uploads[@]})); then
+            PYTHONPATH="$publisher_root/dependencies" python3 -m twine upload --non-interactive \
+              --repository-url "$registry/api/packages/emersonfelipesp/pypi" "${uploads[@]}"
+          fi
+          python3 scripts/release_artifacts.py finish \
+            --registry-origin "$registry" --owner emersonfelipesp \
+            --repository netbox-packer --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --dist release-transfer/dist \
+            --manifest release-transfer/release-manifest.json

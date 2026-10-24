@@ -260,6 +260,12 @@ managed deploy helper; a push to `main` never deploys. The workflow has no
 remote-shell fallback. See `AGENTS.md` ("Staging and Production Deployment") for
 the full contract and the retired automatic-main behaviour.
 
+## Package Publication
+
+Maintainers can manually publish an existing release tag to the Gitea Package Registry after the exact version is
+available on PyPI, or on TestPyPI for a release candidate. The workflow publishes one wheel, one source distribution,
+and a canonical release manifest linked to this repository.
+
 ## Documentation
 
 Full documentation is published at
