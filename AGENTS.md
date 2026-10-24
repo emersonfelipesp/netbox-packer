@@ -655,47 +655,60 @@ open resolver. Replace `PDNS_AUTH_API_KEY` and `PDNS_RECURSOR_API_KEY`
 placeholders before production use.
 
 
-## Automatic Staging/Production Deployment
+## Staging and Production Deployment
 
-The deploy workflow treats `develop` as staging and `main` as production.
-Pushes to `develop` deploy `netbox-packer` to
-`https://staging.netbox.nmulti.cloud`; pushes to `main` deploy to
-`https://netbox.nmulti.cloud`.
+`.gitea/workflows/deploy-production.yml` is the only deployment workflow. It
+runs on the dedicated deploy runner and calls only the managed deploy helpers
+installed there. It contains no remote-shell path to any host.
 
-**Deploy job in `.gitea/workflows/deploy-production.yml`:**
-- Triggers on `push: [develop, main]` branch updates
-- Also supports manual dispatch via `workflow_dispatch` with optional `ref` and optional `environment` choice
-- Runs on `prod-deploy` runner with access to the NetBox deploy host
-- For staging, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging netbox-packer "$REF"`
-- For production, executes `/opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"` when local, or falls back to `ssh nmc-prod-207 -- deploy-plugin netbox-packer "$REF"`
-- Keep the full plugin slug `netbox-packer`; the production deploy helper validates repository-style NetBox plugin names and rejects the short historical slug `packer`.
+| Trigger | Branch | Target | Commit deployed |
+|---|---|---|---|
+| `push` | `develop` | staging NetBox | the pushed develop commit (`GITHUB_SHA`) |
+| `workflow_dispatch` (staging deployment target) | `develop` | staging NetBox | the dispatched develop commit |
+| `workflow_dispatch` (production deployment target) | `main` | production NetBox | the dispatched main commit |
+| `push` | `main` | **nothing** | a main push never deploys |
 
-**Deploy parameters:**
-- REF: can be a version tag (v0.1.0), branch name (main/develop), or 7+ character commit SHA
-- Default: uses current commit SHA if not specified in manual dispatch
+Rules the workflow enforces, and that `tests/test_deploy_workflow_contract.py`
+locks (it also executes the step script against stub helpers, so the dry run
+never reaches a host):
 
-**Security hardening:**
-- REF is passed via environment variable, not direct GitHub Actions context interpolation
-- Bash case statement validates ref format before SSH (whitelist: version tags, branch names, commit SHAs)
-- StrictHostKeyChecking=accept-new prevents MITM attacks
-- Quoted variable interpolation prevents shell injection
+- The branch decides the target. `environment` may only confirm it
+  (`develop`=staging, `main`=production); any other event, branch, or
+  combination fails the run. Neither input declares a default, so an omitted
+  `environment` leaves the decision to the branch.
+- The contract test also pins the exact job and step shape (job condition,
+  environment bindings, one `bash` step, no step condition, no swallowed helper
+  failure). Change it deliberately together with the workflow.
+- `ref` is a cross-check only. It may be empty, the branch name, or the exact
+  dispatched commit SHA. Tags, other branches, short SHAs, and anything else fail
+  the run. The helper always receives the full 40-character run commit.
+- If the managed helper is absent on the runner, the run fails. There is no
+  fallback.
+- Keep the full plugin slug `netbox-packer`; the production helper rejects the
+  short historical slug `packer`.
+- The `ref` and `environment` input names are part of the registered deployment
+  targets. Do not rename or remove them without updating those targets in the
+  same change window.
 
-**Deployment on target server (`nmc-prod-207`):**
-1. Git fetch/checkout of the specified ref in the plugin submodule
-2. pip install -e to refresh editable install and pick up new dependencies
-3. manage.py migrate to apply any pending migrations
-4. manage.py collectstatic to collect new/updated static files
-5. Reload/restart the target NetBox web and worker services
-6. Health check the selected endpoint to verify the service is responding
+**Production is operator-dispatched only.** Deploy production by dispatching
+the registered production deployment target from the managed deployment
+control plane after the change has been merged to `develop`, validated on staging, and promoted to
+`main`. Record the dispatched commit, the workflow run, and the smoke result.
+The rollback point is the previously deployed main commit: dispatch the
+production target again from a `main` that contains the reverted change.
 
-**Monitoring and verification:**
-- Watch the `deploy-production.yml` workflow run in Gitea Actions
-- Check the `deploy` job logs for SSH output and health check results
-- Verify staging: `curl -fsS https://staging.netbox.nmulti.cloud/api/`
-- Verify production: `curl -fsS https://netbox.nmulti.cloud/api/`
-- Check service logs: `ssh nmc-prod-207 -- logs netbox`
+**Retired behaviour.** Until this change, every push to `main` deployed
+production automatically, a dispatch could select any tag, branch, or short SHA,
+and the production step fell back to a remote shell on the deploy host when the
+local helper was missing. All three are removed. A merge to `main` is now a
+release-branch update only.
 
-Keep deployment-specific infrastructure outside this public repository. Public release automation is documented in the repository workflows and release guide.
+**Package-first production (in progress).** The target end state deploys the
+latest immutable Gitea package by default, with canonical `main` as an explicit
+operator override, and binds each production dispatch to a signed deployment
+request from the control plane. That requires managed-helper support for this plugin and a
+re-registered deployment target; until both exist, production deploys the
+dispatched `main` commit as described above.
 
 ## NetBox compatibility: two tiers, one shared module
 

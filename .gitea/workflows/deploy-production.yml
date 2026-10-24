@@ -1,17 +1,34 @@
 name: Deploy NetBox plugin (staging/production)
 
+# Deployment contract:
+#
+# - Staging: every push to `develop`, or an operator dispatch of the staging
+#   deployment target from `develop`, deploys that exact develop commit
+#   through the managed staging deploy helper.
+# - Production: only an operator dispatch of the production deployment target,
+#   run from `main`, deploys the exact dispatched main commit through the
+#   managed production deploy helper.
+# - A push to `main` never deploys. The workflow has no remote-shell fallback:
+#   if the managed helper is not installed on the deploy runner, the run fails.
+#
+# The `ref` and `environment` input names stay stable because the registered
+# deployment targets send them. Their values are only cross-checked against the
+# branch the run was dispatched from; they never select an arbitrary commit.
+# Neither input declares a default, so an omitted input stays empty and the
+# branch alone decides the target.
+
 on:
   push:
     branches:
       - develop
-      - main
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to deploy (tag, branch, or commit SHA)'
+        description: 'Optional cross-check: develop or main (or the exact dispatched commit SHA)'
         required: false
+        default: ''
       environment:
-        description: 'Target environment (optional for main/develop refs)'
+        description: 'Target environment; must match the dispatched branch (develop=staging, main=production)'
         required: false
         type: choice
         options:
@@ -21,54 +38,59 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: netbox-packer-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy plugin
+    if: ${{ github.repository == 'emersonfelipesp/netbox-packer' }}
     runs-on: prod-deploy
+    timeout-minutes: 45
     env:
-      REF: ${{ inputs.ref || github.sha }}
+      DEPLOY_BIN: /opt/nmulticloud/deploy/bin
+      EVENT_NAME: ${{ github.event_name }}
+      REQUESTED_REF: ${{ inputs.ref }}
       REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
     steps:
-      - name: Deploy plugin
+      - name: Deploy the exact commit through the managed helper
         shell: bash
         run: |
           set -euo pipefail
 
-          # Validate ref format defensively (accepts tags, branches, and commit shas)
-          case "$REF" in
-            v[0-9]*.[0-9]*.[0-9]* | main | develop | [a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9]*) ;;
-            *) echo "ERROR: Invalid ref format: $REF"; exit 1 ;;
+          fail() {
+            echo "ERROR: $*" >&2
+            exit 1
+          }
+
+          commit="${GITHUB_SHA:-}"
+          [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || fail "the run commit is not a full commit SHA"
+
+          # The branch the run belongs to decides the target. A dispatch input
+          # may only confirm that decision; it can never widen it.
+          case "${EVENT_NAME:-}:${GITHUB_REF:-}:${REQUESTED_ENVIRONMENT:-}" in
+            push:refs/heads/develop:)
+              target=staging ;;
+            workflow_dispatch:refs/heads/develop:staging | workflow_dispatch:refs/heads/develop:)
+              target=staging ;;
+            workflow_dispatch:refs/heads/main:production | workflow_dispatch:refs/heads/main:)
+              target=production ;;
+            *)
+              fail "refusing to deploy: event '${EVENT_NAME:-}' on '${GITHUB_REF:-}' with environment '${REQUESTED_ENVIRONMENT:-}' is not an allowed combination (push to develop or dispatch from develop deploys staging; only a dispatch from main deploys production)" ;;
           esac
 
-          target="${REQUESTED_ENVIRONMENT:-}"
-          if [[ -z "$target" ]]; then
-            case "${GITHUB_REF_NAME:-}" in
-              develop) target="staging" ;;
-              main) target="production" ;;
-              *) echo "ERROR: Cannot infer deploy target from ref '${GITHUB_REF_NAME:-}'"; exit 1 ;;
-            esac
-          fi
+          branch="${GITHUB_REF#refs/heads/}"
+          case "${REQUESTED_REF:-}" in
+            "" | "$branch" | "$commit") ;;
+            *) fail "refusing to deploy: requested ref '${REQUESTED_REF}' does not match the dispatched ${branch} commit" ;;
+          esac
 
           case "$target" in
-            staging)
-              if [[ ! -x /opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging ]]; then
-                echo "ERROR: staging deploy helper is not installed on this runner"
-                exit 1
-              fi
-              /opt/nmulticloud/deploy/bin/deploy-netbox-plugin-staging netbox-packer "$REF"
-              ;;
-            production)
-              if [[ -x /opt/nmulticloud/deploy/bin/deploy-netbox-plugin ]]; then
-                /opt/nmulticloud/deploy/bin/deploy-netbox-plugin netbox-packer "$REF"
-              else
-                ssh -o StrictHostKeyChecking=accept-new \
-                    -o ServerAliveInterval=30 \
-                    -o ServerAliveCountMax=20 \
-                    nmc-prod-207 -- deploy-plugin netbox-packer "$REF"
-              fi
-              ;;
-            *)
-              echo "ERROR: Invalid deploy target: $target"
-              exit 1
-              ;;
+            staging) helper="${DEPLOY_BIN}/deploy-netbox-plugin-staging" ;;
+            production) helper="${DEPLOY_BIN}/deploy-netbox-plugin" ;;
           esac
+          [[ -x "$helper" ]] || fail "the managed ${target} deploy helper is not installed on this runner"
+
+          echo "Deploying netbox-packer ${commit} (${branch}) to ${target}"
+          "$helper" netbox-packer "$commit"

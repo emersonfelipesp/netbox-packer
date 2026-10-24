@@ -251,6 +251,15 @@ PLUGINS = [
 python manage.py migrate
 ```
 
+## Maintainer Deployment Workflow
+
+The repository's own deployment workflow (`.gitea/workflows/deploy-production.yml`)
+deploys a pushed `develop` commit to staging. Production is deployed only by an
+operator dispatch from `main`, which deploys that exact main commit through the
+managed deploy helper; a push to `main` never deploys. The workflow has no
+remote-shell fallback. See `AGENTS.md` ("Staging and Production Deployment") for
+the full contract and the retired automatic-main behaviour.
+
 ## Documentation
 
 Full documentation is published at
