@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: e2e-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   e2e-docker:
     name: NetBox plugin install + smoke / ${{ matrix.netbox_image }}
@@ -61,3 +65,14 @@ jobs:
           name: netbox-packer-wheel
           path: dist/*.whl
           if-no-files-found: error
+
+  complete:
+    name: E2E complete
+    if: always()
+    needs: [e2e-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both original image rows
+        env:
+          E2E_RESULT: ${{ needs.e2e-docker.result }}
+        run: test "$E2E_RESULT" = success

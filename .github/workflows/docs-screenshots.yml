@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   NETBOX_IMAGE: netboxcommunity/netbox:v4.6.1
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ startsWith(github.ref, 'refs/tags/') && 'main' || github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -112,26 +112,18 @@ jobs:
           mkdir -p docs/assets/screenshots
           python scripts/capture_screenshots.py
 
-      - name: Commit and push screenshots
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/assets/screenshots/
-          if git diff --staged --quiet; then
-            echo "No screenshot changes to commit."
-            exit 0
-          fi
-          git commit -m "chore: update UI screenshots [skip ci]"
-          git pull --rebase origin main
-          git push
-
       - name: Install documentation dependencies
         run: python -m pip install -r requirements-docs.txt
 
-      - name: Build and deploy docs
-        run: |
-          mkdocs build --strict
-          ghp-import -n -p -f -m "Deploy docs with updated screenshots [${GITHUB_SHA}]" site
+      - name: Validate docs with captured screenshots
+        run: mkdocs build --strict
+
+      - name: Upload screenshots for a reviewed source change
+        uses: actions/upload-artifact@v7
+        with:
+          name: netbox-packer-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs/assets/screenshots/
+          if-no-files-found: error
 
       - name: Dump container logs on failure
         if: failure()
