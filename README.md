@@ -60,6 +60,18 @@ The repository includes Apache-2.0 licensing, PyPI metadata, compatibility
 metadata, GitHub Actions CI, release validation, docs publishing, screenshot
 capture, and page-coverage workflows for NetBox v4.6.1.
 
+## CI and screenshot review
+
+Public CI preserves the original lint, formatting, complete static-test selection, package metadata and NetBox v4.6.1 source checks. The source check uses Python 3.13, PostgreSQL 16 and Redis 7. Docker smoke keeps both original NetBox image rows. `CI complete` and `E2E complete` fail unless every required original producer succeeds. Main and maintenance branch admission remain unchanged. Only obsolete runs within one pull request can supersede each other; main runs remain independent.
+
+Ruff is pinned to the compatible 0.15.8 version so an unreviewed tool update cannot change lint behavior. All existing rule selections and failure checks remain enabled. Workflow contracts also verify the original producers, matrix rows, service versions and failure behavior of the complete statuses.
+
+The manual/tag screenshot workflow now validates captured screenshots and uploads them as a reviewable artifact. It retains screenshot generation and the strict documentation build. It no longer commits or pushes directly to main with skip-ci text, and it no longer publishes an unmerged screenshot candidate to gh-pages. This deliberately replaces that automatic writer with an artifact handoff.
+
+Download the `netbox-packer-screenshots-<run-id>-<attempt>` artifact from the capture run. Review the files and submit the intended changes under `docs/assets/screenshots/` through a normal source pull request. The separate documentation workflow publishes only normally merged main source. Screenshot artifacts are validation output; uploading them does not publish the documentation or merge a source change.
+
+For a separately authorized CI qualification, the temporary repository variable `CI_QUALIFICATION_ONLY=true` suppresses only the documentation publication step. The strict documentation build still runs. Remove that variable after the admitted main executions finish. The normal default remains publication from main pushes. This guard does not dispatch or qualify a release, package publisher or screenshot run.
+
 ## License
 
 Apache-2.0

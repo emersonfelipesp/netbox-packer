@@ -10,9 +10,12 @@ on:
       - main
       - v0.0.2
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ── Lint & format ─────────────────────────────────────────────────────────
@@ -27,7 +30,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.8
 
       - name: Check for lint errors
         run: ruff check netbox_packer/
@@ -47,7 +50,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install pytest and test dependencies
-        run: pip install pytest requests
+        run: pip install pytest requests PyYAML==6.0.2
 
       - name: Run static tests
         run: pytest tests/ -v
@@ -123,3 +126,21 @@ jobs:
           DB_PASSWORD: netbox
           REDIS_HOST: localhost
         run: bash .github/ci/netbox46-source-test.sh
+
+  complete:
+    name: CI complete
+    if: always()
+    needs: [lint, static-tests, package, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every original quality producer
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          STATIC_RESULT: ${{ needs.static-tests.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          NETBOX_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$LINT_RESULT" = success
+          test "$STATIC_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$NETBOX_RESULT" = success
